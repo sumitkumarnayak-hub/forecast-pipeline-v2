@@ -308,7 +308,8 @@ def trigger_master_sync(
 def get_hub_changes(current_user: dict = Depends(get_current_user)):
     try:
         from planning_suite.services.hub_launch_sync import load_hub_changes_for_baseline
-        df = load_hub_changes_for_baseline()
+        gsm = get_sheets_manager()
+        df = load_hub_changes_for_baseline(gsm)
         if df is None or df.empty:
             return {"rows": [], "columns": []}
         return {"rows": df.to_dict(orient="records"), "columns": list(df.columns)}
@@ -327,9 +328,9 @@ def save_hub_changes(
 ):
     try:
         import pandas as pd
-        from planning_suite.services.hub_launch_sync import save_hub_changes_to_sheet
+        gsm = get_sheets_manager()
         df = pd.DataFrame(payload.rows)
-        save_hub_changes_to_sheet(df)
+        gsm.write_hub_changes(df)
         return {"detail": "Hub changes saved"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
