@@ -883,12 +883,16 @@ export default function MasterDataPage() {
     </div>
   );
 
-  const mainTabs = [
+  const demandTabs = [
     { id: "p-master", label: "📦 P Master", content: pMasterTab },
     { id: "ph-master", label: "🗂️ P-H Master", content: phMasterTab },
     { id: "hub-master", label: "🏪 Hub Master", content: hubMasterTab },
-    { id: "inventory", label: "📦 Inventory Buffer Master", content: inventoryBufferTab },
-    { id: "history", label: "📜 Master Sync History", content: historyTab },
+  ];
+
+  const mainTabs = [
+    { id: "demand", label: "📋 Demand Planning", content: <Tabs tabs={demandTabs} defaultTab="p-master" /> },
+    { id: "inventory", label: "📦 Inventory Buffer", content: inventoryBufferTab },
+    { id: "history", label: "📜 Sync History & Rollback", content: historyTab },
   ];
 
   return (
@@ -905,7 +909,7 @@ export default function MasterDataPage() {
         <div className={`alert alert-${msg.type}`} style={{ marginBottom: "1.25rem" }}>{msg.text}</div>
       )}
 
-      <Tabs tabs={mainTabs} defaultTab="p-master" />
+      <Tabs tabs={mainTabs} defaultTab="demand" />
     </AppShell>
   );
 }
