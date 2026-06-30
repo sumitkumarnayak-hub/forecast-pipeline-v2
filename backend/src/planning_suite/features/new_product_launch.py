@@ -1960,8 +1960,8 @@ for _k, _v in {
     "split_ready2": False,   "hub_split_df2": pd.DataFrame(),
     "replace_ready": False,  "replace_df": pd.DataFrame(),
 }.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
+    if _v is not None and _k not in os.environ:
+        os.environ[_k] = _v if isinstance(_v, str) else str(_v)
 
 # ──────────────────────────────────────────────────────────────────
 # STANDALONE  (guarded — not executed when imported from app.py)
@@ -1980,3 +1980,30 @@ if __name__ == "__main__":
         page_type3()
     else:
         page_history()
+
+
+def validate_npl_upload(df: pd.DataFrame) -> dict:
+    """Validate an uploaded NPL workbook (city-level or hub-level schema)."""
+    work = df.copy()
+    work.columns = [str(c).strip() for c in work.columns]
+    errors: list[str] = []
+
+    optional_cols = ["product_name", "category", "MRP"]
+    for col in optional_cols:
+        if col not in work.columns:
+            work[col] = None
+
+    if "hub_name" in work.columns:
+        try:
+            validated = HUB_UPLOAD_SCHEMA.validate(work)
+            return {"valid": True, "type": "hub", "rows": len(validated)}
+        except Exception as exc:
+            errors.append(f"Hub schema: {exc}")
+
+    try:
+        validated = CITY_UPLOAD_SCHEMA.validate(work)
+        return {"valid": True, "type": "city", "rows": len(validated)}
+    except Exception as exc:
+        errors.append(f"City schema: {exc}")
+
+    return {"valid": False, "errors": errors}

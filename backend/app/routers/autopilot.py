@@ -1,154 +1,428 @@
 """
-Auto-Pilot router — 6-step pipeline with Server-Sent Events streaming.
-The frontend subscribes to /api/autopilot/stream/{task_id} to get
-real-time step progress, mirroring the Streamlit st.progress() UI.
+Auto-Pilot router — 6-step pipeline with DB-backed state and SSE progress.
+Mirrors Streamlit autopilot_runner.py + optimized_autopilot CLI runner.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import uuid
-from typing import AsyncGenerator
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
+_BOOTSTRAP_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="autopilot-bootstrap")
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.deps import get_current_user, require_write, get_db
+from planning_suite.automation.autopilot_state import (
+    get_resume_step,
+    load_autopilot_history,
+    load_autopilot_run,
+    load_autopilot_state,
+    tail_autopilot_log,
+)
+from planning_suite.automation.autopilot_ui_config import AUTOPILOT_STEPS_UI, output_paths_reference
+from planning_suite.automation.optimized_autopilot import AUTOPILOT_STEPS, run_optimized_autopilot
+from planning_suite.core.dataframe import df_to_records, sanitize_for_json
+from planning_suite.core.permissions import can_write
 from planning_suite.db.engine import Database
+from planning_suite.services.api_cache import CacheNS, cache_get, cache_invalidate, cache_set
+from planning_suite.services.helpers import generate_run_id
 
 router = APIRouter()
 
-# In-memory task registry {task_id: {"status": str, "steps": list, "error": str}}
-_TASKS: dict[str, dict] = {}
-
-STEP_LABELS = [
-    ("master_sync",      "Master Data Sync & Validation"),
-    ("new_hub_launch",   "New Hub Launch (P-H Master)"),
-    ("pull_raw_data",    "Pull Raw Data"),
-    ("sync_config",      "Sync Config Parameters"),
-    ("run_engine",       "Run Baseline Engine"),
-    ("notify",           "Email Notification"),
-]
+# run_id -> thread bookkeeping
+_ACTIVE: dict[str, dict[str, Any]] = {}
+_RUN_START_LOCK = threading.Lock()
 
 
-def _run_autopilot_sync(task_id: str, from_step: int, user_id: int, db: Database):
-    """Run the 6-step autopilot synchronously in a thread (no event loop)."""
-    task = _TASKS[task_id]
-    task["status"] = "running"
-    task["steps"] = []
+def _any_run_in_progress() -> bool:
+    return any(v.get("status") == "running" for v in _ACTIVE.values())
 
+
+class RunRequest(BaseModel):
+    action: str = Field(default="run", description="run | resume | retry | restart")
+    from_step: int | None = None
+    run_id: str | None = None
+
+
+def _step_rows_from_state(state: dict | None, steps_config: list[dict]) -> list[dict]:
+    logs = {}
+    if state:
+        raw = state.get("logs") or {}
+        logs = {int(k): v for k, v in raw.items() if str(k).isdigit()}
+
+    completed = set(state.get("completed_steps") or []) if state else set()
+    failed_step = state.get("failed_step") if state else None
+    status = state.get("status") if state else "idle"
+    running = bool(
+        state
+        and state.get("run_id")
+        and _ACTIVE.get(state["run_id"], {}).get("status") == "running"
+    )
+
+    rows: list[dict] = []
+    all_done = bool(state and state.get("success"))
+    for idx, cfg in enumerate(steps_config):
+        if all_done or idx in completed:
+            vis = "done"
+        elif failed_step is not None and idx == failed_step:
+            vis = "failed"
+        elif running and idx == len(completed):
+            vis = "running"
+        elif idx > len(completed) and failed_step is None and not running:
+            vis = "queued"
+        elif idx > (failed_step if failed_step is not None else len(completed)):
+            vis = "queued"
+        else:
+            vis = "ready"
+
+        entry = logs.get(idx) or {}
+        detail = entry.get("text") or entry.get("error_summary") or ""
+        rows.append({
+            "index": idx,
+            "key": AUTOPILOT_STEPS[idx]["key"] if idx < len(AUTOPILOT_STEPS) else cfg.get("key", ""),
+            "name": cfg.get("name", ""),
+            "icon": cfg.get("icon", "•"),
+            "status": vis,
+            "detail": detail[:200],
+        })
+    return rows
+
+
+def _ui_status(state: dict | None, *, running_ids: set[str]) -> str:
+    if not state:
+        return "idle"
+    rid = state.get("run_id")
+    if rid and rid in running_ids:
+        return "running"
+    if state.get("success"):
+        return "success"
+    if state.get("failed_step") is not None or state.get("status") == "failed":
+        return "failed"
+    if state.get("status") == "running":
+        return "failed"
+    if state.get("completed_steps"):
+        return "running"
+    return "idle"
+
+
+def _resume_step_from_state(state: dict | None) -> int | None:
+    if not state or state.get("success"):
+        return None
+    failed = state.get("failed_step")
+    if failed is not None:
+        return int(failed)
+    completed = state.get("completed_steps") or []
+    if completed:
+        return len(completed)
+    if state.get("status") in ("failed", "running"):
+        return 0
+    return None
+
+
+def _step_index_from_state(state: dict | None, total: int) -> int:
+    resume_step = _resume_step_from_state(state)
+    ui_status = _ui_status(state, running_ids=set(_ACTIVE.keys()))
+    step_idx = 0
+    if state:
+        if state.get("success"):
+            step_idx = total
+        elif state.get("failed_step") is not None:
+            step_idx = int(state["failed_step"])
+        elif state.get("completed_steps"):
+            step_idx = len(state["completed_steps"])
+        if resume_step is not None and ui_status == "idle":
+            step_idx = resume_step
+    return step_idx
+
+
+def _progress_from_state(state: dict | None, total: int) -> int:
+    if state and state.get("success"):
+        return 100
+    step_idx = _step_index_from_state(state, total)
+    return int(min(100, round(step_idx / total * 100))) if total else 0
+
+
+def _default_step_rows(steps_config: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for idx, cfg in enumerate(steps_config):
+        rows.append({
+            "index": idx,
+            "key": AUTOPILOT_STEPS[idx]["key"] if idx < len(AUTOPILOT_STEPS) else cfg.get("key", ""),
+            "name": cfg.get("name", ""),
+            "icon": cfg.get("icon", "•"),
+            "status": "ready",
+            "detail": "",
+        })
+    return rows
+
+
+def _build_bootstrap(
+    user: dict,
+    db: Database,
+    *,
+    state: dict | None = None,
+    state_pending: bool = False,
+    state_error: str = "",
+) -> dict[str, Any]:
+    role = user.get("role", "viewer")
+    read_only = not can_write(role)
+    steps_config = AUTOPILOT_STEPS_UI
+    paths_ref = output_paths_reference()
+    running_ids = set(_ACTIVE.keys())
+
+    resume_step = _resume_step_from_state(state)
+    ui_status = _ui_status(state, running_ids=running_ids)
+    total = len(steps_config)
+    step_idx = 0
+    if state:
+        if state.get("success"):
+            step_idx = total
+        elif state.get("failed_step") is not None:
+            step_idx = int(state["failed_step"])
+        elif state.get("completed_steps"):
+            step_idx = len(state["completed_steps"])
+        if resume_step is not None and ui_status == "idle":
+            step_idx = resume_step
+
+    pct = 100 if (state and state.get("success")) else (
+        int(min(100, round(step_idx / total * 100))) if total else 0
+    )
+
+    from planning_suite import config as cfg
+
+    payload: dict[str, Any] = {
+        "read_only": read_only,
+        "steps_config": steps_config,
+        "autopilot_steps": AUTOPILOT_STEPS,
+        "output_paths_reference": paths_ref,
+        "output_paths": {
+            "ff_masters_xlsx": cfg.FF_MASTERS_XLSX,
+            "raw_actuals_folder": cfg.RAW_ACTUALS_FOLDER,
+            "dp_logics_folder": cfg.DP_LOGICS_FOLDER,
+            "baseline_outputs_folder": cfg.BASELINE_OUTPUTS_FOLDER,
+            "pipeline_params_sheet_url": cfg.PIPELINE_PARAMS_SHEET_URL,
+            "outputs_dir": str(cfg.OUTPUT_PATH),
+        },
+        "state": state,
+        "ui_status": ui_status,
+        "resume_step": resume_step,
+        "step_idx": step_idx,
+        "progress_pct": pct,
+        "step_rows": _step_rows_from_state(state, steps_config) if state else _default_step_rows(steps_config),
+        "run_log": "",
+        "state_pending": state_pending,
+    }
+    if state_error:
+        payload["state_error"] = state_error
+    return sanitize_for_json(payload)
+def _run_thread(run_id: str, user_id: int, from_step: int, run_name: str) -> None:
     try:
-        from planning_suite.automation.optimized_autopilot import run_autopilot
-        
-        def step_callback(step_idx: int, step_key: str, status: str, message: str, error: str = ""):
-            task["steps"].append({
-                "index": step_idx,
-                "key": step_key,
-                "label": STEP_LABELS[step_idx][1] if step_idx < len(STEP_LABELS) else step_key,
-                "status": status,
-                "message": message,
-                "error": error,
-            })
-
-        run_autopilot(
-            db=db,
-            user_id=user_id,
+        result = run_optimized_autopilot(
             from_step=from_step,
-            step_callback=step_callback,
+            user_id=user_id,
+            run_id=run_id,
+            run_name=run_name,
+            source="ui",
         )
-        task["status"] = "completed"
+        _ACTIVE[run_id] = {
+            "status": "completed" if result.success else "failed",
+            "error": result.error,
+            "user_id": user_id,
+        }
     except Exception as exc:
-        task["status"] = "failed"
-        task["error"] = str(exc)
+        _ACTIVE[run_id] = {"status": "failed", "error": str(exc), "user_id": user_id}
+    finally:
+        cache_invalidate(CacheNS.AUTOPILOT_BOOTSTRAP)
+        cache_invalidate(CacheNS.AUTOPILOT_HISTORY)
+
+        def _cleanup() -> None:
+            entry = _ACTIVE.get(run_id)
+            if entry and entry.get("status") != "running":
+                _ACTIVE.pop(run_id, None)
+        threading.Timer(300.0, _cleanup).start()
+
+
+@router.get("/bootstrap")
+def autopilot_bootstrap(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    refresh: bool = Query(False, description="Bypass short-lived bootstrap cache"),
+):
+    """Static Auto-Pilot shell (steps, paths, permissions) — no database calls."""
+    user_key = str(current_user.get("sub", "anon"))
+    cache_key = f"static:{user_key}"
+
+    if not refresh:
+        cached = cache_get(CacheNS.AUTOPILOT_BOOTSTRAP, cache_key)
+        if cached is not None:
+            return cached
+
+    payload = _build_bootstrap(current_user, db, state=None)
+    cache_set(CacheNS.AUTOPILOT_BOOTSTRAP, cache_key, payload, ttl=120.0)
+    return payload
+
+
+@router.get("/bootstrap/static")
+def autopilot_bootstrap_static(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Alias for static bootstrap — instant first paint."""
+    return _build_bootstrap(current_user, db, state=None)
+
+
+@router.get("/history")
+def autopilot_history(
+    limit: int = Query(30, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    refresh: bool = Query(False),
+):
+    cache_key = f"limit={limit}"
+    if not refresh:
+        cached = cache_get(CacheNS.AUTOPILOT_HISTORY, cache_key)
+        if cached is not None:
+            return cached
+
+    df = load_autopilot_history(limit=limit)
+    if df.empty:
+        return {"rows": []}
+    display = df.copy()
+    if "started_at" in display.columns:
+        display["started_at"] = display["started_at"].astype(str)
+    if "completed_at" in display.columns:
+        display["completed_at"] = display["completed_at"].astype(str)
+    display = display.rename(columns={
+        "run_id": "Run ID",
+        "run_name": "Name",
+        "status": "Status",
+        "source": "Source",
+        "username": "User",
+        "started_at": "Started",
+        "completed_at": "Completed",
+        "steps_done": "Steps",
+    })
+    cols = [c for c in [
+        "Run ID", "Name", "Status", "Steps", "User", "Started", "Completed", "Source",
+    ] if c in display.columns]
+    result = {"rows": df_to_records(display[cols])}
+    if not _any_run_in_progress():
+        cache_set(CacheNS.AUTOPILOT_HISTORY, cache_key, result, ttl=15.0)
+    return result
+
+
+@router.get("/runs/{run_id}/log")
+def autopilot_run_log(run_id: str, current_user: dict = Depends(get_current_user)):
+    text = tail_autopilot_log(run_id=run_id)
+    return {"run_id": run_id, "log_text": text}
+
+
+@router.get("/runs/{run_id}")
+def autopilot_run_detail(run_id: str, current_user: dict = Depends(get_current_user)):
+    detail = load_autopilot_run(run_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return sanitize_for_json(detail)
 
 
 @router.post("/run")
 def start_autopilot(
-    from_step: int = 0,
+    body: RunRequest,
     current_user: dict = Depends(require_write),
     db: Database = Depends(get_db),
 ):
-    """Start the 6-step Auto-Pilot in the background and return a task_id."""
-    import threading
-    task_id = str(uuid.uuid4())
+    """Start or resume Auto-Pilot in a background thread. Returns run_id for SSE."""
     user_id = int(current_user["sub"])
-    _TASKS[task_id] = {"status": "pending", "steps": [], "error": ""}
+    action = (body.action or "run").lower()
+    state = load_autopilot_state()
+
+    if action == "restart":
+        from_step = 0
+        run_id = generate_run_id("AUTOPILOT")
+        run_name = "Auto-Pilot"
+    elif action == "resume":
+        resume = get_resume_step()
+        if resume is None:
+            raise HTTPException(status_code=400, detail="No partial run to resume")
+        from_step = body.from_step if body.from_step is not None else resume
+        run_id = body.run_id or (state.get("run_id") if state else None) or generate_run_id("AUTOPILOT")
+        run_name = (state.get("run_name") if state else None) or "Auto-Pilot"
+    elif action == "retry":
+        if state is None or state.get("failed_step") is None:
+            raise HTTPException(status_code=400, detail="No failed step to retry")
+        from_step = int(state["failed_step"])
+        run_id = body.run_id or state.get("run_id") or generate_run_id("AUTOPILOT")
+        run_name = state.get("run_name") or "Auto-Pilot"
+    else:
+        from_step = body.from_step or 0
+        run_id = generate_run_id("AUTOPILOT")
+        run_name = "Auto-Pilot"
+
+    if run_id in _ACTIVE and _ACTIVE[run_id].get("status") == "running":
+        raise HTTPException(status_code=409, detail="Run already in progress")
+
+    with _RUN_START_LOCK:
+        if _any_run_in_progress():
+            raise HTTPException(
+                status_code=409,
+                detail="Another Auto-Pilot run is already in progress. Wait for it to finish.",
+            )
+        _ACTIVE[run_id] = {"status": "running", "user_id": user_id}
+        cache_invalidate(CacheNS.AUTOPILOT_BOOTSTRAP)
+        cache_invalidate(CacheNS.AUTOPILOT_HISTORY)
+
+    db.ensure_autopilot_run(run_id, user_id, run_name=run_name, source="ui")
 
     t = threading.Thread(
-        target=_run_autopilot_sync,
-        args=(task_id, from_step, user_id, db),
+        target=_run_thread,
+        args=(run_id, user_id, from_step, run_name),
         daemon=True,
     )
     t.start()
-    return {"task_id": task_id}
-
-
-@router.get("/status/{task_id}")
-def get_task_status(task_id: str, current_user: dict = Depends(get_current_user)):
-    task = _TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
-
-
-async def _sse_generator(task_id: str) -> AsyncGenerator[str, None]:
-    """Yield SSE events as the task progresses."""
-    last_step_count = 0
-    while True:
-        task = _TASKS.get(task_id)
-        if not task:
-            yield f"data: {json.dumps({'event': 'error', 'detail': 'Task not found'})}\n\n"
-            return
-
-        steps = task.get("steps", [])
-        # Stream any new step updates
-        if len(steps) > last_step_count:
-            for step in steps[last_step_count:]:
-                yield f"data: {json.dumps({'event': 'step', **step})}\n\n"
-            last_step_count = len(steps)
-
-        status = task.get("status")
-        if status == "completed":
-            yield f"data: {json.dumps({'event': 'completed'})}\n\n"
-            return
-        if status == "failed":
-            yield f"data: {json.dumps({'event': 'failed', 'error': task.get('error', '')})}\n\n"
-            return
-
-        await asyncio.sleep(0.5)
-
-
-@router.get("/stream/{task_id}")
-async def stream_autopilot(task_id: str):
-    """SSE endpoint — subscribe to get real-time step progress."""
-    return StreamingResponse(
-        _sse_generator(task_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return {"run_id": run_id, "from_step": from_step, "action": action}
 
 
 @router.get("/state")
-def get_autopilot_state(current_user: dict = Depends(get_current_user)):
-    """Return the last persisted autopilot_state.json."""
-    import os, json as _json
-    state_file = os.path.join("outputs", "autopilot_state.json")
-    if not os.path.exists(state_file):
-        return {}
+def get_autopilot_state(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    refresh: bool = Query(False),
+):
+    """Latest Auto-Pilot run snapshot — may be slow; call after static bootstrap."""
+    cache_key = "run-state"
+    if not refresh and not _any_run_in_progress():
+        cached = cache_get(CacheNS.AUTOPILOT_BOOTSTRAP, cache_key)
+        if cached is not None:
+            return cached
+
     try:
-        with open(state_file) as f:
-            return _json.load(f)
-    except Exception:
-        return {}
+        future = _BOOTSTRAP_POOL.submit(load_autopilot_state)
+        state = future.result(timeout=10.0)
+    except FuturesTimeout:
+        raise HTTPException(status_code=504, detail="Run state load timed out — try again")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    running_ids = set(_ACTIVE.keys())
+    result = sanitize_for_json({
+        "state": state,
+        "ui_status": _ui_status(state, running_ids=running_ids),
+        "resume_step": _resume_step_from_state(state),
+        "step_rows": _step_rows_from_state(state, AUTOPILOT_STEPS_UI),
+        "step_idx": _step_index_from_state(state, len(AUTOPILOT_STEPS_UI)),
+        "progress_pct": _progress_from_state(state, len(AUTOPILOT_STEPS_UI)),
+    })
+    if not _any_run_in_progress():
+        cache_set(CacheNS.AUTOPILOT_BOOTSTRAP, cache_key, result, ttl=5.0)
+    return result
 
 
 @router.get("/output-paths")
 def get_output_paths(current_user: dict = Depends(get_current_user)):
-    """Return the env-derived output path config for the UI panel."""
     from planning_suite import config as cfg
     return {
         "ff_masters_xlsx": cfg.FF_MASTERS_XLSX,
@@ -157,4 +431,93 @@ def get_output_paths(current_user: dict = Depends(get_current_user)):
         "baseline_outputs_folder": cfg.BASELINE_OUTPUTS_FOLDER,
         "pipeline_params_sheet_url": cfg.PIPELINE_PARAMS_SHEET_URL,
         "outputs_dir": str(cfg.OUTPUT_PATH),
+    }
+
+
+async def _sse_generator(run_id: str, db: Database) -> AsyncGenerator[str, None]:
+    """Poll DB for run progress — mirrors Streamlit step-by-step reruns."""
+    last_completed = -1
+    last_log_len = 0
+    idle_ticks = 0
+
+    while True:
+        detail = load_autopilot_run(run_id)
+        active = _ACTIVE.get(run_id, {})
+        running = active.get("status") == "running"
+
+        if not detail and not running:
+            yield f"data: {json.dumps({'event': 'error', 'detail': 'Run not found'})}\n\n"
+            return
+
+        if detail:
+            completed = detail.get("completed_steps") or []
+            failed = detail.get("failed_step")
+            logs = detail.get("logs") or {}
+
+            if len(completed) > last_completed:
+                for idx in range(last_completed + 1, len(completed)):
+                    step_log = logs.get(str(idx)) or logs.get(idx) or {}
+                    step = AUTOPILOT_STEPS[idx] if idx < len(AUTOPILOT_STEPS) else {"key": "", "name": ""}
+                    yield f"data: {json.dumps({'event': 'step', 'index': idx, 'key': step['key'], 'label': step['name'], 'status': 'completed', 'message': step_log.get('text', 'Done')})}\n\n"
+                last_completed = len(completed) - 1
+
+            if failed is not None:
+                step_log = logs.get(str(failed)) or logs.get(failed) or {}
+                step = AUTOPILOT_STEPS[failed] if failed < len(AUTOPILOT_STEPS) else {"key": "", "name": ""}
+                yield f"data: {json.dumps({'event': 'step', 'index': failed, 'key': step['key'], 'label': step['name'], 'status': 'failed', 'message': step_log.get('error_summary', ''), 'error': step_log.get('error_detail', '')})}\n\n"
+                yield f"data: {json.dumps({'event': 'failed', 'error': detail.get('error') or step_log.get('error_summary', '')})}\n\n"
+                return
+
+            log_text = detail.get("log_text") or tail_autopilot_log(run_id=run_id)
+            if len(log_text) > last_log_len:
+                yield f"data: {json.dumps({'event': 'log', 'text': log_text})}\n\n"
+                last_log_len = len(log_text)
+
+            if detail.get("success") or detail.get("status") == "completed":
+                yield f"data: {json.dumps({'event': 'completed'})}\n\n"
+                return
+
+        if not running and run_id not in _ACTIVE:
+            if detail and detail.get("status") in ("completed", "failed"):
+                if detail.get("status") == "failed":
+                    yield f"data: {json.dumps({'event': 'failed', 'error': detail.get('error', '')})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'event': 'completed'})}\n\n"
+                return
+            idle_ticks += 1
+            if idle_ticks > 240:
+                yield f"data: {json.dumps({'event': 'error', 'detail': 'Stream timeout'})}\n\n"
+                return
+
+        await asyncio.sleep(0.5)
+
+
+@router.get("/stream/{run_id}")
+async def stream_autopilot(run_id: str, db: Database = Depends(get_db)):
+    """SSE — subscribe to real-time Auto-Pilot progress by run_id."""
+    return StreamingResponse(
+        _sse_generator(run_id, db),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# Legacy task_id endpoints (redirect to run_id)
+@router.get("/status/{task_id}")
+def get_task_status(task_id: str, current_user: dict = Depends(get_current_user)):
+    detail = load_autopilot_run(task_id)
+    if not detail:
+        active = _ACTIVE.get(task_id)
+        if not active:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"status": active.get("status"), "steps": [], "error": active.get("error", "")}
+    return {
+        "status": "completed" if detail.get("success") else (
+            "failed" if detail.get("failed_step") is not None else "running"
+        ),
+        "steps": [],
+        "error": detail.get("error", ""),
     }

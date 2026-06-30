@@ -118,3 +118,72 @@ def delete_email_recipient(
         return {"detail": "Recipient deleted"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+class RecipientPatch(BaseModel):
+    enabled: Optional[bool] = None
+    display_name: Optional[str] = None
+
+
+@router.patch("/email-recipients/{recipient_id}")
+def patch_email_recipient(
+    recipient_id: int,
+    body: RecipientPatch,
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    try:
+        with db.engine.begin() as conn:
+            from sqlalchemy import text
+
+            updates = body.model_dump(exclude_none=True)
+            if not updates:
+                return {"detail": "No changes"}
+            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+            updates["id"] = recipient_id
+            conn.execute(
+                text(f"UPDATE email_notification_recipients SET {set_clause} WHERE id = :id"),
+                updates,
+            )
+        return {"detail": "Recipient updated"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class TestEmailBody(BaseModel):
+    to_email: Optional[str] = None
+    message: str = ""
+
+
+@router.post("/test-email")
+def send_test_email_endpoint(
+    body: TestEmailBody,
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    from planning_suite.services.email_service import send_test_email
+
+    user_id = int(current_user["sub"])
+    to = [body.to_email] if body.to_email else []
+    if not to:
+        with db.engine.connect() as conn:
+            from sqlalchemy import text
+
+            row = conn.execute(
+                text("SELECT email FROM users WHERE id = :id"),
+                {"id": user_id},
+            ).fetchone()
+        if row and row._mapping.get("email"):
+            to = [row._mapping["email"]]
+    if not to:
+        raise HTTPException(status_code=400, detail="No recipient email — provide to_email or set user email")
+    result = send_test_email(
+        to_addresses=to,
+        triggered_by_user_id=user_id,
+        username=current_user.get("username", ""),
+        custom_message=body.message,
+        db=db,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Send failed"))
+    return result

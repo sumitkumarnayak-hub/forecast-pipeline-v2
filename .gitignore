@@ -62,3 +62,11 @@ yarn-error.log*
 # Miscellaneous
 *.pem
 *.tsbuildinfo
+
+# Local runtime artifacts (caches, parquet, exports — never commit)
+backend/outputs/
+outputs/
+*.parquet
+Summary_*.xlsx
+Hub_Dist_Wk*.xlsx
+pipeline_dates_cache.json

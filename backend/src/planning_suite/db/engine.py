@@ -5,6 +5,7 @@ Uses Supabase (PostgreSQL) when DATABASE_URL is set in .env, otherwise local SQL
 """
 import json
 import secrets
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -82,7 +83,15 @@ class Database:
             url = db_url
             if url.startswith("postgres://"):
                 url = url.replace("postgres://", "postgresql://", 1)
-            return create_engine(url, pool_pre_ping=True)
+            return create_engine(
+                url,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+                pool_recycle=1800,
+                pool_timeout=5,
+                connect_args={"connect_timeout": 5},
+            )
         sqlite_path = db_path.as_posix() if hasattr(db_path, "as_posix") else str(db_path)
         return create_engine(
             f"sqlite:///{sqlite_path}",
@@ -1735,3 +1744,16 @@ _POSTGRES_SCHEMA = [
     )
     """,
 ]
+
+_SHARED_DB: Database | None = None
+_SHARED_DB_LOCK = threading.Lock()
+
+
+def get_shared_database() -> Database:
+    """Process-wide singleton — avoids reconnecting to Postgres on every API request."""
+    global _SHARED_DB
+    if _SHARED_DB is None:
+        with _SHARED_DB_LOCK:
+            if _SHARED_DB is None:
+                _SHARED_DB = Database()
+    return _SHARED_DB

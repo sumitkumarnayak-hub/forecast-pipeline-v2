@@ -1,13 +1,154 @@
-"""Dashboard router — pipeline flow status + recent runs."""
+"""Dashboard router — weekly analytics, pipeline card, run history."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.deps import get_current_user, get_db
+from planning_suite.automation.autopilot_state import load_autopilot_state
 from planning_suite.db.engine import Database
 from planning_suite.services import pipeline_flow as pf
+from planning_suite.services.analytics_6w import describe_missing_6w_sources
+from planning_suite.services.dashboard_analytics import (
+    build_week_analytics,
+    list_available_weeks,
+)
+from planning_suite.services.dashboard_revenue_trends import build_revenue_trends
 
 router = APIRouter()
+
+
+@router.get("/bootstrap")
+def dashboard_bootstrap(
+    week: str | None = None,
+    cities: str | None = None,
+    categories: str | None = None,
+    days: str | None = None,
+    dod_view: str = "City",
+    wow_view: str = "City",
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Single round-trip for the dashboard — pipeline card, weeks, week analytics, and trends.
+    Heavy 6w aggregates are cached in-process (shared across users, TTL from DASHBOARD_CACHE_TTL).
+    """
+    try:
+        weeks_meta = list_available_weeks()
+        week_label = week or weeks_meta.get("default_week")
+        city_list = [c.strip() for c in cities.split(",") if c.strip()] if cities else None
+        cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
+        day_list = [d.strip() for d in days.split(",") if d.strip()] if days else None
+
+        state = load_autopilot_state()
+        if not state:
+            pipeline_card = {"has_run": False, "run_name": None, "status": None}
+        else:
+            if state.get("success"):
+                status = "Success"
+            elif state.get("failed_step") is not None:
+                status = "Failed"
+            else:
+                status = "In progress"
+            pipeline_card = {
+                "has_run": True,
+                "run_name": (state.get("run_name") or "—")[:28],
+                "status": status,
+            }
+
+        analytics = (
+            build_week_analytics(week_label)
+            if week_label
+            else {"empty": True, "message": "No data found in the 6-week rolling file."}
+        )
+        revenue_trends = build_revenue_trends(
+            cities=city_list,
+            categories=cat_list,
+            days=day_list,
+            dod_view=dod_view,
+            wow_view=wow_view,
+        )
+
+        return {
+            "pipeline_card": pipeline_card,
+            "weeks": weeks_meta,
+            "analytics": analytics,
+            "revenue_trends": revenue_trends,
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/pipeline-card")
+def get_pipeline_card(current_user: dict = Depends(get_current_user)):
+    """Compact last Auto-Pilot run summary (Streamlit render_pipeline_dashboard_card)."""
+    state = load_autopilot_state()
+    if not state:
+        return {"has_run": False, "run_name": None, "status": None}
+    if state.get("success"):
+        status = "Success"
+    elif state.get("failed_step") is not None:
+        status = "Failed"
+    else:
+        status = "In progress"
+    run_name = (state.get("run_name") or "—")[:28]
+    return {"has_run": True, "run_name": run_name, "status": status}
+
+
+@router.get("/weeks")
+def get_dashboard_weeks(current_user: dict = Depends(get_current_user)):
+    """ISO week labels for the dashboard week selector."""
+    try:
+        return list_available_weeks()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/analytics")
+def get_dashboard_analytics(
+    week: str | None = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Weekly dashboard analytics for the selected ISO week."""
+    try:
+        meta = list_available_weeks()
+        week_label = week or meta.get("default_week")
+        if not week_label:
+            return {"empty": True, "message": "No data found in the 6-week rolling file."}
+        return build_week_analytics(week_label)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/revenue-trends")
+def get_revenue_trends(
+    cities: str | None = None,
+    categories: str | None = None,
+    days: str | None = None,
+    dod_view: str = "City",
+    wow_view: str = "City",
+    current_user: dict = Depends(get_current_user),
+):
+    """City revenue trend charts — day-on-day & week-on-week (Streamlit city_revenue_trends)."""
+    try:
+        city_list = [c.strip() for c in cities.split(",") if c.strip()] if cities else None
+        cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
+        day_list = [d.strip() for d in days.split(",") if d.strip()] if days else None
+        return build_revenue_trends(
+            cities=city_list,
+            categories=cat_list,
+            days=day_list,
+            dod_view=dod_view,
+            wow_view=wow_view,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/pipeline-flow")

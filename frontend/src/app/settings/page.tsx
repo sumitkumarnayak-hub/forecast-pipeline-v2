@@ -3,13 +3,14 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { Tabs } from "@/components/ui/Tabs";
 import api from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { useAuth } from "@/hooks/useAuth";
 import { Settings, Bell, Mail, Shield, PlusCircle, Trash2, RefreshCw, Cpu } from "lucide-react";
 
 type Pref = { email_notifications: boolean; auto_sync_masters: boolean; preview_rows: number };
 
 export default function SettingsPage() {
-  const user = getUser();
+  const { user, hydrated } = useAuth();
+  const admin = hydrated && user?.role === "admin";
   const [env, setEnv] = useState<any>(null);
   const [prefs, setPrefs] = useState<Pref>({ email_notifications: true, auto_sync_masters: false, preview_rows: 100 });
   const [recipients, setRecipients] = useState<any[]>([]);
@@ -17,7 +18,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [newEmail, setNewEmail] = useState({ email: "", display_name: "", category: "baseline" });
-  const [addingEmail, setAddingEmail] = useState(false);
+  const [testEmail, setTestEmail] = useState("");
+  const [testMsg, setTestMsg] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -28,7 +31,7 @@ export default function SettingsPage() {
       ]);
       setEnv(e.data);
       if (p.data && Object.keys(p.data).length > 0) setPrefs({ ...prefs, ...p.data });
-      if (isAdmin(user?.role)) {
+      if (admin) {
         const r = await api.get("/api/settings/email-recipients");
         setRecipients(r.data);
       }
@@ -36,7 +39,10 @@ export default function SettingsPage() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!hydrated) return;
+    void load();
+  }, [hydrated, admin]);
 
   const savePrefs = async () => {
     setSaving(true); setMsg({ text: "", type: "" });
@@ -149,8 +155,8 @@ export default function SettingsPage() {
 
   // Email Notification Recipients Content
   const emailTab = (
-    <div style={{ display: "grid", gridTemplateColumns: isAdmin(user?.role) ? "1fr 1.5fr" : "1fr", gap: "1.5rem" }}>
-      {isAdmin(user?.role) && (
+    <div style={{ display: "grid", gridTemplateColumns: admin ? "1fr 1.5fr" : "1fr", gap: "1.5rem" }}>
+      {admin && (
         <div className="card" style={{ padding: "1.5rem" }}>
           <h4 style={{ margin: "0 0 1rem 0", fontSize: "1.05rem", fontWeight: 700 }}>Add Recipient</h4>
           <div className="form-group">
@@ -191,7 +197,7 @@ export default function SettingsPage() {
                   <th>Name</th>
                   <th>Category</th>
                   <th>Enabled</th>
-                  {isAdmin(user?.role) && <th style={{ width: "80px", textAlign: "center" }}>Actions</th>}
+                  {admin && <th style={{ width: "80px", textAlign: "center" }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -201,7 +207,7 @@ export default function SettingsPage() {
                     <td style={{ fontSize: "0.78rem" }}>{r.display_name || "—"}</td>
                     <td><span className="badge badge-blue">{r.category}</span></td>
                     <td>{r.enabled ? <span className="badge badge-green">Yes</span> : <span className="badge badge-gray">No</span>}</td>
-                    {isAdmin(user?.role) && (
+                    {admin && (
                       <td style={{ textAlign: "center" }}>
                         <button className="btn btn-danger btn-sm" style={{ padding: "0.2rem 0.5rem" }} onClick={() => deleteRecipient(r.id)}>
                           <Trash2 size={11} />
@@ -218,9 +224,31 @@ export default function SettingsPage() {
     </div>
   );
 
+  const sendTestEmail = async () => {
+    setSendingTest(true);
+    try {
+      await api.post("/api/settings/test-email", { to_email: testEmail || undefined, message: testMsg });
+      setMsg({ text: "Test email sent.", type: "success" });
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Send failed", type: "danger" });
+    }
+    setSendingTest(false);
+  };
+
   // Environment Config Tab
   const envTab = (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      {admin && (
+        <div className="card" style={{ padding: "1.5rem" }}>
+          <h4 style={{ margin: "0 0 1rem" }}>Send Test Email</h4>
+          <input className="form-input text-sm mb-2" placeholder="To (optional — uses your profile email)" value={testEmail} onChange={e => setTestEmail(e.target.value)} />
+          <textarea className="form-input text-sm mb-2" rows={2} placeholder="Optional message" value={testMsg} onChange={e => setTestMsg(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={sendTestEmail} disabled={sendingTest}>
+            {sendingTest ? "Sending…" : "Send test email"}
+          </button>
+        </div>
+      )}
       {env && (
         <div className="card" style={{ padding: "1.5rem" }}>
           <h4 style={{ margin: "0 0 1rem 0", fontSize: "1.05rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.4rem" }}>

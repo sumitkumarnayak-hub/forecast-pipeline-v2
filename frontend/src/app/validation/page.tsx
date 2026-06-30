@@ -1,166 +1,448 @@
 "use client";
-import { useRef, useState } from "react";
+
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
-import { Tabs } from "@/components/ui/Tabs";
+import { UrlTabs } from "@/components/ui/UrlTabs";
+import { ValidationResult, fmtFileTime } from "@/components/validation/ValidationResult";
 import api from "@/lib/api";
-import { getUser, canWrite } from "@/lib/auth";
-import { Upload, CheckCircle, XCircle, ShieldCheck, FileCode2 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { Upload, Play, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 
-export default function ValidationPage() {
-  const user = getUser();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [result, setResult] = useState<any>(null);
-  const [uploading, setUploading] = useState(false);
+const BOOTSTRAP_KEY = "validation:bootstrap";
+const BOOTSTRAP_TTL_MS = 120_000;
+
+type Bootstrap = {
+  logics?: {
+    validation_version?: string;
+    input_types?: { id: string; label: string }[];
+    master_options?: { id: string; label: string }[];
+    rules?: string[];
+    baseline_schema?: string[];
+  };
+  outputs?: {
+    baseline?: { available: boolean; file?: string; modified?: number };
+    final_plan?: { available: boolean; file?: string; modified?: number };
+  };
+  history_count?: number;
+};
+
+function readCache(): Bootstrap | null {
+  try {
+    const raw = sessionStorage.getItem(BOOTSTRAP_KEY);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw) as { ts: number; data: Bootstrap };
+    if (Date.now() - ts > BOOTSTRAP_TTL_MS) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function ValidationContent() {
+  const { canWrite } = useAuth();
+  const [boot, setBoot] = useState<Bootstrap | null>(null);
+  const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState({ text: "", type: "" });
+  const [busy, setBusy] = useState("");
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true); setMsg({ text: "", type: "" }); setResult(null);
+  const [inputType, setInputType] = useState("raw_data");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const outputRef = useRef<HTMLInputElement>(null);
+  const [inputResult, setInputResult] = useState<Record<string, unknown> | null>(null);
+  const [masterId, setMasterId] = useState("product_hub_master");
+  const [masterResult, setMasterResult] = useState<Record<string, unknown> | null>(null);
+  const [outputResult, setOutputResult] = useState<Record<string, unknown> | null>(null);
+  const [history, setHistory] = useState<Record<string, unknown>[]>([]);
+
+  const loadBootstrap = useCallback(async (force?: boolean) => {
+    if (!force) {
+      const cached = readCache();
+      if (cached) {
+        setBoot(cached);
+        setLoading(false);
+        return;
+      }
+    }
+    setLoading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
+      const { data } = await api.get<Bootstrap>("/api/validation/bootstrap");
+      setBoot(data);
+      sessionStorage.setItem(BOOTSTRAP_KEY, JSON.stringify({ ts: Date.now(), data }));
+    } catch {
+      setMsg({ text: "Failed to load validation metadata", type: "danger" });
+    }
+    setLoading(false);
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const { data } = await api.get<{ rows: Record<string, unknown>[] }>("/api/validation/history");
+      setHistory(data.rows || []);
+    } catch {
+      setHistory([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBootstrap();
+    loadHistory();
+  }, [loadBootstrap, loadHistory]);
+
+  const afterRun = async (text: string, type: string) => {
+    setMsg({ text, type });
+    await loadHistory();
+    try {
+      sessionStorage.removeItem(BOOTSTRAP_KEY);
+    } catch {
+      /* ignore */
+    }
+    await loadBootstrap(true);
+  };
+
+  const runInputValidation = async (file: File) => {
+    setBusy("input");
+    setInputResult(null);
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const { data } = await api.post(`/api/validation/validate-input?data_type=${inputType}`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setInputResult(data);
+      await afterRun(
+        `${file.name} — ${data.valid ? "passed" : "failed"}`,
+        data.valid ? "success" : "danger",
+      );
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Validation failed", type: "danger" });
+    }
+    setBusy("");
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const runMasterValidation = async () => {
+    setBusy("master");
+    setMasterResult(null);
+    try {
+      const { data } = await api.post(`/api/validation/validate-master?master_id=${masterId}`);
+      setMasterResult(data);
+      await afterRun(
+        data.valid ? "Master validation passed" : `${data.error_count} errors`,
+        data.valid ? "success" : "danger",
+      );
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Failed", type: "danger" });
+    }
+    setBusy("");
+  };
+
+  const validateLatest = async (kind: "baseline" | "final-plan") => {
+    setBusy(kind);
+    setOutputResult(null);
+    try {
+      const { data } = await api.get(`/api/validation/validate-latest/${kind}`);
+      setOutputResult(data);
+      await afterRun(
+        `Validated ${data.file}`,
+        data.validation?.valid ? "success" : "danger",
+      );
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Not found", type: "warning" });
+    }
+    setBusy("");
+  };
+
+  const uploadBaseline = async (file: File) => {
+    setBusy("upload");
+    setOutputResult(null);
+    const form = new FormData();
+    form.append("file", file);
+    try {
       const { data } = await api.post("/api/validation/validate-baseline-output", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setResult(data);
-      const valid = data.validation?.valid !== false;
-      setMsg({ text: `${valid ? "✅" : "❌"} ${file.name} — ${data.rows} rows, ${valid ? "validation passed" : "validation failed"}`, type: valid ? "success" : "danger" });
-    } catch (err: any) {
-      setMsg({ text: `❌ ${err?.response?.data?.detail || "Validation failed"}`, type: "danger" });
+      setOutputResult({ file: data.filename, validation: data.validation, rows: data.rows });
+      await afterRun(
+        `${file.name} — ${data.validation?.valid ? "passed" : "failed"}`,
+        data.validation?.valid ? "success" : "danger",
+      );
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Upload failed", type: "danger" });
     }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = "";
+    setBusy("");
+    if (outputRef.current) outputRef.current.value = "";
   };
 
-  const validateOutputsTab = (
+  const clearHistory = async () => {
+    try {
+      await api.delete("/api/validation/history");
+      setHistory([]);
+      setMsg({ text: "History cleared", type: "success" });
+      await loadBootstrap(true);
+    } catch {
+      setMsg({ text: "Could not clear history", type: "danger" });
+    }
+  };
+
+  const logics = boot?.logics;
+  const outputs = boot?.outputs;
+
+  const inputTab = (
     <div className="grid-2">
-      <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <ShieldCheck size={15} color="var(--blue)" /> Validate Baseline Output
-          </div>
-          <div className="text-xs text-muted" style={{ marginBottom: "1rem", lineHeight: 1.6 }}>
-            Upload a <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 3px", borderRadius: 3 }}>Summary_*.xlsx</code> file.
-            It will be validated against the Pandera baseline schema — required columns, null checks, and data constraints.
-          </div>
-
-          {canWrite(user?.role) ? (
-            <label style={{
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              gap: "0.5rem", padding: "2rem", borderRadius: "var(--radius-md)",
-              border: "2px dashed var(--border)", cursor: "pointer", background: "var(--bg-elevated)",
-              transition: "border-color 0.15s",
-            }}>
-              <Upload size={28} color="var(--text-muted)" />
-              <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 500 }}>
-                {uploading ? "Validating…" : "Click to upload Summary_*.xlsx"}
-              </span>
-              <span className="text-xs text-muted">Pandera schema validation</span>
-              <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
-            </label>
-          ) : (
-            <div className="alert alert-warning">Viewer role — upload not permitted.</div>
-          )}
-
-          {uploading && <div style={{ textAlign: "center", marginTop: "0.75rem" }}><span className="spinner" /></div>}
-        </div>
-
-        <div className="card" style={{ background: "var(--blue-dim)", borderColor: "var(--border-accent)" }}>
-          <div style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem", color: "var(--blue)" }}>📋 Schema Checks</div>
-          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.8 }}>
-            The Pandera schema validates:<br />
-            • Required columns present<br />
-            • No null values in key fields<br />
-            • Numeric columns are non-negative<br />
-            • Date columns are valid<br />
-            • Hub/SKU codes match expected patterns
-          </div>
-        </div>
-      </div>
-
       <div className="card">
-        <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.75rem" }}>Validation Result</div>
-
-        {msg.text && (
-          <div className={`alert alert-${msg.type}`} style={{ marginBottom: "1rem" }}>{msg.text}</div>
-        )}
-
-        {!result ? (
-          <div style={{ textAlign: "center", padding: "4rem 2rem", color: "var(--text-muted)" }}>
-            <ShieldCheck size={48} style={{ opacity: 0.2, marginBottom: "1rem" }} />
-            <div style={{ fontSize: "0.85rem" }}>Upload a baseline output file to see validation results here.</div>
-          </div>
+        <div style={{ fontWeight: 700, marginBottom: "0.75rem" }}>Upload input file</div>
+        <p className="text-xs text-muted mb-3">
+          Validate raw sales, hub changes, outlier days, or percentile data before processing.
+        </p>
+        <div className="form-group">
+          <label className="form-label">Data type</label>
+          <select className="form-input" value={inputType} onChange={e => setInputType(e.target.value)}>
+            {(logics?.input_types || []).map(t => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+        {canWrite ? (
+          <label className="btn btn-primary btn-sm" style={{ cursor: "pointer" }}>
+            {busy === "input" ? <span className="spinner" style={{ width: 12, height: 12 }} /> : <Upload size={13} />}
+            Upload CSV / Excel
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              style={{ display: "none" }}
+              disabled={!!busy}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) runInputValidation(f);
+              }}
+            />
+          </label>
         ) : (
-          <>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1.25rem" }}>
-              <span className="badge badge-blue">{result.rows} rows</span>
-              <span className="badge badge-blue">{result.columns?.length} columns</span>
-              <span className={`badge badge-${result.validation?.valid !== false ? "green" : "red"}`}>
-                {result.validation?.valid !== false ? <><CheckCircle size={11} /> Passed</> : <><XCircle size={11} /> Failed</>}
-              </span>
-            </div>
-
-            {result.validation?.errors?.length > 0 && (
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "0.78rem", color: "var(--red)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.6rem" }}>
-                  Validation Errors ({result.validation.errors.length})
-                </div>
-                <div style={{ maxHeight: 320, overflowY: "auto" }}>
-                  {result.validation.errors.map((e: string, i: number) => (
-                    <div key={i} style={{
-                      display: "flex", gap: "0.5rem", alignItems: "flex-start",
-                      padding: "0.5rem 0.75rem", background: "var(--red-dim)",
-                      borderRadius: "var(--radius-sm)", marginBottom: "0.35rem",
-                      fontSize: "0.75rem", color: "#fca5a5", fontFamily: "monospace",
-                    }}>
-                      <XCircle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-                      {e}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {result.validation?.valid !== false && (
-              <div style={{ marginTop: "1rem" }}>
-                <div style={{ fontWeight: 600, fontSize: "0.78rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.5rem" }}>
-                  Validated Columns
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                  {(result.columns || []).map((c: string) => (
-                    <span key={c} style={{ fontSize: "0.68rem", background: "var(--green-dim)", border: "1px solid rgba(16,185,129,0.2)", padding: "0.15rem 0.5rem", borderRadius: 4, color: "var(--green)", fontFamily: "monospace" }}>
-                      ✓ {c}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+          <div className="alert alert-warning text-sm">Read-only — uploads disabled</div>
         )}
+      </div>
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: "0.75rem" }}>Result</div>
+        <ValidationResult
+          validation={inputResult as { valid?: boolean; errors?: string[]; warnings?: string[] }}
+          filename={inputResult?.filename as string}
+          rows={inputResult?.rows as number}
+        />
       </div>
     </div>
   );
 
-  const logicsTab = (
-    <div className="card" style={{ textAlign: "center", padding: "4rem 2rem", color: "var(--text-muted)" }}>
-      <FileCode2 size={48} style={{ opacity: 0.2, margin: "0 auto 1rem" }} />
-      <div style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Logics Used</div>
-      <div className="text-sm">Documentation for the validation logic rules applied during checking.</div>
+  const masterTab = (
+    <div className="grid-2">
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: "0.75rem" }}>Master sheet validation</div>
+        <div className="form-group">
+          <label className="form-label">Select master</label>
+          <select className="form-input" value={masterId} onChange={e => setMasterId(e.target.value)}>
+            {(logics?.master_options || []).map(m => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          disabled={!canWrite || busy === "master"}
+          onClick={runMasterValidation}
+        >
+          {busy === "master" ? <span className="spinner" style={{ width: 12, height: 12 }} /> : <Play size={13} />}
+          Run validation
+        </button>
+        <p className="text-xs text-muted mt-2">P-H Master runs full Polars rules against live Google Sheets.</p>
+      </div>
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: "0.75rem" }}>Result</div>
+        <ValidationResult
+          validation={
+            masterResult
+              ? {
+                  valid: masterResult.valid as boolean,
+                  errors: masterResult.errors as string[],
+                  warnings: masterResult.warnings as string[],
+                  stats: masterResult.stats as Record<string, unknown>,
+                }
+              : null
+          }
+        />
+      </div>
     </div>
   );
 
-  const mainTabs = [
-    { id: "validate", label: "📊 Validate Outputs", content: validateOutputsTab },
-    { id: "logics", label: "📝 Logics Used", content: logicsTab },
-  ];
+  const outputTab = (
+    <div className="grid-2">
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div className="card">
+          <div style={{ fontWeight: 700, marginBottom: "0.5rem" }}>
+            <ShieldCheck size={15} /> Baseline output
+          </div>
+          {outputs?.baseline?.available ? (
+            <p className="text-xs text-muted mb-2">
+              Latest: <strong>{outputs.baseline.file}</strong>
+              {outputs.baseline.modified ? ` · ${fmtFileTime(outputs.baseline.modified)}` : ""}
+            </p>
+          ) : (
+            <p className="text-xs text-muted mb-2">No Summary_*.xlsx on disk.</p>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm mb-2"
+            disabled={!!busy || !outputs?.baseline?.available}
+            onClick={() => validateLatest("baseline")}
+          >
+            Validate latest Summary
+          </button>
+          {canWrite && (
+            <label className="btn btn-secondary btn-sm" style={{ cursor: "pointer", marginLeft: 8 }}>
+              <Upload size={12} /> Upload Summary
+              <input
+                ref={outputRef}
+                type="file"
+                accept=".xlsx"
+                style={{ display: "none" }}
+                disabled={!!busy}
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadBaseline(f);
+                }}
+              />
+            </label>
+          )}
+        </div>
+        <div className="card">
+          <div style={{ fontWeight: 700, marginBottom: "0.5rem" }}>Final plan output</div>
+          {outputs?.final_plan?.available ? (
+            <p className="text-xs text-muted mb-2">
+              Latest: <strong>{outputs.final_plan.file}</strong>
+              {outputs.final_plan.modified ? ` · ${fmtFileTime(outputs.final_plan.modified)}` : ""}
+            </p>
+          ) : (
+            <p className="text-xs text-muted mb-2">No Hub_Dist_Wk*.xlsx on disk.</p>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={!!busy || !outputs?.final_plan?.available}
+            onClick={() => validateLatest("final-plan")}
+          >
+            Validate latest Hub_Dist
+          </button>
+        </div>
+      </div>
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: "0.75rem" }}>Result</div>
+        <ValidationResult
+          validation={outputResult?.validation as { valid?: boolean; errors?: string[]; warnings?: string[] }}
+          filename={(outputResult?.file as string) || undefined}
+          rows={(outputResult?.validation as { stats?: { rows?: number } })?.stats?.rows}
+        />
+      </div>
+    </div>
+  );
+
+  const historyTab = (
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm text-muted">
+          {history.length} run{history.length !== 1 ? "s" : ""} this session
+          {logics?.validation_version && ` · rules v${logics.validation_version}`}
+        </p>
+        <div className="flex gap-2">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={loadHistory}>
+            <RefreshCw size={12} /> Refresh
+          </button>
+          {canWrite && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={clearHistory}>
+              <Trash2 size={12} /> Clear
+            </button>
+          )}
+        </div>
+      </div>
+      {history.length === 0 ? (
+        <div className="card text-sm text-muted">No validation runs yet — use another tab to run a check.</div>
+      ) : (
+        <div className="card table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Run / File</th>
+                <th>Errors</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((row, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>{String(row.validation_date)}</td>
+                  <td style={{ fontSize: "0.75rem" }}>{String(row.validation_type)}</td>
+                  <td>
+                    <span className={`badge badge-${row.passed ? "green" : "red"}`}>{String(row.passed_label)}</span>
+                  </td>
+                  <td style={{ fontSize: "0.72rem" }}>{String(row.filename || row.run_id || "—")}</td>
+                  <td style={{ fontSize: "0.68rem", maxWidth: 280 }}>{String(row.errors_display || "—")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {logics?.rules && (
+        <details className="card mt-4 text-sm">
+          <summary style={{ fontWeight: 700, cursor: "pointer" }}>Validation rules reference</summary>
+          <ul className="mt-2 text-xs">
+            {logics.rules.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted mt-2">Baseline schema: {logics.baseline_schema?.join(", ")}</p>
+        </details>
+      )}
+    </div>
+  );
 
   return (
     <AppShell
-      title="Output Validation"
-      subtitle="Validate baseline summary Excel outputs using Pandera schemas"
+      title="Validation"
+      subtitle="Input, master, and output data quality checks"
+      actions={
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadBootstrap(true)} disabled={loading}>
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
+        </button>
+      }
     >
-      <Tabs tabs={mainTabs} defaultTab="validate" />
+      {msg.text && <div className={`alert alert-${msg.type} mb-4`}>{msg.text}</div>}
+      {loading && !boot ? (
+        <span className="spinner" />
+      ) : (
+        <UrlTabs
+          defaultTab="input"
+          tabs={[
+            { id: "input", label: "Input Validation", content: inputTab },
+            { id: "master", label: "Master Validation", content: masterTab },
+            { id: "output", label: "Output Validation", content: outputTab },
+            { id: "history", label: "Validation History", content: historyTab },
+          ]}
+        />
+      )}
     </AppShell>
+  );
+}
+
+export default function ValidationPage() {
+  return (
+    <Suspense>
+      <ValidationContent />
+    </Suspense>
   );
 }

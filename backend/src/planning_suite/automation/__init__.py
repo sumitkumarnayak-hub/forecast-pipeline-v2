@@ -3,6 +3,7 @@
 from planning_suite.automation.master_data_sync import (
     MasterSyncResult,
     run_master_data_excel_sync,
+    run_master_data_sync,
 )
 from planning_suite.automation.new_product_launch_sync import (
     NewProductLaunchResult,
@@ -22,6 +23,7 @@ __all__ = [
     "NewProductLaunchResult",
     "OptimizedAutopilotRunner",
     "run_master_data_excel_sync",
+    "run_master_data_sync",
     "run_new_product_launch_sync_cli",
     "run_optimized_autopilot",
 ]

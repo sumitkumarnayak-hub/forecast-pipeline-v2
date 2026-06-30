@@ -19,8 +19,9 @@ if str(SRC_DIR) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(BACKEND_DIR / ".env")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.routers import auth, dashboard, master_data, baseline, autopilot
 from app.routers import final_plan, new_product_launch, insights, settings, validation
@@ -30,9 +31,9 @@ from app.routers import final_plan, new_product_launch, insights, settings, vali
 async def lifespan(app: FastAPI):
     # Ensure DB tables exist on startup (uses existing Database().init_db())
     try:
-        from planning_suite.db.engine import Database
-        db = Database()
-        db.init_db()
+        from planning_suite.db.engine import get_shared_database
+        db = get_shared_database()
+        db.init_database()
         print("[startup] Database initialised OK", flush=True)
     except Exception as exc:
         print(f"[startup] DB init warning: {exc}", flush=True)
@@ -56,7 +57,16 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return JSON errors with CORS headers (avoids browser 'CORS' masking of 500s)."""
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router,               prefix="/api/auth",               tags=["Auth"])

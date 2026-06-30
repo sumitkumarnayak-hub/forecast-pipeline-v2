@@ -6,16 +6,11 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from planning_suite.db.engine import Database
-
-_db: Database | None = None
+from planning_suite.db.engine import get_shared_database
 
 
 def _database() -> Database:
-    global _db
-    if _db is None:
-        _db = Database()
-    return _db
+    return get_shared_database()
 
 
 def load_autopilot_state() -> dict | None:

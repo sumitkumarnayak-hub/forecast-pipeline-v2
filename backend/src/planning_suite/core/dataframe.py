@@ -1,5 +1,44 @@
 """Shared pandas DataFrame utilities."""
+from __future__ import annotations
+
+import math
+from datetime import date, datetime
+from typing import Any
+
+import numpy as np
 import pandas as pd
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Make nested structures JSON-safe (NaN/Inf → null, numpy scalars → native)."""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, (np.floating, float)):
+        v = float(obj)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, (pd.Timestamp, datetime, date)):
+        return obj.isoformat()
+    try:
+        if obj is pd.NA or pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return obj
+
+
+def df_to_records(df: pd.DataFrame) -> list[dict]:
+    """Export DataFrame rows for REST responses without NaN JSON errors."""
+    if df.empty:
+        return []
+    return sanitize_for_json(df.to_dict(orient="records"))
 
 
 def drop_completely_blank_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:

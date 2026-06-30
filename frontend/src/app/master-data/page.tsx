@@ -1,9 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState, useMemo } from "react";
 import AppShell from "@/components/layout/AppShell";
-import { Tabs } from "@/components/ui/Tabs";
+import { UrlTabs } from "@/components/ui/UrlTabs";
 import api from "@/lib/api";
-import { getUser, canWrite } from "@/lib/auth";
+import { cacheGet, cacheInvalidate, cacheSet } from "@/lib/queryCache";
+import { useAuth } from "@/hooks/useAuth";
+import { downloadCsv } from "@/lib/downloadCsv";
 import { RefreshCw, Upload, Database, Users, Box, List, History, Search, Download, HelpCircle, AlertTriangle, ShieldCheck, Check, Info } from "lucide-react";
 
 function fmt(dt: string | null) {
@@ -12,7 +14,15 @@ function fmt(dt: string | null) {
 }
 
 export default function MasterDataPage() {
-  const user = getUser();
+  return (
+    <Suspense>
+      <MasterDataPageInner />
+    </Suspense>
+  );
+}
+
+function MasterDataPageInner() {
+  const { canWrite } = useAuth();
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState({ text: "", type: "" });
@@ -47,6 +57,8 @@ export default function MasterDataPage() {
   const [hubChanges, setHubChanges] = useState<{ rows: any[]; columns: string[] }>({ rows: [], columns: [] });
   const [editedChanges, setEditedChanges] = useState<any[]>([]);
   const [savingChanges, setSavingChanges] = useState(false);
+  const [newHubPreview, setNewHubPreview] = useState<Record<string, unknown> | null>(null);
+  const [newHubBusy, setNewHubBusy] = useState(false);
 
   // Inventory Buffer State
   const [invData, setInvData] = useState<Record<string, any[]>>({});
@@ -78,42 +90,61 @@ export default function MasterDataPage() {
     setLoading(false);
   };
 
+  const loadSheet = useCallback(
+    async (
+      cacheKey: string,
+      path: string,
+      apply: (data: { rows: any[]; columns: string[] }) => void,
+      setBusy: (v: boolean) => void,
+      force = false,
+    ) => {
+      if (!force) {
+        const cached = cacheGet<{ rows: any[]; columns: string[] }>(cacheKey);
+        if (cached) {
+          apply(cached);
+          setBusy(false);
+        } else {
+          setBusy(true);
+        }
+      } else {
+        cacheInvalidate(cacheKey);
+        setBusy(true);
+      }
+
+      try {
+        const { data } = await api.get(path);
+        apply(data);
+        cacheSet(cacheKey, data, 180_000);
+      } catch {
+        if (!cacheGet(cacheKey)) {
+          setMsg({ text: `❌ Failed to load ${cacheKey}`, type: "danger" });
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     loadBaseData();
-  }, []);
+    // Prefetch master sheets in parallel — cached for instant tab switches
+    void loadSheet("master:p-master", "/api/master-data/p-master", setPData, setPLoading);
+    void loadSheet("master:ph-master", "/api/master-data/ph-master", setPhData, setPhLoading);
+    void loadSheet("master:hub-master", "/api/master-data/hub-master", setHubData, setHubLoading);
+  }, [loadSheet]);
 
   // Actions
-  const loadPMaster = async () => {
-    setPLoading(true);
-    try {
-      const { data } = await api.get("/api/master-data/p-master");
-      setPData(data);
-    } catch {
-      setMsg({ text: "❌ Failed to load P Master", type: "danger" });
-    }
-    setPLoading(false);
+  const loadPMaster = async (force = false) => {
+    await loadSheet("master:p-master", "/api/master-data/p-master", setPData, setPLoading, force);
   };
 
-  const loadPHMaster = async () => {
-    setPhLoading(true);
-    try {
-      const { data } = await api.get("/api/master-data/ph-master");
-      setPhData(data);
-    } catch {
-      setMsg({ text: "❌ Failed to load P-H Master", type: "danger" });
-    }
-    setPhLoading(false);
+  const loadPHMaster = async (force = false) => {
+    await loadSheet("master:ph-master", "/api/master-data/ph-master", setPhData, setPhLoading, force);
   };
 
-  const loadHubMaster = async () => {
-    setHubLoading(true);
-    try {
-      const { data } = await api.get("/api/master-data/hub-master");
-      setHubData(data);
-    } catch {
-      setMsg({ text: "❌ Failed to load Hub Mapping", type: "danger" });
-    }
-    setHubLoading(false);
+  const loadHubMaster = async (force = false) => {
+    await loadSheet("master:hub-master", "/api/master-data/hub-master", setHubData, setHubLoading, force);
   };
 
   const loadInventoryBuffer = async () => {
@@ -167,7 +198,13 @@ export default function MasterDataPage() {
     try {
       const { data } = await api.post("/api/master-data/sync");
       setMsg({ text: `✅ Excel Master synced successfully!`, type: "success" });
+      cacheInvalidate("master:p-master");
+      cacheInvalidate("master:ph-master");
+      cacheInvalidate("master:hub-master");
       loadBaseData();
+      void loadPMaster(true);
+      void loadPHMaster(true);
+      void loadHubMaster(true);
     } catch (e: any) {
       setMsg({ text: `❌ ${e?.response?.data?.detail || "Excel sync failed"}`, type: "danger" });
     }
@@ -228,6 +265,35 @@ export default function MasterDataPage() {
     setSavingChanges(false);
   };
 
+  const handleNewHubPreview = async () => {
+    setNewHubBusy(true);
+    setNewHubPreview(null);
+    try {
+      const { data } = await api.post("/api/master-data/new-hub-sync/preview");
+      setNewHubPreview(data);
+      if (data.mappings_found === 0) {
+        setMsg({ text: data.message || "No New Hub mappings found", type: "warning" });
+      }
+    } catch (e: any) {
+      setMsg({ text: `❌ ${e?.response?.data?.detail || "Preview failed"}`, type: "danger" });
+    }
+    setNewHubBusy(false);
+  };
+
+  const handleNewHubConfirm = async () => {
+    if (!newHubPreview?.ok) return;
+    setNewHubBusy(true);
+    try {
+      const { data } = await api.post("/api/master-data/new-hub-sync/confirm");
+      setMsg({ text: `✅ ${data.detail}`, type: "success" });
+      setNewHubPreview(null);
+      loadPHMaster(true);
+    } catch (e: any) {
+      setMsg({ text: `❌ ${e?.response?.data?.detail || "Sync failed"}`, type: "danger" });
+    }
+    setNewHubBusy(false);
+  };
+
   // UI - P Master Tab
   const pCategories = ["All", ...Array.from(new Set(pData.rows?.map(r => r["Sub-category"]).filter(Boolean)))].sort() as string[];
   const filteredPData = pData.rows?.filter(r => {
@@ -244,9 +310,18 @@ export default function MasterDataPage() {
             <h4 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>Product Master (P Master)</h4>
             <div className="text-xs text-muted mt-1">ReadOnly data loaded from central master worksheets. Update products in Google Sheets.</div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={loadPMaster} disabled={pLoading}>
+          <button className="btn btn-secondary btn-sm" onClick={() => loadPMaster(true)} disabled={pLoading}>
             <RefreshCw size={13} className={pLoading ? "animate-spin" : ""} /> Load / Refresh
           </button>
+          {pData.rows?.length > 0 && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginLeft: "0.5rem" }}
+              onClick={() => downloadCsv(filteredPData, pData.columns, "p_master.csv")}
+            >
+              <Download size={13} /> CSV
+            </button>
+          )}
         </div>
 
         {pData.rows?.length > 0 && (
@@ -297,7 +372,7 @@ export default function MasterDataPage() {
         ) : pData.rows?.length === 0 ? (
           <div className="text-sm text-muted text-center" style={{ padding: "3rem 1.5rem" }}>
             <Info size={24} style={{ display: "block", margin: "0 auto 0.75rem", opacity: 0.5 }} />
-            Click **Load / Refresh** to retrieve Product Master worksheets.
+            {pLoading ? "Loading Product Master…" : "No Product Master rows returned."}
           </div>
         ) : (
           <div>
@@ -327,6 +402,13 @@ export default function MasterDataPage() {
   // UI - P-H Master Tab
   const phCities = ["All", ...Array.from(new Set(phData.rows?.map(r => r["city_name"]).filter(Boolean)))].sort() as string[];
   const phPlans = ["All", ...Array.from(new Set(phData.rows?.map(r => r["Plan Design"]).filter(Boolean)))].sort() as string[];
+  const keyPHCols = useMemo(() => {
+    const preferred = [
+      "city_name", "hub_name", "sub category", "sku class prod",
+      "product_id", "Anchor Name", "Plan Design", "Launch date", "Active_Flag_Mon",
+    ];
+    return preferred.filter(c => phData.columns?.includes(c));
+  }, [phData.columns]);
   const filteredPHData = phData.rows?.filter(r => {
     const matchesSearch = Object.values(r).some(val => String(val).toLowerCase().includes(phSearch.toLowerCase()));
     const matchesCity = phCity === "All" || r["city_name"] === phCity;
@@ -342,9 +424,21 @@ export default function MasterDataPage() {
             <h4 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>Product-Hub Master (P-H Master)</h4>
             <div className="text-xs text-muted mt-1">Manage SKU allocation, Day-wise Active configurations, Split ratios, and Custom Prices by Hub.</div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={loadPHMaster} disabled={phLoading}>
+          <button className="btn btn-secondary btn-sm" onClick={() => loadPHMaster(true)} disabled={phLoading}>
             <RefreshCw size={13} className={phLoading ? "animate-spin" : ""} /> Load / Refresh
           </button>
+          {phData.rows?.length > 0 && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginLeft: "0.5rem" }}
+              onClick={() => {
+                const cols = phViewMode === "key" ? keyPHCols : phData.columns;
+                downloadCsv(filteredPHData, cols, "ph_master.csv");
+              }}
+            >
+              <Download size={13} /> CSV
+            </button>
+          )}
         </div>
 
         {phData.rows?.length > 0 && (
@@ -415,7 +509,7 @@ export default function MasterDataPage() {
         ) : phData.rows?.length === 0 ? (
           <div className="text-sm text-muted text-center" style={{ padding: "3rem 1.5rem" }}>
             <Info size={24} style={{ display: "block", margin: "0 auto 0.75rem", opacity: 0.5 }} />
-            Click **Load / Refresh** to view Product-Hub Master.
+            {phLoading ? "Loading P-H Master…" : "No P-H Master rows returned."}
           </div>
         ) : (
           <div>
@@ -447,7 +541,7 @@ export default function MasterDataPage() {
           Sync newly added Product IDs from P Master into P-H Master for all active hub configurations. Appended rows default to Plan Design 'I' (Inactive) for safety.
         </p>
 
-        {canWrite(user?.role) ? (
+        {canWrite ? (
           <div style={{ display: "flex", gap: "1rem", alignItems: "flex-end", borderBottom: syncPreview ? "1px solid var(--border)" : "none", paddingBottom: syncPreview ? "1.25rem" : "0", marginBottom: syncPreview ? "1.25rem" : "0" }}>
             <div style={{ flex: 1 }}>
               <label className="form-label" style={{ fontWeight: 600 }}>Product ID(s) — comma-separated</label>
@@ -539,7 +633,7 @@ export default function MasterDataPage() {
                   The new rows will write successfully, but you must manually fill Split %, price, HTT, and active flags directly in Google Sheets to fully activate the SKUs.
                 </div>
 
-                {canWrite(user?.role) && (
+                {canWrite && (
                   <button className="btn btn-primary text-sm" onClick={handlePHConfirm} disabled={confirmingPH} style={{ width: "100%", padding: "0.7rem" }}>
                     {confirmingPH ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <><Check size={14} /> Confirm & Write to P-H Master</>}
                   </button>
@@ -556,7 +650,7 @@ export default function MasterDataPage() {
         <p className="text-xs text-muted mb-4" style={{ lineHeight: 1.6 }}>
           Export the latest Google Sheets master sheets to a local file (`Product_Masters.xlsx`). This updates core reference databases on the server.
         </p>
-        <button className="btn btn-secondary text-sm" onClick={handleSyncExcel} disabled={loading || !canWrite(user?.role)}>
+        <button className="btn btn-secondary text-sm" onClick={handleSyncExcel} disabled={loading || !canWrite}>
           📥 Sync Masters to Excel
         </button>
       </div>
@@ -581,9 +675,18 @@ export default function MasterDataPage() {
             <h4 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>Hub Master (Hub Mapping)</h4>
             <div className="text-xs text-muted mt-1">Active hubs (Hub_active = A) mapped by cities and regions.</div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={loadHubMaster} disabled={hubLoading}>
+          <button className="btn btn-secondary btn-sm" onClick={() => loadHubMaster(true)} disabled={hubLoading}>
             <RefreshCw size={13} className={hubLoading ? "animate-spin" : ""} /> Load / Refresh
           </button>
+          {hubData.rows?.length > 0 && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginLeft: "0.5rem" }}
+              onClick={() => downloadCsv(filteredHubData, hubData.columns, "hub_master.csv")}
+            >
+              <Download size={13} /> CSV
+            </button>
+          )}
         </div>
 
         {hubData.rows?.length > 0 && (
@@ -669,7 +772,7 @@ export default function MasterDataPage() {
                 <th>Hub ID</th>
                 <th>Product IDs</th>
                 <th style={{ width: "100px" }}>Add Hub Map</th>
-                {canWrite(user?.role) && <th style={{ width: "80px", textAlign: "center" }}>Actions</th>}
+                {canWrite && <th style={{ width: "80px", textAlign: "center" }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -681,7 +784,7 @@ export default function MasterDataPage() {
                       style={{ padding: "0.3rem 0.5rem" }}
                       value={row["Type"] || ""}
                       onChange={e => handleEditChange(idx, "Type", e.target.value)}
-                      disabled={!canWrite(user?.role)}
+                      disabled={!canWrite}
                     >
                       <option value=""></option>
                       <option value="New Hub">New Hub</option>
@@ -696,7 +799,7 @@ export default function MasterDataPage() {
                         style={{ padding: "0.3rem 0.5rem" }}
                         value={row[field] ?? ""}
                         onChange={e => handleEditChange(idx, field, e.target.value)}
-                        disabled={!canWrite(user?.role)}
+                        disabled={!canWrite}
                       />
                     </td>
                   ))}
@@ -706,14 +809,14 @@ export default function MasterDataPage() {
                       style={{ padding: "0.3rem 0.5rem" }}
                       value={row["add_hub_mapping"] || ""}
                       onChange={e => handleEditChange(idx, "add_hub_mapping", e.target.value)}
-                      disabled={!canWrite(user?.role)}
+                      disabled={!canWrite}
                     >
                       <option value=""></option>
                       <option value="TRUE">TRUE</option>
                       <option value="FALSE">FALSE</option>
                     </select>
                   </td>
-                  {canWrite(user?.role) && (
+                  {canWrite && (
                     <td style={{ textAlign: "center" }}>
                       <button className="btn btn-danger btn-sm text-xs" style={{ padding: "0.2rem 0.5rem" }} onClick={() => handleDeleteHubRow(idx)}>Delete</button>
                     </td>
@@ -724,12 +827,75 @@ export default function MasterDataPage() {
           </table>
         </div>
 
-        {canWrite(user?.role) && (
+        {canWrite && (
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button className="btn btn-secondary text-sm" onClick={handleAddHubRow}>＋ Add Row</button>
             <button className="btn btn-primary text-sm" onClick={handleSaveHubChanges} disabled={savingChanges}>
               {savingChanges ? "Saving..." : "Save Hub Changes"}
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* New Hub Launch → P-H Master clone */}
+      <div className="card" style={{ padding: "1.5rem" }}>
+        <h4 style={{ margin: "0 0 0.4rem 0", fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)" }}>
+          🚀 New Hub Launch Sync
+        </h4>
+        <p className="text-xs text-muted mb-4">
+          Clone P-H Master rows from source hubs for each <strong>New Hub</strong> row saved above. Preview validates Hub Mapping before insert.
+        </p>
+        {canWrite ? (
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <button className="btn btn-secondary text-sm" onClick={handleNewHubPreview} disabled={newHubBusy}>
+              {newHubBusy ? "Working…" : "Preview New Hub Sync"}
+            </button>
+            {newHubPreview?.ok && Number(newHubPreview.mappings_found) > 0 && (
+              <button className="btn btn-primary text-sm" onClick={handleNewHubConfirm} disabled={newHubBusy}>
+                Confirm &amp; Clone to P-H Master
+              </button>
+            )}
+            {newHubPreview && (
+              <button className="btn btn-secondary text-sm" onClick={() => setNewHubPreview(null)}>Reset</button>
+            )}
+          </div>
+        ) : (
+          <div className="alert alert-warning">Viewer role — sync not permitted.</div>
+        )}
+        {newHubPreview && Number(newHubPreview.mappings_found) > 0 && (
+          <div className="mt-4">
+            <div className="stat-grid mb-3">
+              <div className="stat-card">
+                <div className="stat-label">Mappings</div>
+                <div className="stat-value">{String(newHubPreview.mappings_found)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Rows to insert</div>
+                <div className="stat-value">{String(newHubPreview.rows_to_insert)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Validation</div>
+                <div className="stat-value" style={{ fontSize: "1rem", color: newHubPreview.ok ? "var(--green)" : "var(--red)" }}>
+                  {newHubPreview.ok ? "Passed" : "Failed"}
+                </div>
+              </div>
+            </div>
+            {Array.isArray(newHubPreview.validation_errors) && newHubPreview.validation_errors.length > 0 && (
+              <div className="alert alert-danger text-sm mb-2">
+                {(newHubPreview.validation_errors as string[]).map((e, i) => (
+                  <div key={i}>• {e}</div>
+                ))}
+              </div>
+            )}
+            {Array.isArray(newHubPreview.mappings) && (
+              <ul className="text-xs text-muted pl-4">
+                {(newHubPreview.mappings as { new_hub: string; source_hub: string }[]).map((m, i) => (
+                  <li key={i}>
+                    {m.new_hub} ← {m.source_hub}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>
@@ -751,9 +917,23 @@ export default function MasterDataPage() {
             <button className="btn btn-secondary btn-sm" onClick={loadInventoryBuffer} disabled={invLoading}>
               <RefreshCw size={13} className={invLoading ? "animate-spin" : ""} /> Load Preview
             </button>
-            <button className="btn btn-primary btn-sm" onClick={handleSyncInventoryExcel} disabled={syncingInv || !canWrite(user?.role)}>
+            <button className="btn btn-primary btn-sm" onClick={handleSyncInventoryExcel} disabled={syncingInv || !canWrite}>
               {syncingInv ? "Syncing..." : "📥 Sync all to Excel"}
             </button>
+            {invTableRows.length > 0 && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() =>
+                  downloadCsv(
+                    invTableRows,
+                    Object.keys(invTableRows[0] || {}),
+                    `${invSelectedTab || "inventory"}.csv`,
+                  )
+                }
+              >
+                <Download size={13} /> CSV
+              </button>
+            )}
           </div>
         </div>
 
@@ -865,7 +1045,7 @@ export default function MasterDataPage() {
                 </select>
               </div>
 
-              {canWrite(user?.role) && (
+              {canWrite && (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.78rem", cursor: "pointer", color: "var(--text-secondary)" }}>
                     <input type="checkbox" checked={confirmRollback} onChange={e => setConfirmRollback(e.target.checked)} style={{ accentColor: "var(--blue)" }} />
@@ -884,21 +1064,23 @@ export default function MasterDataPage() {
   );
 
   const demandTabs = [
-    { id: "p-master", label: "📦 P Master", content: pMasterTab },
-    { id: "ph-master", label: "🗂️ P-H Master", content: phMasterTab },
-    { id: "hub-master", label: "🏪 Hub Master", content: hubMasterTab },
+    { id: "p-master", label: "P Master", content: pMasterTab },
+    { id: "ph-master", label: "P-H Master", content: phMasterTab },
+    { id: "hub-master", label: "Hub Master", content: hubMasterTab },
   ];
 
+  const demandTabPanel = <UrlTabs param="sub" defaultTab="p-master" tabs={demandTabs} />;
+
   const mainTabs = [
-    { id: "demand", label: "📋 Demand Planning", content: <Tabs tabs={demandTabs} defaultTab="p-master" /> },
-    { id: "inventory", label: "📦 Inventory Buffer", content: inventoryBufferTab },
-    { id: "history", label: "📜 Sync History & Rollback", content: historyTab },
+    { id: "demand", label: "Demand Planning Masters", content: demandTabPanel },
+    { id: "inventory", label: "Inventory Buffer Master", content: inventoryBufferTab },
+    { id: "history", label: "Master Sync History", content: historyTab },
   ];
 
   return (
     <AppShell
-      title="Master Data Management"
-      subtitle="Sync, validate, and manage Demand Planning & Inventory Masters"
+      title="Master Data"
+      subtitle="Demand planning masters, inventory buffer, sync history"
       actions={
         <button className="btn btn-secondary btn-sm" onClick={loadBaseData} disabled={loading}>
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
@@ -909,7 +1091,7 @@ export default function MasterDataPage() {
         <div className={`alert alert-${msg.type}`} style={{ marginBottom: "1.25rem" }}>{msg.text}</div>
       )}
 
-      <Tabs tabs={mainTabs} defaultTab="demand" />
+      <UrlTabs tabs={mainTabs} defaultTab="demand" />
     </AppShell>
   );
 }

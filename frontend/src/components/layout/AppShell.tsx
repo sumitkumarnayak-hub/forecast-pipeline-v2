@@ -1,12 +1,15 @@
 "use client";
-import { useEffect, useState, ReactNode } from "react";
+import { Suspense, useEffect, useState, ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { isAuthenticated, getUser } from "@/lib/auth";
+import { isAuthenticated } from "@/lib/auth";
 import Sidebar from "./Sidebar";
 import api from "@/lib/api";
+import { cacheGet, cacheSet } from "@/lib/queryCache";
 
-import { useTheme } from "next-themes";
+import { useTheme } from "@/lib/theme";
 import { Moon, Sun } from "lucide-react";
+
+const BASELINE_APPROVED_KEY = "shell:baseline-approved";
 
 interface Props {
   children: ReactNode;
@@ -15,32 +18,50 @@ interface Props {
   actions?: ReactNode;
 }
 
-export default function AppShell({ children, title, subtitle, actions }: Props) {
-  const router = useRouter();
-  const [mounted, setMounted] = useState(false);
-  const [baselineApproved, setBaselineApproved] = useState(false);
-  const { theme, setTheme } = useTheme();
-
-  useEffect(() => {
-    if (!isAuthenticated()) { router.replace("/login"); return; }
-    setMounted(true);
-    api.get("/api/baseline/status").then(r => setBaselineApproved(r.data.approved)).catch(() => {});
-  }, [router]);
-
-  if (!mounted) return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-base)" }}>
-      <span className="spinner" style={{ width: 28, height: 28, borderWidth: 3 }} />
-    </div>
-  );
-
+function ShellFrame({
+  children,
+  title,
+  subtitle,
+  actions,
+  baselineApproved,
+  theme,
+  setTheme,
+}: Props & {
+  baselineApproved: boolean;
+  theme: "light" | "dark";
+  setTheme: (t: "light" | "dark") => void;
+}) {
   return (
     <div className="app-shell">
-      <Sidebar baselineApproved={baselineApproved} />
+      <Suspense fallback={<aside className="app-sidebar" />}>
+        <Sidebar baselineApproved={baselineApproved} />
+      </Suspense>
       <div className="app-main">
         <header className="app-header">
           <div style={{ flex: 1 }}>
-            {title && <h1 style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.01em" }}>{title}</h1>}
-            {subtitle && <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "0.1rem" }}>{subtitle}</div>}
+            {title && (
+              <h1
+                style={{
+                  fontSize: "0.95rem",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {title}
+              </h1>
+            )}
+            {subtitle && (
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--text-secondary)",
+                  marginTop: "0.1rem",
+                }}
+              >
+                {subtitle}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
             {actions}
@@ -57,5 +78,66 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
         <main className="app-content animate-fade-in">{children}</main>
       </div>
     </div>
+  );
+}
+
+export default function AppShell({ children, title, subtitle, actions }: Props) {
+  const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  const [authed, setAuthed] = useState(true);
+  const [baselineApproved, setBaselineApproved] = useState(false);
+  const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    const ok = isAuthenticated();
+    setAuthed(ok);
+    setMounted(true);
+
+    const cached = cacheGet<boolean>(BASELINE_APPROVED_KEY);
+    if (cached !== null) setBaselineApproved(cached);
+
+    if (!ok) {
+      router.replace("/login");
+      return;
+    }
+
+    api
+      .get("/api/baseline/status")
+      .then(r => {
+        const approved = Boolean(r.data.approved);
+        setBaselineApproved(approved);
+        cacheSet(BASELINE_APPROVED_KEY, approved, 300_000);
+      })
+      .catch(() => {});
+  }, [router]);
+
+  if (!mounted) {
+    return (
+      <ShellFrame
+        title={title}
+        subtitle={subtitle}
+        actions={actions}
+        baselineApproved={false}
+        theme="light"
+        setTheme={() => {}}
+      >
+        {children}
+      </ShellFrame>
+    );
+  }
+
+  if (!authed) return null;
+
+  return (
+    <ShellFrame
+      title={title}
+      subtitle={subtitle}
+      actions={actions}
+      baselineApproved={baselineApproved}
+      theme={theme}
+      setTheme={setTheme}
+    >
+      {children}
+    </ShellFrame>
   );
 }

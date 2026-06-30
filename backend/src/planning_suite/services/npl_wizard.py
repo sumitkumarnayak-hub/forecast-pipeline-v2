@@ -1,0 +1,302 @@
+"""Headless New Product Launch wizard — Streamlit page_type1/2/3 parity."""
+from __future__ import annotations
+
+import io
+import os
+from datetime import date, datetime
+from typing import Any
+
+import pandas as pd
+
+from planning_suite.core.dataframe import df_to_records, sanitize_for_json
+from planning_suite.features.new_product_launch import (
+    WEEKDAYS,
+    _submit_hub_df,
+    build_city_template,
+    build_hub_template,
+    check_duplicates_city,
+    check_duplicates_hub,
+    get_categories,
+    get_cities_from_salience,
+    get_earliest_monday,
+    get_hubs_for_city,
+    get_product_id,
+    get_product_info,
+    get_products_by_category,
+    load_hub_salience,
+    load_log,
+    load_product_master,
+    parse_city_upload,
+    parse_hub_upload,
+    split_city_to_hubs,
+    update_submission_status,
+)
+
+
+def list_categories() -> list[str]:
+    return get_categories(load_product_master())
+
+
+def list_cities() -> list[str]:
+    sal = load_hub_salience()
+    return get_cities_from_salience(sal)
+
+
+def list_hubs_for_city(city: str, category: str | None = None) -> list[str]:
+    sal = load_hub_salience()
+    return get_hubs_for_city(sal, city, category)
+
+
+def city_template_bytes(
+    cities: list[str],
+    category: str,
+    *,
+    product_id: str = "",
+    product_name: str = "",
+) -> bytes:
+    return build_city_template(cities, category, product_id, product_name)
+
+
+def hub_template_bytes(
+    cities_hubs: dict[str, list[str]],
+    category: str,
+    *,
+    product_id: str = "",
+    product_name: str = "",
+) -> bytes:
+    return build_hub_template(cities_hubs, category, product_id, product_name)
+
+
+def parse_city_file(content: bytes) -> dict[str, Any]:
+    df, errors = parse_city_upload(io.BytesIO(content))
+    if errors:
+        return {"ok": False, "errors": errors}
+    return {"ok": True, "rows": df_to_records(df), "columns": df.columns.tolist(), "row_count": len(df)}
+
+
+def parse_hub_file(content: bytes) -> dict[str, Any]:
+    df, errors = parse_hub_upload(io.BytesIO(content))
+    if errors:
+        return {"ok": False, "errors": errors}
+    return {"ok": True, "rows": df_to_records(df), "columns": df.columns.tolist(), "row_count": len(df)}
+
+
+def split_city_rows(
+    city_rows: list[dict],
+    *,
+    forced_hubs: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    sal = load_hub_salience()
+    city_df = pd.DataFrame(city_rows)
+    hub_df, zero_sal = split_city_to_hubs(city_df, sal, forced_hubs=forced_hubs)
+    return sanitize_for_json(
+        {
+            "hub_rows": df_to_records(hub_df),
+            "columns": hub_df.columns.tolist(),
+            "zero_salience": zero_sal,
+            "row_count": len(hub_df),
+        }
+    )
+
+
+def check_duplicates(
+    hub_rows: list[dict],
+    *,
+    sub_type: str,
+    plan_level: str = "hub",
+) -> dict[str, Any]:
+    log_df = load_log()
+    hub_df = pd.DataFrame(hub_rows)
+    if plan_level == "city":
+        cities = hub_df["city_name"].astype(str).unique().tolist() if "city_name" in hub_df.columns else []
+        pid = str(hub_df["product_id"].iloc[0]) if "product_id" in hub_df.columns and len(hub_df) else ""
+        dupes = check_duplicates_city(log_df, sub_type, pid, cities)
+    else:
+        dupes = check_duplicates_hub(log_df, sub_type, hub_df)
+    if dupes is None or dupes.empty:
+        return {"has_duplicates": False}
+    return {"has_duplicates": True, "existing_rows": df_to_records(dupes)}
+
+
+def apply_launch_dates(hub_rows: list[dict], launch_date: str | None = None) -> list[dict]:
+    """Attach Launch Date column — single date or per-row 'launch_date' key."""
+    min_date = get_earliest_monday()
+    out = []
+    for row in hub_rows:
+        r = dict(row)
+        ld = r.pop("launch_date", None) or launch_date or str(min_date)
+        r["Launch Date"] = ld
+        out.append(r)
+    return out
+
+
+def _product_name_from_hub_df(hub_df: pd.DataFrame) -> str:
+    for col in ("product_name", "Product Name", "Anchor Name"):
+        if col in hub_df.columns and len(hub_df):
+            val = hub_df[col].iloc[0]
+            if pd.notna(val) and str(val).strip():
+                return str(val).strip()
+    return "Product"
+
+
+def submit_hub_rows(
+    hub_rows: list[dict],
+    *,
+    sub_type: str,
+    username: str,
+    user_id: int | None = None,
+    send_email: bool = True,
+) -> dict[str, Any]:
+    hub_df = pd.DataFrame(hub_rows)
+    if "Launch Date" not in hub_df.columns:
+        hub_df = pd.DataFrame(apply_launch_dates(hub_rows))
+    prev_user = os.environ.get("user")
+    os.environ["user"] = {"username": username, "id": user_id}
+    try:
+        sub_id = _submit_hub_df(hub_df, sub_type)
+    finally:
+        if prev_user is None:
+            os.environ.pop("user", None)
+        else:
+            os.environ["user"] = prev_user
+
+    payload: dict[str, Any] = {
+        "submission_id": sub_id,
+        "rows": len(hub_df),
+        "product_name": _product_name_from_hub_df(hub_df),
+    }
+    if send_email:
+        dates: list[str] = []
+        if "Launch Date" in hub_df.columns:
+            dates = sorted(hub_df["Launch Date"].dropna().astype(str).unique().tolist())
+        from planning_suite.services.workflow_notifications import notify_launch_submission
+
+        payload["email"] = notify_launch_submission(
+            sub_id=sub_id,
+            sub_type=sub_type,
+            product_name=payload["product_name"],
+            launch_dates=dates,
+            user_id=user_id,
+        )
+    return payload
+
+
+def list_all_product_ids() -> list[dict[str, str]]:
+    """All P Master rows for Expansion product picker."""
+    master = load_product_master()
+    pid_col = next((c for c in ["Product id", "Product ID", "product_id"] if c in master.columns), None)
+    name_col = next(
+        (c for c in ["Product Name", "product_name", "Anchor Name"] if c in master.columns),
+        None,
+    )
+    cat_col = next((c for c in ["Sub-category", "Sub category", "category"] if c in master.columns), None)
+    if not pid_col:
+        return []
+    out: list[dict[str, str]] = []
+    for _, row in master.iterrows():
+        pid = str(row.get(pid_col, "")).strip()
+        if not pid:
+            continue
+        out.append(
+            {
+                "product_id": pid,
+                "product_name": str(row.get(name_col, "")).strip() if name_col else "",
+                "category": str(row.get(cat_col, "")).strip() if cat_col else "",
+            }
+        )
+    return sorted(out, key=lambda r: r["product_id"])
+
+
+def get_submission_log(
+    *,
+    types: list[str] | None = None,
+    statuses: list[str] | None = None,
+    product_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    df = load_log()
+    if df.empty:
+        return {"rows": [], "columns": [], "filters": {}}
+
+    work = df.copy()
+    if types and "Submission_Type" in work.columns:
+        work = work[work["Submission_Type"].isin(types)]
+    if statuses and "Status" in work.columns:
+        work = work[work["Status"].isin(statuses)]
+    if product_ids and "Product ID" in work.columns:
+        work = work[work["Product ID"].isin(product_ids)]
+
+    # SLA flags (Streamlit parity)
+    now = datetime.now()
+    if "Timestamp" in work.columns and "Start Date" in work.columns:
+        work["SLA"] = ""
+        for idx, row in work[work.get("Status", pd.Series(dtype=str)) == "Pending"].iterrows():
+            try:
+                ts = pd.to_datetime(row["Timestamp"])
+                launch = pd.to_datetime(row["Start Date"]).date()
+                if launch < now.date():
+                    work.at[idx, "Status"] = "Expired"
+                    work.at[idx, "SLA"] = "EXPIRED"
+                elif (now - ts).total_seconds() / 3600 > 48:
+                    work.at[idx, "SLA"] = "OVERDUE"
+            except Exception:
+                pass
+
+    disp_cols = [
+        c
+        for c in [
+            "Submission_ID",
+            "Submission_Type",
+            "Product ID",
+            "Product Name",
+            "City",
+            "Hub",
+            "Start Date",
+            "Status",
+            "SLA",
+            "Rejection_Reason",
+            "Submitted_By",
+            "Timestamp",
+        ]
+        if c in work.columns
+    ]
+    filters = {
+        "types": sorted(df["Submission_Type"].dropna().unique().tolist()) if "Submission_Type" in df.columns else [],
+        "statuses": sorted(df["Status"].dropna().unique().tolist()) if "Status" in df.columns else [],
+        "product_ids": sorted(df["Product ID"].dropna().unique().tolist()) if "Product ID" in df.columns else [],
+    }
+    return sanitize_for_json(
+        {
+            "rows": df_to_records(work[disp_cols] if disp_cols else work),
+            "columns": disp_cols or work.columns.tolist(),
+            "filters": filters,
+            "row_count": len(work),
+        }
+    )
+
+
+def set_submission_status(submission_id: str, status: str, reason: str = "") -> None:
+    update_submission_status(submission_id, status, reason)
+
+
+def expansion_context(category: str, product_id: str) -> dict[str, Any]:
+    master = load_product_master()
+    info = get_product_info(master, product_id)
+    return sanitize_for_json(
+        {
+            "product_id": product_id,
+            "category": category,
+            "product_info": info,
+            "cities": list_cities(),
+        }
+    )
+
+
+def replacement_context(old_product_id: str, new_product_id: str) -> dict[str, Any]:
+    master = load_product_master()
+    return sanitize_for_json(
+        {
+            "old": get_product_info(master, old_product_id),
+            "new": get_product_info(master, new_product_id),
+            "cities": list_cities(),
+        }
+    )

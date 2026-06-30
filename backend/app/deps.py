@@ -11,9 +11,12 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from planning_suite.db.engine import Database
+from planning_suite.db.engine import Database, get_shared_database
 
 _bearer = HTTPBearer(auto_error=False)
+
+def get_db() -> Database:
+    return get_shared_database()
 
 SECRET = os.getenv("AUTH_SECRET_KEY", "dev-insecure-auth-key-change-before-production")
 ALGORITHM = "HS256"

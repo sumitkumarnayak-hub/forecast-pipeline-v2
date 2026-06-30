@@ -22,7 +22,7 @@ from planning_suite.config import FF_MASTERS_XLSX, PROJECT_ROOT
 from planning_suite.core.dataframe import clean_sheet_df
 from planning_suite.core.validations.master_rules import VALIDATION_VERSION
 from planning_suite.core.validations.runner import run_master_data_validations
-from planning_suite.db.engine import Database
+from planning_suite.db.engine import Database, get_shared_database
 
 ProgressCallback = Callable[[str, float], None]
 
@@ -119,22 +119,10 @@ class MasterSyncResult:
         return 0 if self.success else 1
 
 
-def _get_gspread_client():
-    from planning_suite.ui.pages.master_data import _get_gspread_client as _client
-
-    return _client()
-
-
-def _ws_to_df(ws, range_notation: str = ""):
-    from planning_suite.ui.pages.master_data import _ws_to_df as _convert
-
-    return _convert(ws, range_notation)
-
-
 def _excel_writer_engine() -> str:
-    from planning_suite.ui.pages.master_data import _get_excel_writer_engine
+    from planning_suite.services.master_data_excel import get_excel_writer_engine
 
-    return _get_excel_writer_engine()
+    return get_excel_writer_engine()
 
 
 def read_demand_planning_masters_from_sheets(
@@ -199,7 +187,7 @@ def run_master_data_excel_sync(
     _ensure_project_cwd()
     excel_path = str(excel_path or FF_MASTERS_XLSX)
     user_id = user_id if user_id is not None else int(os.getenv("AUTOPILOT_USER_ID", "1"))
-    db = db or Database()
+    db = db or get_shared_database()
     result = MasterSyncResult(success=False, excel_path=excel_path)
     sync_run_id: str | None = None
     versioning = None
@@ -338,7 +326,41 @@ def run_master_data_excel_sync(
         hub_df=hub_df,
     )
     result.success = True
+    try:
+        from planning_suite.services.api_cache import CacheNS, cache_invalidate
+
+        cache_invalidate(CacheNS.MASTER_SHEET)
+    except Exception:
+        pass
     return result
+
+
+def run_master_data_sync(
+    *,
+    db: Database | None = None,
+    user_id: int | None = None,
+    excel_path: str | Path | None = None,
+    validate_only: bool = False,
+) -> dict:
+    """API-friendly wrapper around ``run_master_data_excel_sync``."""
+    result = run_master_data_excel_sync(
+        excel_path=excel_path,
+        user_id=user_id,
+        db=db,
+        validate_only=validate_only,
+    )
+    return {
+        "success": result.success,
+        "excel_path": result.excel_path,
+        "p_rows": result.p_rows,
+        "ph_rows": result.ph_rows,
+        "htt_rows": result.htt_rows,
+        "hub_rows": result.hub_rows,
+        "blank_rows_removed": result.blank_rows_removed,
+        "file_size_kb": result.file_size_kb,
+        "error": result.error,
+        "validation_errors": result.validation_errors,
+    }
 
 
 def _ensure_project_cwd() -> None:

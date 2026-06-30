@@ -1,8 +1,7 @@
 """Master Data router — sync, history, hub changes, and sheets operations."""
 from __future__ import annotations
 
-import traceback
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 import pandas as pd
@@ -10,48 +9,74 @@ import pandas as pd
 from app.deps import get_current_user, require_write, get_db
 from planning_suite.db.engine import Database
 from planning_suite.services.sheets_session import get_sheets_manager
-from planning_suite.core.dataframe import clean_sheet_df
+from planning_suite.core.dataframe import clean_sheet_df, df_to_records
+from planning_suite.services.api_cache import CacheNS, cached, cache_invalidate
 
 router = APIRouter()
 
+_SHEET_TTL = 60.0
+
+
+def _read_master_worksheet(
+    worksheet_key: str,
+    range_notation: str,
+    *,
+    cache_key: str,
+    refresh: bool = False,
+) -> dict:
+    def factory() -> dict:
+        gsm = get_sheets_manager()
+        df = gsm.read_worksheet_to_df("demand_planning_masters", worksheet_key, range_notation)
+        if df is None or df.empty:
+            return {"rows": [], "columns": []}
+        df = clean_sheet_df(df)
+        return {"rows": df_to_records(df), "columns": list(df.columns)}
+
+    return cached(
+        CacheNS.MASTER_SHEET,
+        cache_key,
+        factory,
+        ttl=_SHEET_TTL,
+        skip_cache=refresh,
+    )
 
 # ── Sheets Reading ─────────────────────────────────────────────────────────────
 
 @router.get("/p-master")
-def get_p_master(current_user: dict = Depends(get_current_user)):
+def get_p_master(
+    current_user: dict = Depends(get_current_user),
+    refresh: bool = Query(False),
+):
     try:
-        gsm = get_sheets_manager()
-        df = gsm.read_worksheet_to_df("demand_planning_masters", "product_master", "A:K")
-        if df is None or df.empty:
-            return {"rows": [], "columns": []}
-        df = clean_sheet_df(df)
-        return {"rows": df.to_dict(orient="records"), "columns": list(df.columns)}
+        return _read_master_worksheet(
+            "product_master", "A:K", cache_key="p-master", refresh=refresh
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/ph-master")
-def get_ph_master(current_user: dict = Depends(get_current_user)):
+def get_ph_master(
+    current_user: dict = Depends(get_current_user),
+    refresh: bool = Query(False),
+):
     try:
-        gsm = get_sheets_manager()
-        df = gsm.read_worksheet_to_df("demand_planning_masters", "product_hub_master", "A:AX")
-        if df is None or df.empty:
-            return {"rows": [], "columns": []}
-        df = clean_sheet_df(df)
-        return {"rows": df.to_dict(orient="records"), "columns": list(df.columns)}
+        return _read_master_worksheet(
+            "product_hub_master", "A:AX", cache_key="ph-master", refresh=refresh
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/hub-master")
-def get_hub_master(current_user: dict = Depends(get_current_user)):
+def get_hub_master(
+    current_user: dict = Depends(get_current_user),
+    refresh: bool = Query(False),
+):
     try:
-        gsm = get_sheets_manager()
-        df = gsm.read_worksheet_to_df("demand_planning_masters", "hub_mapping", "A:F")
-        if df is None or df.empty:
-            return {"rows": [], "columns": []}
-        df = clean_sheet_df(df)
-        return {"rows": df.to_dict(orient="records"), "columns": list(df.columns)}
+        return _read_master_worksheet(
+            "hub_mapping", "A:F", cache_key="hub-master", refresh=refresh
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -72,7 +97,7 @@ def get_inventory_buffer(current_user: dict = Depends(get_current_user)):
             if data and len(data) > 0:
                 df = pd.DataFrame(data[1:], columns=data[0])
                 df = clean_sheet_df(df)
-                result[ws.title] = df.to_dict(orient="records")
+                result[ws.title] = df_to_records(df)
             else:
                 result[ws.title] = []
         return {"tabs": result, "order": order}
@@ -118,6 +143,7 @@ def sync_inventory_excel(
             "status": "success",
             "error_message": f"{len(written)} files → {out_dir}",
         })
+        cache_invalidate(CacheNS.MASTER_SHEET)
         return {"detail": f"Synced {len(written)} worksheets to Excel", "files": written}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -196,6 +222,7 @@ def confirm_ph_sync(
                 f"Rows added: {len(payload.rows_to_add)}"
             ),
         })
+        cache_invalidate(CacheNS.MASTER_SHEET)
         return {"detail": f"Successfully added {len(payload.rows_to_add)} rows"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -297,6 +324,11 @@ def trigger_master_sync(
         from planning_suite.automation.master_data_sync import run_master_data_sync
         user_id = int(current_user["sub"])
         result = run_master_data_sync(db=db, user_id=user_id)
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error") or "Master sync failed",
+            )
         return {"detail": "Master sync complete", "result": result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -312,7 +344,7 @@ def get_hub_changes(current_user: dict = Depends(get_current_user)):
         df = load_hub_changes_for_baseline(gsm)
         if df is None or df.empty:
             return {"rows": [], "columns": []}
-        return {"rows": df.to_dict(orient="records"), "columns": list(df.columns)}
+        return {"rows": df_to_records(df), "columns": list(df.columns)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -334,6 +366,82 @@ def save_hub_changes(
         return {"detail": "Hub changes saved"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/new-hub-sync/preview")
+def preview_new_hub_sync(current_user: dict = Depends(get_current_user)):
+    """Dry-run P-H Master clone for New Hub rows in Hub_Changes tab."""
+    try:
+        from planning_suite.core.dataframe import sanitize_for_json
+        from planning_suite.services.hub_launch_sync import (
+            clone_ph_master_from_hub_mappings,
+            extract_hub_launch_mappings,
+            normalize_hub_changes_df,
+        )
+        from planning_suite.services.sheets_session import get_sheets_manager
+
+        gsm = get_sheets_manager()
+        gsm.ensure_pipeline_params_hub_changes_tab()
+        hub_df = normalize_hub_changes_df(gsm.read_hub_changes_table())
+        mappings = extract_hub_launch_mappings(hub_df)
+        if not mappings:
+            return {
+                "ok": True,
+                "mappings_found": 0,
+                "message": "No New Hub rows in Hub Changes — nothing to sync.",
+                "rows_to_insert": 0,
+                "duplicates_skipped": 0,
+                "validation_errors": [],
+                "mapping_report": [],
+                "mappings": [],
+            }
+
+        clone = clone_ph_master_from_hub_mappings(gsm, mappings, dry_run=True)
+        return sanitize_for_json(
+            {
+                "ok": clone.success,
+                "mappings_found": len(mappings),
+                "mappings": [
+                    {"new_hub": m.new_hub, "source_hub": m.source_hub} for m in mappings
+                ],
+                "rows_to_insert": clone.rows_inserted,
+                "duplicates_skipped": clone.duplicates_skipped,
+                "validation_errors": clone.validation_errors,
+                "mapping_report": clone.mapping_report,
+            }
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/new-hub-sync/confirm")
+def confirm_new_hub_sync(
+    current_user: dict = Depends(require_write),
+    db: Database = Depends(get_db),
+):
+    """Apply new hub P-H Master clone + optional Excel re-sync."""
+    try:
+        from planning_suite.automation.new_hub_launch_sync import run_new_hub_launch_sync
+
+        user_id = int(current_user["sub"])
+        result = run_new_hub_launch_sync(user_id=user_id, db=db, dry_run=False)
+        if not result.success:
+            raise HTTPException(status_code=400, detail=result.error or "New hub sync failed")
+        return {
+            "detail": (
+                f"New hub sync complete — {result.rows_inserted} row(s) inserted, "
+                f"{result.duplicates_skipped} duplicate(s) skipped"
+            ),
+            "mappings_found": result.mappings_found,
+            "rows_inserted": result.rows_inserted,
+            "duplicates_skipped": result.duplicates_skipped,
+            "masters_re_synced": result.masters_re_synced,
+            "mapping_report": result.mapping_report,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ── Users (admin only) ────────────────────────────────────────────────────────

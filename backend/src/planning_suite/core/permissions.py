@@ -1,7 +1,6 @@
 """Role-based page access and action permissions."""
 from __future__ import annotations
 
-
 from planning_suite.config import USER_ROLES
 
 VIEWER_PAGES: frozenset[str] = frozenset({
@@ -11,9 +10,25 @@ VIEWER_PAGES: frozenset[str] = frozenset({
     "Settings",
 })
 
+PAGE_AUTO_PILOT = "Auto-Pilot"
+PAGE_LOAD_RAW_DATA = "1. Load Raw Data"
+PAGE_CONFIGURE_PARAMS = "2. Configure Parameters"
+PAGE_GENERATE_BASELINE = "3. Generate Baseline"
+PAGE_REVIEW_BASELINE = "4. Review & Validate"
+PAGE_APPROVE_BASELINE = "5. Approve Baseline"
+
+MANUAL_BASELINE_PAGES: list[str] = [
+    PAGE_LOAD_RAW_DATA,
+    PAGE_CONFIGURE_PARAMS,
+    PAGE_GENERATE_BASELINE,
+    PAGE_REVIEW_BASELINE,
+    PAGE_APPROVE_BASELINE,
+]
+
 PAGE_ORDER: list[str] = [
     "Dashboard",
-    "Baseline",
+    PAGE_AUTO_PILOT,
+    *MANUAL_BASELINE_PAGES,
     "Master Data",
     "Product Launch",
     "Final Plan",
@@ -33,9 +48,6 @@ DEFAULT_PREFERENCES: dict = {
 
 def get_preview_rows(user_id: int | None = None) -> int:
     """Return the user's preferred dataframe preview row count."""
-    prefs = st.session_state.get("user_preferences")
-    if isinstance(prefs, dict) and prefs.get("preview_rows") is not None:
-        return max(10, min(1000, int(prefs["preview_rows"])))
     if user_id is not None:
         try:
             from planning_suite.db.engine import Database
@@ -83,29 +95,38 @@ def can_access_page(role: str, page: str) -> bool:
 
 
 def require_page_access(user: dict, page: str) -> None:
-    """Stop rendering if the user's role cannot open this page."""
+    """Streamlit UI guard — no-op outside Streamlit."""
     role = user.get("role", "")
     if can_access_page(role, page):
         return
-    st.error(
-        f"Your role (**{role.title()}**) does not have access to **{page}**. "
-        "Contact an administrator if you need elevated access."
-    )
-    if st.button("Go to Master Data", type="primary", key=f"perm_redirect_{page}"):
-        st.session_state["main_nav"] = "Master Data"
-        st.rerun()
-    st.stop()
+    try:
+        import streamlit as st
+        st.error(
+            f"Your role (**{role.title()}**) does not have access to **{page}**. "
+            "Contact an administrator if you need elevated access."
+        )
+        st.stop()
+    except Exception:
+        raise PermissionError(f"Access denied to {page} for role {role}")
 
 
 def require_write(user: dict, action: str = "perform this action") -> None:
     if can_write(user.get("role", "")):
         return
-    st.error(f"You don't have permission to {action}. Viewers have read-only access.")
-    st.stop()
+    try:
+        import streamlit as st
+        st.error(f"You don't have permission to {action}. Viewers have read-only access.")
+        st.stop()
+    except Exception:
+        raise PermissionError(action)
 
 
 def require_approve(user: dict) -> None:
     if can_approve(user.get("role", "")):
         return
-    st.error("Only administrators can approve baselines.")
-    st.stop()
+    try:
+        import streamlit as st
+        st.error("Only administrators can approve baselines.")
+        st.stop()
+    except Exception:
+        raise PermissionError("approve")

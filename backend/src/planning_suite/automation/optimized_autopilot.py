@@ -149,7 +149,7 @@ class OptimizedAutopilotRunner:
 
         return OptimizedBaselineGenerator()
 
-    def _save_state(self, result: AutopilotRunResult) -> None:
+    def _save_state(self, result: AutopilotRunResult, *, source: str = "cli") -> None:
         save_autopilot_state(
             run_id=result.run_id,
             run_name=result.run_name,
@@ -159,7 +159,7 @@ class OptimizedAutopilotRunner:
             failed_step=result.failed_step,
             error=result.error,
             logs=result.logs,
-            source="cli",
+            source=source,
         )
 
     def run(
@@ -171,6 +171,7 @@ class OptimizedAutopilotRunner:
         run_name: str | None = None,
         notify_on_success: bool = True,
         notify_on_failure: bool = True,
+        source: str = "cli",
     ) -> AutopilotRunResult:
         _ensure_project_cwd()
 
@@ -182,6 +183,8 @@ class OptimizedAutopilotRunner:
 
         run_id = run_id or generate_run_id("AUTOPILOT")
         run_name = run_name or f"Auto-Pilot CLI {datetime.now():%Y-%m-%d %H:%M}"
+
+        self._run_source = source
 
         global _ACTIVE_RUN_ID
         _ACTIVE_RUN_ID = run_id
@@ -195,8 +198,8 @@ class OptimizedAutopilotRunner:
         generator = self._generator()
         sheets = begin_pipeline_sheets_session()
 
-        self.db.ensure_autopilot_run(run_id, self.user_id, run_name=run_name, source="cli")
-        self._save_state(result)
+        self.db.ensure_autopilot_run(run_id, self.user_id, run_name=run_name, source=source)
+        self._save_state(result, source=source)
 
         steps_in_run = to_step - from_step + 1
         self.logger.info("Starting Optimized Baseline Auto-Pilot")
@@ -308,7 +311,7 @@ class OptimizedAutopilotRunner:
                     _progress_print("=" * 60)
                     _progress_print(f"AUTO-PILOT — FAILED at {progress}")
                     _progress_print("=" * 60)
-                    self._save_state(result)
+                    self._save_state(result, source=self._run_source)
                     return result
 
             result.success = True
@@ -318,7 +321,7 @@ class OptimizedAutopilotRunner:
             _progress_print(f"[PROGRESS] {final_progress} — ALL STEPS COMPLETED")
             _progress_print("AUTO-PILOT — SUCCESS")
             _progress_print("=" * 60)
-            self._save_state(result)
+            self._save_state(result, source=self._run_source)
             return result
         finally:
             end_pipeline_sheets_session()
@@ -335,6 +338,7 @@ def run_optimized_autopilot(
     notify_on_failure: bool = True,
     run_id: str | None = None,
     run_name: str | None = None,
+    source: str = "cli",
 ) -> AutopilotRunResult:
     runner = OptimizedAutopilotRunner(user_id=user_id)
     result = runner.run(
@@ -344,6 +348,7 @@ def run_optimized_autopilot(
         run_name=run_name,
         notify_on_success=not skip_notify,
         notify_on_failure=notify_on_failure,
+        source=source,
     )
     if log_file and result.run_id:
         path = Path(log_file)
