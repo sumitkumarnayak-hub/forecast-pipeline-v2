@@ -46,7 +46,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.middleware import RequestContextMiddleware
+from app.middleware import request_context_middleware
 from app.routers import auth, dashboard, master_data, baseline, autopilot
 from app.routers import final_plan, new_product_launch, insights, settings, validation, demo_filter
 
@@ -78,7 +78,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -87,6 +86,11 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _request_context(request: Request, call_next):
+    return await request_context_middleware(request, call_next)
 
 
 @app.exception_handler(Exception)

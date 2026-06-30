@@ -918,11 +918,11 @@ function MasterDataPageInner() {
             <button className="btn btn-secondary text-sm" onClick={handleNewHubPreview} disabled={newHubBusy}>
               {newHubBusy ? "Working…" : "Preview New Hub Sync"}
             </button>
-            {newHubPreview?.ok && Number(newHubPreview.mappings_found) > 0 && (
+            {Boolean(newHubPreview?.ok) && Number(newHubPreview?.mappings_found) > 0 ? (
               <button className="btn btn-primary text-sm" onClick={handleNewHubConfirm} disabled={newHubBusy}>
                 Confirm &amp; Clone to P-H Master
               </button>
-            )}
+            ) : null}
             {newHubPreview && (
               <button className="btn btn-secondary text-sm" onClick={() => setNewHubPreview(null)}>Reset</button>
             )}

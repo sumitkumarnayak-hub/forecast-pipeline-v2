@@ -86,7 +86,7 @@ export default function ReportsPanel() {
 
       {loading && <span className="spinner mb-3" />}
 
-      {report === "baseline-summary" && reportData?.available && (
+      {report === "baseline-summary" && reportData?.available ? (
         <div className="card">
           <p className="text-sm mb-2">
             <strong>{String(reportData.file)}</strong> — {Number(reportData.rows).toLocaleString()} rows
@@ -120,7 +120,7 @@ export default function ReportsPanel() {
             </table>
           </div>
         </div>
-      )}
+      ) : null}
 
       {report === "plan-comparison" && reportData && (
         <div className="card text-sm">

@@ -33,7 +33,7 @@ export function DualLineChart({
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis dataKey={xKey} tick={{ fontSize: 10 }} />
         <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `₹${Number(v).toLocaleString("en-IN", { notation: "compact" })}`} />
-        <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} />
+        <Tooltip formatter={(v) => `₹${Number(v ?? 0).toLocaleString("en-IN")}`} />
         <Legend />
         {lines.map(l => (
           <Line
@@ -66,7 +66,7 @@ export function StackedLossChart({
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis dataKey="label" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
         <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `₹${Number(v).toLocaleString("en-IN", { notation: "compact" })}`} />
-        <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} />
+        <Tooltip formatter={(v) => `₹${Number(v ?? 0).toLocaleString("en-IN")}`} />
         <Legend />
         <Bar dataKey="demand" name="Demand-led" stackId="a" fill="#EF4444" />
         <Bar dataKey="supply" name="Supply-led" stackId="a" fill="#F59E0B" />

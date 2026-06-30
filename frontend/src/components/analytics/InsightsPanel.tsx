@@ -479,9 +479,9 @@ export default function InsightsPanel() {
       )}
 
       {viewLoading && <span className="spinner mb-3" />}
-      {payload?.empty && !viewLoading && (
+      {payload?.empty ? (
         <div className="alert alert-warning text-sm">{String(payload.message || "No data.")}</div>
-      )}
+      ) : null}
 
       {!viewLoading && executiveContent}
       {!viewLoading && lossContent}

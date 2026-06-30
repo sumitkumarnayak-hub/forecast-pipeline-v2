@@ -293,7 +293,9 @@ export default function SettingsPage() {
       {[
         { key: "email_notifications", label: "Email Notifications", desc: "Receive automated alerts on pipeline checks" },
         { key: "auto_sync_masters", label: "Auto-Sync Masters", desc: "Load Google Sheets data on login" },
-      ].map(opt => (
+      ].map(opt => {
+        const key = opt.key as "email_notifications" | "auto_sync_masters";
+        return (
         <div
           key={opt.key}
           style={{
@@ -308,14 +310,14 @@ export default function SettingsPage() {
           <label style={{ position: "relative", display: "inline-flex", cursor: "pointer" }}>
             <input
               type="checkbox"
-              checked={(prefs as Record<string, boolean>)[opt.key]}
-              onChange={e => setPrefs(p => ({ ...p, [opt.key]: e.target.checked }))}
+              checked={prefs[key]}
+              onChange={e => setPrefs(p => ({ ...p, [key]: e.target.checked }))}
               style={{ display: "none" }}
             />
             <div
               style={{
                 width: 36, height: 20, borderRadius: 10, transition: "0.2s",
-                background: (prefs as Record<string, boolean>)[opt.key] ? "var(--blue)" : "var(--bg-hover)",
+                background: prefs[key] ? "var(--blue)" : "var(--bg-hover)",
                 border: "1px solid var(--border)", position: "relative",
               }}
             >
@@ -323,14 +325,15 @@ export default function SettingsPage() {
                 style={{
                   width: 14, height: 14, borderRadius: "50%", background: "#fff",
                   position: "absolute", top: 2,
-                  left: (prefs as Record<string, boolean>)[opt.key] ? 18 : 2,
+                  left: prefs[key] ? 18 : 2,
                   transition: "left 0.2s",
                 }}
               />
             </div>
           </label>
         </div>
-      ))}
+        );
+      })}
       <div style={{ padding: "1rem 0 0.5rem" }}>
         <label className="form-label" style={{ fontWeight: 600 }}>Default Data Preview Rows</label>
         <input
@@ -569,8 +572,8 @@ export default function SettingsPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", fontSize: "0.84rem" }}>
         <div><span className="text-muted">Application:</span> {boot?.about?.app_name || "Planning Suite"}</div>
         <div><span className="text-muted">API version:</span> {boot?.about?.api_version || "2.0.0"}</div>
-        <div><span className="text-muted">Environment:</span> {boot?.about?.environment || env?.app_env || "—"}</div>
-        <div><span className="text-muted">Database:</span> {boot?.about?.database_backend || env?.database_backend || "—"}</div>
+        <div><span className="text-muted">Environment:</span> {String(boot?.about?.environment ?? env?.app_env ?? "—")}</div>
+        <div><span className="text-muted">Database:</span> {String(boot?.about?.database_backend ?? env?.database_backend ?? "—")}</div>
       </div>
       {env && (
         <div style={{ marginTop: "1.5rem" }}>

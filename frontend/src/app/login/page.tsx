@@ -18,10 +18,22 @@ export default function LoginPage() {
     setLoading(true); setError("");
     try {
       const { data } = await api.post("/api/auth/login", { username: username.trim(), password, remember_me: rememberMe });
+      if (!data?.user) {
+        setError("Login succeeded but no user profile was returned. Check backend logs.");
+        return;
+      }
       saveUser(data.user);
       router.replace("/dashboard");
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || "Invalid username or password.");
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string }; status?: number }; message?: string };
+      const detail = ax?.response?.data?.detail;
+      if (detail) {
+        setError(typeof detail === "string" ? detail : JSON.stringify(detail));
+      } else if (!ax?.response) {
+        setError("Cannot reach the API server. Make sure the backend is running on port 8000.");
+      } else {
+        setError("Invalid username or password.");
+      }
     } finally { setLoading(false); }
   };
 

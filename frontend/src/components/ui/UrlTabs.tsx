@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, useCallback, useTransition } from "react";
+import { type ReactNode, Suspense, useCallback, useTransition } from "react";
 
 export interface UrlTab {
   id: string;
@@ -19,7 +19,7 @@ interface UrlTabsProps {
   keepMounted?: boolean;
 }
 
-export function UrlTabs({
+function UrlTabsInner({
   tabs,
   param = "tab",
   defaultTab,
@@ -102,5 +102,13 @@ export function UrlTabs({
         <div>{tabs.find(t => t.id === active)?.content}</div>
       )}
     </div>
+  );
+}
+
+export function UrlTabs(props: UrlTabsProps) {
+  return (
+    <Suspense fallback={<div className="text-xs text-muted py-2">Loading…</div>}>
+      <UrlTabsInner {...props} />
+    </Suspense>
   );
 }
