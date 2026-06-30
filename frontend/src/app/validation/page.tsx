@@ -7,8 +7,8 @@ import { ValidationResult, fmtFileTime } from "@/components/validation/Validatio
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { Upload, Play, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-
-import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
+import { useInstantBootstrap } from "@/hooks/useInstantBootstrap";
+import TableSkeleton from "@/components/ui/TableSkeleton";
 
 const BOOTSTRAP_KEY = "validation:bootstrap";
 
@@ -29,8 +29,10 @@ type Bootstrap = {
 
 function ValidationContent() {
   const { canWrite } = useAuth();
-  const [boot, setBoot] = useState<Bootstrap | null>(() => readSessionBootstrap(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS));
-  const [loading, setLoading] = useState(() => !readSessionBootstrap(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS));
+  const { data: boot, loading, reload } = useInstantBootstrap<Bootstrap>(
+    BOOTSTRAP_KEY,
+    "/api/validation/bootstrap",
+  );
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
 
@@ -43,31 +45,6 @@ function ValidationContent() {
   const [outputResult, setOutputResult] = useState<Record<string, unknown> | null>(null);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
 
-  const loadBootstrap = useCallback(async (force?: boolean) => {
-    const cached = !force ? readSessionBootstrap<Bootstrap>(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS) : null;
-    if (cached && !force) {
-      setBoot(cached);
-      setLoading(false);
-      try {
-        const { data } = await api.get<Bootstrap>("/api/validation/bootstrap");
-        setBoot(data);
-        writeSessionBootstrap(BOOTSTRAP_KEY, data);
-      } catch {
-        /* keep cache */
-      }
-      return;
-    }
-    if (!cached) setLoading(true);
-    try {
-      const { data } = await api.get<Bootstrap>("/api/validation/bootstrap");
-      setBoot(data);
-      writeSessionBootstrap(BOOTSTRAP_KEY, data);
-    } catch {
-      if (!cached) setMsg({ text: "Failed to load validation metadata", type: "danger" });
-    }
-    setLoading(false);
-  }, []);
-
   const loadHistory = useCallback(async () => {
     try {
       const { data } = await api.get<{ rows: Record<string, unknown>[] }>("/api/validation/history");
@@ -78,19 +55,13 @@ function ValidationContent() {
   }, []);
 
   useEffect(() => {
-    loadBootstrap();
     loadHistory();
-  }, [loadBootstrap, loadHistory]);
+  }, [loadHistory]);
 
   const afterRun = async (text: string, type: string) => {
     setMsg({ text, type });
     await loadHistory();
-    try {
-      sessionStorage.removeItem(BOOTSTRAP_KEY);
-    } catch {
-      /* ignore */
-    }
-    await loadBootstrap(true);
+    await reload(true);
   };
 
   const runInputValidation = async (file: File) => {
@@ -176,7 +147,7 @@ function ValidationContent() {
       await api.delete("/api/validation/history");
       setHistory([]);
       setMsg({ text: "History cleared", type: "success" });
-      await loadBootstrap(true);
+      await reload(true);
     } catch {
       setMsg({ text: "Could not clear history", type: "danger" });
     }
@@ -410,17 +381,18 @@ function ValidationContent() {
       title="Validation"
       subtitle="Input, master, and output data quality checks"
       actions={
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadBootstrap(true)} disabled={loading}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => reload(true)} disabled={loading}>
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
         </button>
       }
     >
       {msg.text && <div className={`alert alert-${msg.type} mb-4`}>{msg.text}</div>}
       {loading && !boot ? (
-        <span className="spinner" />
+        <TableSkeleton rows={5} cols={4} />
       ) : (
         <UrlTabs
           defaultTab="input"
+          keepMounted={false}
           tabs={[
             { id: "input", label: "Input Validation", content: inputTab },
             { id: "master", label: "Master Validation", content: masterTab },

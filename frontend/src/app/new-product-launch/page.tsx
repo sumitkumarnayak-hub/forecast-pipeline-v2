@@ -14,6 +14,7 @@ function NewProductLaunchContent() {
     <AppShell title="Product Launch" subtitle="Launch planning, P-H sync, and automated new-product integration">
       <UrlTabs
         defaultTab="launch"
+        keepMounted={false}
         tabs={[
           {
             id: "launch",

@@ -9,7 +9,7 @@ import { SIDEBAR_NAV, type NavLink } from "@/lib/navigation";
 
 const inflight = new Map<string, Promise<void>>();
 let activePrefetches = 0;
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 3;
 
 const KEYS = {
   dashboard: "dashboard:bootstrap",
@@ -19,6 +19,7 @@ const KEYS = {
   insights: "insights:bootstrap",
   finalPlan: "final-plan:bootstrap",
   nplContext: "npl:wizard-context",
+  nplLogSummary: "npl:submission-log:summary:|",
 } as const;
 
 const PRIORITY_HREFS = ["/dashboard", "/autopilot", "/settings"];
@@ -88,6 +89,16 @@ async function prefetchNpl(): Promise<void> {
   await withConcurrencyLimit(() => prefetchNplBootstrap());
 }
 
+async function prefetchSubmissionLogSummary(): Promise<void> {
+  if (cacheGet(KEYS.nplLogSummary)) return;
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/new-product-launch/submissions/log", {
+      params: { view: "summary" },
+    });
+    cacheSet(KEYS.nplLogSummary, data, 300_000);
+  });
+}
+
 async function prefetchMasterDataLight(): Promise<void> {
   const jobs: Promise<void>[] = [];
   if (!cacheGet("master:sync-history")) {
@@ -118,7 +129,12 @@ function matchPrefetch(href: string): (() => Promise<void>) | null {
   if (href.startsWith("/validation")) return prefetchValidation;
   if (href.startsWith("/analytics")) return prefetchInsights;
   if (href.startsWith("/final-plan")) return prefetchFinalPlan;
-  if (href.startsWith("/new-product-launch")) return prefetchNpl;
+  if (href.startsWith("/new-product-launch")) {
+    return async () => {
+      await prefetchNpl();
+      await prefetchSubmissionLogSummary();
+    };
+  }
   if (href.startsWith("/master-data")) return prefetchMasterDataLight;
   return null;
 }
@@ -146,20 +162,29 @@ function collectNavLinks(role: string): NavLink[] {
   return links;
 }
 
-/** Warm priority routes after login (dashboard, autopilot, settings). */
+/** Warm all role-visible routes after login (priority first, then secondary). */
 export function prefetchAllRoutes(role: string): void {
-  const links = collectNavLinks(role).filter(l =>
+  const links = collectNavLinks(role);
+  const priority = links.filter(l =>
     PRIORITY_HREFS.some(p => l.href === p || l.href.startsWith(`${p}/`)),
   );
-  const run = () => {
-    links.forEach((link, i) => {
-      window.setTimeout(() => prefetchRoute(link.href), 600 + i * 800);
+  const secondary = links.filter(l => !priority.includes(l));
+
+  const schedule = (items: NavLink[], startMs: number) => {
+    items.forEach((link, i) => {
+      window.setTimeout(() => prefetchRoute(link.href), startMs + i * 700);
     });
   };
+
+  const run = () => {
+    schedule(priority, 500);
+    schedule(secondary, 2800);
+  };
+
   if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(() => run(), { timeout: 5000 });
+    window.requestIdleCallback(() => run(), { timeout: 6000 });
   } else {
-    window.setTimeout(run, 1500);
+    window.setTimeout(run, 1200);
   }
 }
 

@@ -572,6 +572,7 @@ export default function FinalPlanPage() {
       {msg.text && <div className={`alert alert-${msg.type} mb-4`}>{msg.text}</div>}
       <UrlTabs
         defaultTab="inputs"
+        keepMounted={false}
         tabs={[
           { id: "inputs", label: "Inputs", content: inputsTab },
           { id: "run", label: "Run", content: runTab },

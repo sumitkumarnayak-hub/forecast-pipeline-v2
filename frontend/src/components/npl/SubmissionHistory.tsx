@@ -13,10 +13,21 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+import { useStaleFetch } from "@/hooks/useStaleFetch";
 import FilterChipSelect from "@/components/ui/FilterChipSelect";
+import TableSkeleton from "@/components/ui/TableSkeleton";
+import StatGridSkeleton from "@/components/ui/StatGridSkeleton";
+import { cacheInvalidate } from "@/lib/queryCache";
 
 const DEFAULT_TYPES = ["New Launch", "Expansion", "Replacement"];
 const DEFAULT_STATUSES = ["Pending", "Approved", "Rejected", "Withdrawn", "Voided", "Expired"];
+
+type LogPayload = {
+  rows: Record<string, unknown>[];
+  columns: string[];
+  filters: { types: string[]; statuses: string[]; product_ids: string[] };
+  view?: string;
+};
 
 const COL_LABELS: Record<string, string> = {
   Submission_ID: "Submission ID",
@@ -25,6 +36,9 @@ const COL_LABELS: Record<string, string> = {
   "Product Name": "Product",
   City: "City",
   Hub: "Hub",
+  Hub_Count: "Hubs",
+  City_Count: "Cities",
+  Cities: "City list",
   "Start Date": "Launch Date",
   Status: "Status",
   SLA: "SLA",
@@ -32,18 +46,6 @@ const COL_LABELS: Record<string, string> = {
   Submitted_By: "Submitted By",
   Timestamp: "Submitted At",
 };
-
-const VISIBLE_COLUMNS = [
-  "Submission_ID",
-  "Submission_Type",
-  "Product Name",
-  "City",
-  "Start Date",
-  "Status",
-  "SLA",
-  "Submitted_By",
-  "Timestamp",
-];
 
 function fmtDate(value: unknown): string {
   if (!value) return "—";
@@ -106,6 +108,13 @@ function renderCell(col: string, value: unknown) {
   if (col === "Product Name") {
     return <span className="npl-history-product">{text}</span>;
   }
+  if (col === "Cities") {
+    return (
+      <span className="npl-history-cities" title={text}>
+        {text}
+      </span>
+    );
+  }
   if (col === "Rejection_Reason" && text !== "—") {
     return (
       <span className="npl-history-reason" title={text}>
@@ -118,22 +127,74 @@ function renderCell(col: string, value: unknown) {
 
 export default function SubmissionHistory() {
   const { readOnly, canApprove, hydrated } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [columns, setColumns] = useState<string[]>([]);
-  const [filters, setFilters] = useState<{ types: string[]; statuses: string[]; product_ids: string[] }>({
-    types: [],
-    statuses: [],
-    product_ids: [],
-  });
   const [selTypes, setSelTypes] = useState<string[]>([]);
   const [selStatuses, setSelStatuses] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [msg, setMsg] = useState("");
-  const [error, setError] = useState("");
+  const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
+  const [hubLoading, setHubLoading] = useState(false);
+
+  const logCacheKey = useMemo(
+    () => `npl:submission-log:summary:${selTypes.join(",")}|${selStatuses.join(",")}`,
+    [selTypes, selStatuses],
+  );
+
+  const fetchLog = useCallback(async (): Promise<LogPayload> => {
+    const params: Record<string, string> = { view: "summary" };
+    if (selTypes.length) params.types = selTypes.join(",");
+    if (selStatuses.length) params.statuses = selStatuses.join(",");
+    const { data } = await api.get<LogPayload>("/api/new-product-launch/submissions/log", { params });
+    return data;
+  }, [selTypes, selStatuses]);
+
+  const { data, loading, refreshing, error, reload } = useStaleFetch<LogPayload>({
+    cacheKey: logCacheKey,
+    fetcher: fetchLog,
+    deps: [logCacheKey],
+  });
+
+  const rows = data?.rows ?? [];
+  const columns = data?.columns ?? [];
+  const filters = data?.filters ?? { types: [], statuses: [], product_ids: [] };
+
+  useEffect(() => {
+    if (!rows.length) {
+      setSelectedId("");
+      return;
+    }
+    setSelectedId(prev =>
+      prev && rows.some(r => String(r["Submission_ID"]) === prev)
+        ? prev
+        : String(rows[0]["Submission_ID"] ?? ""),
+    );
+  }, [rows]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setHubRows([]);
+      return;
+    }
+    let cancelled = false;
+    setHubLoading(true);
+    api
+      .get<LogPayload>("/api/new-product-launch/submissions/log", {
+        params: { view: "detail", submission_id: selectedId },
+      })
+      .then(({ data: detail }) => {
+        if (!cancelled) setHubRows(detail.rows || []);
+      })
+      .catch(() => {
+        if (!cancelled) setHubRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setHubLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   const typeOptions = useMemo(
     () => (filters.types.length ? filters.types : DEFAULT_TYPES),
@@ -144,54 +205,19 @@ export default function SubmissionHistory() {
     [filters.statuses],
   );
 
-  const load = useCallback(async (silent = false) => {
-    if (silent) setRefreshing(true);
-    else setLoading(true);
-    setError("");
-    try {
-      const params: Record<string, string> = {};
-      if (selTypes.length) params.types = selTypes.join(",");
-      if (selStatuses.length) params.statuses = selStatuses.join(",");
-      const { data } = await api.get("/api/new-product-launch/submissions/log", { params });
-      setRows(data.rows || []);
-      setColumns(data.columns || []);
-      setFilters(data.filters || { types: [], statuses: [], product_ids: [] });
-      setSelectedId(prev => {
-        if (prev && (data.rows || []).some((r: Record<string, unknown>) => String(r["Submission_ID"]) === prev)) {
-          return prev;
-        }
-        const first = data.rows?.[0]?.["Submission_ID"];
-        return first ? String(first) : "";
-      });
-    } catch {
-      setRows([]);
-      setError("Could not load submission history.");
-    }
-    setLoading(false);
-    setRefreshing(false);
-  }, [selTypes, selStatuses]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
   const patchStatus = async (status: string, reason = "") => {
     if (!selectedId) return;
     try {
       await api.patch(`/api/new-product-launch/submissions/${selectedId}/status`, { status, reason });
       setMsg(`Submission ${selectedId} updated to ${status}.`);
       setRejectReason("");
-      load(true);
+      cacheInvalidate(logCacheKey);
+      await reload(true);
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } } };
       setMsg(err?.response?.data?.detail || "Action failed");
     }
   };
-
-  const displayColumns = useMemo(() => {
-    const preferred = VISIBLE_COLUMNS.filter(c => columns.includes(c));
-    return preferred.length ? preferred : columns;
-  }, [columns]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -224,6 +250,8 @@ export default function SubmissionHistory() {
     setSearch("");
   };
 
+  const showInitialSkeleton = loading && !data;
+
   return (
     <div className="npl-history">
       <div className="npl-history-header">
@@ -243,7 +271,7 @@ export default function SubmissionHistory() {
         <button
           type="button"
           className="btn btn-secondary btn-sm npl-history-refresh"
-          onClick={() => load(true)}
+          onClick={() => reload(true)}
           disabled={loading || refreshing}
         >
           <RefreshCw size={14} className={refreshing ? "npl-history-spin" : ""} />
@@ -264,28 +292,32 @@ export default function SubmissionHistory() {
         </div>
       )}
 
-      <div className="stat-grid npl-history-stats">
-        <div className="stat-card npl-history-stat">
-          <div className="stat-label">Showing</div>
-          <div className="stat-value">{stats.total.toLocaleString()}</div>
-          <div className="npl-history-stat-hint">submissions</div>
+      {showInitialSkeleton ? (
+        <StatGridSkeleton />
+      ) : (
+        <div className="stat-grid npl-history-stats">
+          <div className="stat-card npl-history-stat">
+            <div className="stat-label">Showing</div>
+            <div className="stat-value">{stats.total.toLocaleString()}</div>
+            <div className="npl-history-stat-hint">submissions</div>
+          </div>
+          <div className="stat-card npl-history-stat npl-history-stat-pending">
+            <div className="stat-label">Pending</div>
+            <div className="stat-value">{stats.pending.toLocaleString()}</div>
+            <div className="npl-history-stat-hint">awaiting review</div>
+          </div>
+          <div className="stat-card npl-history-stat npl-history-stat-approved">
+            <div className="stat-label">Approved</div>
+            <div className="stat-value">{stats.approved.toLocaleString()}</div>
+            <div className="npl-history-stat-hint">in current view</div>
+          </div>
+          <div className="stat-card npl-history-stat npl-history-stat-sla">
+            <div className="stat-label">SLA alerts</div>
+            <div className="stat-value">{stats.slaAlerts.toLocaleString()}</div>
+            <div className="npl-history-stat-hint">overdue / expired</div>
+          </div>
         </div>
-        <div className="stat-card npl-history-stat npl-history-stat-pending">
-          <div className="stat-label">Pending</div>
-          <div className="stat-value">{stats.pending.toLocaleString()}</div>
-          <div className="npl-history-stat-hint">awaiting review</div>
-        </div>
-        <div className="stat-card npl-history-stat npl-history-stat-approved">
-          <div className="stat-label">Approved</div>
-          <div className="stat-value">{stats.approved.toLocaleString()}</div>
-          <div className="npl-history-stat-hint">in current view</div>
-        </div>
-        <div className="stat-card npl-history-stat npl-history-stat-sla">
-          <div className="stat-label">SLA alerts</div>
-          <div className="stat-value">{stats.slaAlerts.toLocaleString()}</div>
-          <div className="npl-history-stat-hint">overdue / expired</div>
-        </div>
-      </div>
+      )}
 
       <div className="npl-history-toolbar card">
         <div className="npl-history-filters">
@@ -333,7 +365,9 @@ export default function SubmissionHistory() {
           <div className="npl-history-table-title">
             <FileText size={16} />
             <span>
-              {loading ? "Loading submissions…" : `${filteredRows.length.toLocaleString()} result${filteredRows.length === 1 ? "" : "s"}`}
+              {showInitialSkeleton
+                ? "Loading submissions…"
+                : `${filteredRows.length.toLocaleString()} submission${filteredRows.length === 1 ? "" : "s"}`}
             </span>
           </div>
           {search.trim() && filteredRows.length !== rows.length && (
@@ -343,11 +377,8 @@ export default function SubmissionHistory() {
           )}
         </div>
 
-        {loading ? (
-          <div className="npl-history-loading">
-            <span className="spinner" />
-            <p className="text-sm text-muted">Loading submission log…</p>
-          </div>
+        {showInitialSkeleton ? (
+          <TableSkeleton rows={8} cols={6} />
         ) : filteredRows.length === 0 ? (
           <div className="npl-history-empty">
             <History size={32} strokeWidth={1.25} />
@@ -368,21 +399,18 @@ export default function SubmissionHistory() {
             <table className="npl-history-table">
               <thead>
                 <tr>
-                  {displayColumns.map(c => (
+                  {columns.map(c => (
                     <th key={c}>{COL_LABELS[c] ?? c}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row, i) => {
+                {filteredRows.map(row => {
                   const id = String(row["Submission_ID"] ?? "");
-                  const rowKey = id
-                    ? `${id}-${String(row["Hub"] ?? "")}-${String(row["City"] ?? "")}-${i}`
-                    : `row-${i}`;
                   const isSelected = Boolean(id) && selectedId === id;
                   return (
                     <tr
-                      key={rowKey}
+                      key={id}
                       className={isSelected ? "npl-history-row-selected" : ""}
                       onClick={() => setSelectedId(id)}
                       tabIndex={0}
@@ -393,7 +421,7 @@ export default function SubmissionHistory() {
                         }
                       }}
                     >
-                      {displayColumns.map(c => (
+                      {columns.map(c => (
                         <td key={c}>{renderCell(c, row[c])}</td>
                       ))}
                     </tr>
@@ -434,8 +462,12 @@ export default function SubmissionHistory() {
               <span>{String(selectedRow["Product Name"] ?? "—")}</span>
             </div>
             <div>
-              <span className="npl-history-detail-label">City</span>
-              <span>{String(selectedRow["City"] ?? "—")}</span>
+              <span className="npl-history-detail-label">Cities</span>
+              <span>{String(selectedRow["Cities"] ?? "—")}</span>
+            </div>
+            <div>
+              <span className="npl-history-detail-label">Hub rows</span>
+              <span>{String(selectedRow["Hub_Count"] ?? hubRows.length)}</span>
             </div>
             <div>
               <span className="npl-history-detail-label">Launch date</span>
@@ -446,6 +478,36 @@ export default function SubmissionHistory() {
               <span>{String(selectedRow["Submitted_By"] ?? "—")}</span>
             </div>
           </div>
+
+          {(hubLoading || hubRows.length > 0) && (
+            <div className="npl-history-hub-detail mb-3">
+              <p className="text-xs font-semibold mb-2">Hub breakdown</p>
+              {hubLoading ? (
+                <TableSkeleton rows={3} cols={4} />
+              ) : (
+                <div className="table-wrap" style={{ maxHeight: 200 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>City</th>
+                        <th>Hub</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hubRows.map((hr, i) => (
+                        <tr key={`${hr["City"]}-${hr["Hub"]}-${i}`}>
+                          <td>{String(hr["City"] ?? "—")}</td>
+                          <td>{String(hr["Hub"] ?? "—")}</td>
+                          <td>{String(hr["Status"] ?? "—")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="npl-history-actions-buttons">
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => patchStatus("Withdrawn")}>

@@ -11,6 +11,7 @@ function AnalyticsContent() {
     <AppShell title="Analytics" subtitle="Insights and reports">
       <UrlTabs
         defaultTab="insights"
+        keepMounted={false}
         tabs={[
           { id: "insights", label: "Insights", content: <InsightsPanel /> },
           { id: "reports", label: "Reports", content: <ReportsPanel /> },

@@ -1137,7 +1137,7 @@ function MasterDataPageInner() {
     { id: "hub-master", label: "Hub Master", content: hubMasterTab },
   ];
 
-  const demandTabPanel = <UrlTabs param="sub" defaultTab="p-master" tabs={demandTabs} />;
+  const demandTabPanel = <UrlTabs param="sub" defaultTab="p-master" keepMounted={false} tabs={demandTabs} />;
 
   const mainTabs = [
     { id: "demand", label: "Demand Planning Masters", content: demandTabPanel },
@@ -1159,7 +1159,7 @@ function MasterDataPageInner() {
         <div className={`alert alert-${msg.type}`} style={{ marginBottom: "1.25rem" }}>{msg.text}</div>
       )}
 
-      <UrlTabs tabs={mainTabs} defaultTab="demand" />
+      <UrlTabs tabs={mainTabs} defaultTab="demand" keepMounted={false} />
     </AppShell>
   );
 }

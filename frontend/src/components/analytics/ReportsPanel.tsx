@@ -230,6 +230,7 @@ export default function ReportsPanel() {
         <UrlTabs
           param="runhist"
           defaultTab="baseline"
+          keepMounted={false}
           tabs={[
             {
               id: "baseline",

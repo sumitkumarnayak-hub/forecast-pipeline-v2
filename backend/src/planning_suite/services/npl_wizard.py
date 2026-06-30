@@ -225,10 +225,12 @@ def get_submission_log(
     types: list[str] | None = None,
     statuses: list[str] | None = None,
     product_ids: list[str] | None = None,
+    submission_id: str | None = None,
+    view: str = "summary",
 ) -> dict[str, Any]:
     df = load_log()
     if df.empty:
-        return {"rows": [], "columns": [], "filters": {}}
+        return {"rows": [], "columns": [], "filters": {}, "view": view, "row_count": 0}
 
     work = df.copy()
     if types and "Submission_Type" in work.columns:
@@ -237,6 +239,8 @@ def get_submission_log(
         work = work[work["Status"].isin(statuses)]
     if product_ids and "Product ID" in work.columns:
         work = work[work["Product ID"].isin(product_ids)]
+    if submission_id and "Submission_ID" in work.columns:
+        work = work[work["Submission_ID"].astype(str) == str(submission_id)]
 
     # SLA flags (Streamlit parity)
     now = datetime.now()
@@ -253,6 +257,65 @@ def get_submission_log(
                     work.at[idx, "SLA"] = "OVERDUE"
             except Exception:
                 pass
+
+    def _uniq_nonempty(col: str) -> list[str]:
+        if col not in df.columns:
+            return []
+        return sorted({str(v).strip() for v in df[col].dropna().tolist() if str(v).strip()})
+
+    filters = {
+        "types": _uniq_nonempty("Submission_Type"),
+        "statuses": _uniq_nonempty("Status"),
+        "product_ids": _uniq_nonempty("Product ID"),
+    }
+
+    if view == "summary" and not submission_id and "Submission_ID" in work.columns:
+        summary_cols = [
+            "Submission_ID",
+            "Submission_Type",
+            "Product Name",
+            "Start Date",
+            "Status",
+            "SLA",
+            "Hub_Count",
+            "City_Count",
+            "Cities",
+            "Submitted_By",
+            "Timestamp",
+        ]
+        rows: list[dict[str, Any]] = []
+        for sid, grp in work.groupby("Submission_ID", sort=False):
+            first = grp.iloc[0]
+            sla_vals = [str(v) for v in grp["SLA"].tolist()] if "SLA" in grp.columns else []
+            sla = "EXPIRED" if "EXPIRED" in sla_vals else ("OVERDUE" if "OVERDUE" in sla_vals else "")
+            cities = sorted({str(c).strip() for c in grp["City"].dropna() if str(c).strip()}) if "City" in grp.columns else []
+            city_label = ", ".join(cities[:6])
+            if len(cities) > 6:
+                city_label = f"{city_label}, …"
+            rows.append(
+                {
+                    "Submission_ID": sid,
+                    "Submission_Type": first.get("Submission_Type", ""),
+                    "Product Name": first.get("Product Name", ""),
+                    "Start Date": first.get("Start Date", ""),
+                    "Status": first.get("Status", ""),
+                    "SLA": sla,
+                    "Hub_Count": len(grp),
+                    "City_Count": len(cities),
+                    "Cities": city_label,
+                    "Submitted_By": first.get("Submitted_By", ""),
+                    "Timestamp": first.get("Timestamp", ""),
+                }
+            )
+        return sanitize_for_json(
+            {
+                "rows": rows,
+                "columns": summary_cols,
+                "filters": filters,
+                "view": "summary",
+                "row_count": len(rows),
+            }
+        )
 
     disp_cols = [
         c
@@ -272,21 +335,12 @@ def get_submission_log(
         ]
         if c in work.columns
     ]
-    def _uniq_nonempty(col: str) -> list[str]:
-        if col not in df.columns:
-            return []
-        return sorted({str(v).strip() for v in df[col].dropna().tolist() if str(v).strip()})
-
-    filters = {
-        "types": _uniq_nonempty("Submission_Type"),
-        "statuses": _uniq_nonempty("Status"),
-        "product_ids": _uniq_nonempty("Product ID"),
-    }
     return sanitize_for_json(
         {
             "rows": df_to_records(work[disp_cols] if disp_cols else work),
             "columns": disp_cols or work.columns.tolist(),
             "filters": filters,
+            "view": "detail",
             "row_count": len(work),
         }
     )

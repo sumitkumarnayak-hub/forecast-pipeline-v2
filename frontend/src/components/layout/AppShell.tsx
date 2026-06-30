@@ -2,17 +2,13 @@
 import { useEffect, useState, ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "./Sidebar";
-import api from "@/lib/api";
-import { cacheGet, cacheSet } from "@/lib/queryCache";
+import { prefetchAllRoutes } from "@/lib/pagePrefetch";
+import { fetchBaselineStatus, BASELINE_APPROVED_KEY } from "@/lib/baselineStatus";
+import { cacheGet } from "@/lib/queryCache";
 import { rolesForPath } from "@/lib/navigation";
 import { useAuth } from "@/hooks/useAuth";
-import { prefetchAllRoutes } from "@/lib/pagePrefetch";
-
 import { useTheme } from "@/lib/theme";
 import { Menu, Moon, Sun, X } from "lucide-react";
-
-const BASELINE_APPROVED_KEY = "shell:baseline-approved";
-const BASELINE_STATUS_TTL = 600_000;
 
 interface Props {
   children: ReactNode;
@@ -110,16 +106,12 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
     const cached = cacheGet<boolean>(BASELINE_APPROVED_KEY);
     if (cached !== null) {
       setBaselineApproved(cached);
+      void fetchBaselineStatus().then(setBaselineApproved).catch(() => {});
       return;
     }
 
-    api
-      .get("/api/baseline/status")
-      .then(r => {
-        const approved = Boolean(r.data.approved);
-        setBaselineApproved(approved);
-        cacheSet(BASELINE_APPROVED_KEY, approved, BASELINE_STATUS_TTL);
-      })
+    void fetchBaselineStatus()
+      .then(setBaselineApproved)
       .catch(() => {});
   }, [hydrated, user, router]);
 

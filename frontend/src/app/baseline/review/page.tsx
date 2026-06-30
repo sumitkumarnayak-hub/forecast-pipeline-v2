@@ -461,7 +461,7 @@ function ReviewContent() {
       </SectionCard>
 
       <SectionCard title="Multi-level Comparison">
-        <UrlTabs param="view" defaultTab="city-day" tabs={comparisonTabs} />
+        <UrlTabs param="view" defaultTab="city-day" keepMounted={false} tabs={comparisonTabs} />
         <p className="text-xs text-muted mt-2">Active view: {activeView}</p>
       </SectionCard>
     </BaselineStepShell>

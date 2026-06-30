@@ -394,19 +394,26 @@ def submissions_log(
     types: str | None = None,
     statuses: str | None = None,
     product_ids: str | None = None,
+    submission_id: str | None = None,
+    view: str = Query("summary", pattern="^(summary|detail)$"),
     current_user: dict = Depends(get_current_user),
 ):
     from planning_suite.services import npl_wizard as wiz
-
-    from planning_suite.services.api_cache import CacheNS, cached
+    from planning_suite.services.api_cache import CacheNS, cache_invalidate, cached
 
     t = [x.strip() for x in types.split(",") if x.strip()] if types else None
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
-    cache_key = f"log:{types or ''}:{statuses or ''}:{product_ids or ''}"
+    cache_key = f"log:{view}:{submission_id or ''}:{types or ''}:{statuses or ''}:{product_ids or ''}"
 
     def _log():
-        return wiz.get_submission_log(types=t, statuses=s, product_ids=p)
+        return wiz.get_submission_log(
+            types=t,
+            statuses=s,
+            product_ids=p,
+            submission_id=submission_id,
+            view=view,
+        )
 
     return cached(CacheNS.NPL_WIZARD, cache_key, _log, ttl=_NPL_LOG_CACHE_TTL)
 
@@ -425,6 +432,9 @@ def patch_submission_status(
         raise HTTPException(status_code=403, detail="Admin approval required")
     try:
         wiz.set_submission_status(submission_id, body.status, body.reason)
+        from planning_suite.services.api_cache import CacheNS, cache_invalidate
+
+        cache_invalidate(CacheNS.NPL_WIZARD)
         return {"detail": f"Submission {submission_id} → {body.status}"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
