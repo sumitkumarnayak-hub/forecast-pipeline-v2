@@ -31,52 +31,70 @@ def dashboard_bootstrap(
     Single round-trip for the dashboard — pipeline card, weeks, week analytics, and trends.
     Heavy 6w aggregates are cached in-process (shared across users, TTL from DASHBOARD_CACHE_TTL).
     """
-    try:
-        weeks_meta = list_available_weeks()
-        week_label = week or weeks_meta.get("default_week")
-        city_list = [c.strip() for c in cities.split(",") if c.strip()] if cities else None
-        cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
-        day_list = [d.strip() for d in days.split(",") if d.strip()] if days else None
+    from planning_suite.services.api_cache import CacheNS, cached
 
-        state = load_autopilot_state()
-        if not state:
-            pipeline_card = {"has_run": False, "run_name": None, "status": None}
-        else:
-            if state.get("success"):
-                status = "Success"
-            elif state.get("failed_step") is not None:
-                status = "Failed"
+    is_default = (
+        not week
+        and not cities
+        and not categories
+        and not days
+        and dod_view == "City"
+        and wow_view == "City"
+    )
+
+    def _build():
+        try:
+            weeks_meta = list_available_weeks()
+            week_label = week or weeks_meta.get("default_week")
+            city_list = [c.strip() for c in cities.split(",") if c.strip()] if cities else None
+            cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
+            day_list = [d.strip() for d in days.split(",") if d.strip()] if days else None
+
+            state = load_autopilot_state()
+            if not state:
+                pipeline_card = {"has_run": False, "run_name": None, "status": None}
             else:
-                status = "In progress"
-            pipeline_card = {
-                "has_run": True,
-                "run_name": (state.get("run_name") or "—")[:28],
-                "status": status,
+                if state.get("success"):
+                    status = "Success"
+                elif state.get("failed_step") is not None:
+                    status = "Failed"
+                else:
+                    status = "In progress"
+                pipeline_card = {
+                    "has_run": True,
+                    "run_name": (state.get("run_name") or "—")[:28],
+                    "status": status,
+                }
+
+            analytics = (
+                build_week_analytics(week_label)
+                if week_label
+                else {"empty": True, "message": "No data found in the 6-week rolling file."}
+            )
+            revenue_trends = build_revenue_trends(
+                cities=city_list,
+                categories=cat_list,
+                days=day_list,
+                dod_view=dod_view,
+                wow_view=wow_view,
+            )
+
+            return {
+                "pipeline_card": pipeline_card,
+                "weeks": weeks_meta,
+                "analytics": analytics,
+                "revenue_trends": revenue_trends,
             }
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
-        analytics = (
-            build_week_analytics(week_label)
-            if week_label
-            else {"empty": True, "message": "No data found in the 6-week rolling file."}
-        )
-        revenue_trends = build_revenue_trends(
-            cities=city_list,
-            categories=cat_list,
-            days=day_list,
-            dod_view=dod_view,
-            wow_view=wow_view,
-        )
-
-        return {
-            "pipeline_card": pipeline_card,
-            "weeks": weeks_meta,
-            "analytics": analytics,
-            "revenue_trends": revenue_trends,
-        }
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    if is_default:
+        return cached(CacheNS.DASHBOARD, "bootstrap_default", _build, ttl=120.0)
+    return _build()
 
 
 @router.get("/pipeline-card")

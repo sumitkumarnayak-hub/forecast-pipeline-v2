@@ -1,29 +1,48 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 import api from "@/lib/api";
-import { saveUser } from "@/lib/auth";
+import { useAuth } from "@/hooks/useAuth";
+import { prefetchRoute } from "@/lib/pagePrefetch";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { establishSession, user, hydrated } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (hydrated && user) {
+      router.replace("/dashboard");
+    }
+  }, [hydrated, user, router]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password) { setError("Please enter both username and password."); return; }
-    setLoading(true); setError("");
+    if (!username.trim() || !password) {
+      setError("Please enter both username and password.");
+      return;
+    }
+    setLoading(true);
+    setError("");
     try {
-      const { data } = await api.post("/api/auth/login", { username: username.trim(), password, remember_me: rememberMe });
+      const { data } = await api.post("/api/auth/login", {
+        username: username.trim(),
+        password,
+        remember_me: rememberMe,
+      });
       if (!data?.user) {
         setError("Login succeeded but no user profile was returned. Check backend logs.");
         return;
       }
-      saveUser(data.user);
+      establishSession(data.user);
       router.replace("/dashboard");
+      prefetchRoute("/dashboard");
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string }; status?: number }; message?: string };
       const detail = ax?.response?.data?.detail;
@@ -34,7 +53,9 @@ export default function LoginPage() {
       } else {
         setError("Invalid username or password.");
       }
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -51,15 +72,45 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label">Username</label>
-            <input className="form-input" type="text" placeholder="Enter your username" value={username} onChange={e => setUsername(e.target.value)} autoFocus autoComplete="username" />
+            <label className="form-label" htmlFor="username">Username</label>
+            <input
+              id="username"
+              className="form-input"
+              type="text"
+              placeholder="Enter your username"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              autoFocus
+              autoComplete="username"
+              disabled={loading}
+            />
           </div>
           <div className="form-group">
-            <label className="form-label">Password</label>
-            <input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" />
+            <label className="form-label" htmlFor="password">Password</label>
+            <div className="password-input-wrap">
+              <input
+                id="password"
+                className="form-input password-input"
+                type={showPassword ? "text" : "password"}
+                placeholder="Enter your password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                autoComplete="current-password"
+                disabled={loading}
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword(v => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2" style={{ marginBottom: "1.25rem" }}>
-            <input type="checkbox" id="rem" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ accentColor: "var(--blue)", width: 14, height: 14, cursor: "pointer" }} />
+            <input type="checkbox" id="rem" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} disabled={loading} style={{ accentColor: "var(--blue)", width: 14, height: 14, cursor: "pointer" }} />
             <label htmlFor="rem" style={{ fontSize: "0.8rem", color: "var(--text-secondary)", cursor: "pointer" }}>Keep me signed in</label>
           </div>
           <button type="submit" className="btn btn-primary w-full btn-lg" disabled={loading}>

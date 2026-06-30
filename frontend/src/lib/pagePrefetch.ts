@@ -1,18 +1,19 @@
 /**
  * Prefetch page bootstrap data on hover / idle so navigation feels instant.
- * Uses the same cache keys as each page's stale-while-revalidate loader.
  */
 import api from "@/lib/api";
 import { cacheGet, cacheSet } from "@/lib/queryCache";
 import { writeSessionBootstrap, readSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
+import { prefetchNplBootstrap } from "@/lib/nplBootstrap";
 import { SIDEBAR_NAV, type NavLink } from "@/lib/navigation";
 
 const inflight = new Map<string, Promise<void>>();
+let activePrefetches = 0;
+const MAX_CONCURRENT = 2;
 
 const KEYS = {
   dashboard: "dashboard:bootstrap",
   autopilotShell: "autopilot:bootstrap-shell",
-  autopilotState: "autopilot:run-state",
   settings: "settings:bootstrap",
   validation: "validation:bootstrap",
   insights: "insights:bootstrap",
@@ -20,82 +21,91 @@ const KEYS = {
   nplContext: "npl:wizard-context",
 } as const;
 
+const PRIORITY_HREFS = ["/dashboard", "/autopilot", "/settings"];
+
+async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+  while (activePrefetches >= MAX_CONCURRENT) {
+    await new Promise(r => setTimeout(r, 120));
+  }
+  activePrefetches += 1;
+  try {
+    return await fn();
+  } finally {
+    activePrefetches -= 1;
+  }
+}
+
 async function prefetchDashboard(): Promise<void> {
   if (cacheGet(KEYS.dashboard)) return;
-  const { data } = await api.get("/api/dashboard/bootstrap");
-  cacheSet(KEYS.dashboard, data, 180_000);
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/dashboard/bootstrap");
+    cacheSet(KEYS.dashboard, data, 300_000);
+  });
 }
 
 async function prefetchAutopilot(): Promise<void> {
-  if (!cacheGet(KEYS.autopilotShell)) {
+  if (cacheGet(KEYS.autopilotShell)) return;
+  await withConcurrencyLimit(async () => {
     const { data } = await api.get("/api/autopilot/bootstrap");
-    cacheSet(KEYS.autopilotShell, data, 120_000);
-  }
-  if (!cacheGet(KEYS.autopilotState)) {
-    try {
-      const { data } = await api.get("/api/autopilot/state");
-      cacheSet(KEYS.autopilotState, data, 15_000);
-    } catch {
-      /* state may timeout — shell still helps */
-    }
-  }
+    cacheSet(KEYS.autopilotShell, data, 300_000);
+  });
 }
 
 async function prefetchSettings(): Promise<void> {
   if (readSessionBootstrap(KEYS.settings, BOOTSTRAP_TTL_MS)) return;
-  const { data } = await api.get("/api/settings/bootstrap");
-  writeSessionBootstrap(KEYS.settings, data);
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/settings/bootstrap");
+    writeSessionBootstrap(KEYS.settings, data);
+  });
 }
 
 async function prefetchValidation(): Promise<void> {
   if (readSessionBootstrap(KEYS.validation, BOOTSTRAP_TTL_MS)) return;
-  const { data } = await api.get("/api/validation/bootstrap");
-  writeSessionBootstrap(KEYS.validation, data);
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/validation/bootstrap");
+    writeSessionBootstrap(KEYS.validation, data);
+  });
 }
 
 async function prefetchInsights(): Promise<void> {
   if (readSessionBootstrap(KEYS.insights, BOOTSTRAP_TTL_MS)) return;
-  const { data } = await api.get("/api/insights/bootstrap");
-  writeSessionBootstrap(KEYS.insights, data);
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/insights/bootstrap");
+    writeSessionBootstrap(KEYS.insights, data);
+  });
 }
 
 async function prefetchFinalPlan(): Promise<void> {
   if (readSessionBootstrap(KEYS.finalPlan, BOOTSTRAP_TTL_MS)) return;
-  const { data } = await api.get("/api/final-plan/bootstrap");
-  writeSessionBootstrap(KEYS.finalPlan, data);
+  await withConcurrencyLimit(async () => {
+    const { data } = await api.get("/api/final-plan/bootstrap");
+    writeSessionBootstrap(KEYS.finalPlan, data);
+  });
 }
 
 async function prefetchNpl(): Promise<void> {
   if (readSessionBootstrap(KEYS.nplContext, BOOTSTRAP_TTL_MS)) return;
-  try {
-    const { data } = await api.get("/api/new-product-launch/wizard/context");
-    writeSessionBootstrap(KEYS.nplContext, data);
-  } catch {
-    /* optional */
-  }
+  await withConcurrencyLimit(() => prefetchNplBootstrap());
 }
 
 async function prefetchMasterDataLight(): Promise<void> {
   const jobs: Promise<void>[] = [];
   if (!cacheGet("master:sync-history")) {
     jobs.push(
-      api.get("/api/master-data/sync-history").then(({ data }) => {
-        cacheSet("master:sync-history", data, 120_000);
-      }),
+      withConcurrencyLimit(() =>
+        api.get("/api/master-data/sync-history").then(({ data }) => {
+          cacheSet("master:sync-history", data, 300_000);
+        }),
+      ),
     );
   }
   if (!cacheGet("master:snapshot-runs")) {
     jobs.push(
-      api.get("/api/master-data/snapshot-runs").then(({ data }) => {
-        cacheSet("master:snapshot-runs", data || [], 120_000);
-      }),
-    );
-  }
-  if (!cacheGet("master:legacy-sync-types")) {
-    jobs.push(
-      api.get("/api/master-data/legacy-sync-types").then(({ data }) => {
-        cacheSet("master:legacy-sync-types", data || [], 120_000);
-      }),
+      withConcurrencyLimit(() =>
+        api.get("/api/master-data/snapshot-runs").then(({ data }) => {
+          cacheSet("master:snapshot-runs", data || [], 300_000);
+        }),
+      ),
     );
   }
   await Promise.allSettled(jobs);
@@ -113,7 +123,6 @@ function matchPrefetch(href: string): (() => Promise<void>) | null {
   return null;
 }
 
-/** Prefetch bootstrap for a sidebar route (deduped). */
 export function prefetchRoute(href: string): void {
   const fn = matchPrefetch(href);
   if (!fn) return;
@@ -137,17 +146,21 @@ function collectNavLinks(role: string): NavLink[] {
   return links;
 }
 
-/** Warm all allowed routes after login (idle, staggered). */
+/** Warm priority routes after login (dashboard, autopilot, settings). */
 export function prefetchAllRoutes(role: string): void {
-  const links = collectNavLinks(role);
+  const links = collectNavLinks(role).filter(l =>
+    PRIORITY_HREFS.some(p => l.href === p || l.href.startsWith(`${p}/`)),
+  );
   const run = () => {
     links.forEach((link, i) => {
-      window.setTimeout(() => prefetchRoute(link.href), i * 250);
+      window.setTimeout(() => prefetchRoute(link.href), 600 + i * 800);
     });
   };
   if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(() => run(), { timeout: 3000 });
+    window.requestIdleCallback(() => run(), { timeout: 5000 });
   } else {
-    window.setTimeout(run, 800);
+    window.setTimeout(run, 1500);
   }
 }
+
+export const prefetchPriorityRoutes = prefetchAllRoutes;

@@ -33,9 +33,18 @@ function forwardRequestHeaders(request: NextRequest): Headers {
 function buildResponseHeaders(upstream: Response): Headers {
   const headers = new Headers();
   upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP.has(key.toLowerCase())) return;
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || lower === "set-cookie") return;
     headers.append(key, value);
   });
+  if (typeof upstream.headers.getSetCookie === "function") {
+    for (const cookie of upstream.headers.getSetCookie()) {
+      headers.append("Set-Cookie", cookie);
+    }
+  } else {
+    const cookie = upstream.headers.get("set-cookie");
+    if (cookie) headers.append("Set-Cookie", cookie);
+  }
   return headers;
 }
 
@@ -50,6 +59,7 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
     method: request.method,
     headers,
     redirect: "manual",
+    keepalive: request.method === "GET",
   };
 
   if (request.method !== "GET" && request.method !== "HEAD") {

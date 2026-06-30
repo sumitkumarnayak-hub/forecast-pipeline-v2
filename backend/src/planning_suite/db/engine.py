@@ -93,10 +93,22 @@ class Database:
                 connect_args={"connect_timeout": 5},
             )
         sqlite_path = db_path.as_posix() if hasattr(db_path, "as_posix") else str(db_path)
-        return create_engine(
+        engine = create_engine(
             f"sqlite:///{sqlite_path}",
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 30},
+            pool_pre_ping=True,
         )
+        from sqlalchemy import event
+
+        @event.listens_for(engine, "connect")
+        def _sqlite_pragmas(dbapi_conn, _connection_record) -> None:
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.close()
+
+        return engine
 
     @contextmanager
     def get_connection(self):

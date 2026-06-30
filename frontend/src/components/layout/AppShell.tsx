@@ -1,7 +1,6 @@
 "use client";
-import { Suspense, useEffect, useState, ReactNode } from "react";
+import { useEffect, useState, ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { fetchSession } from "@/lib/auth";
 import Sidebar from "./Sidebar";
 import api from "@/lib/api";
 import { cacheGet, cacheSet } from "@/lib/queryCache";
@@ -13,6 +12,7 @@ import { useTheme } from "@/lib/theme";
 import { Menu, Moon, Sun, X } from "lucide-react";
 
 const BASELINE_APPROVED_KEY = "shell:baseline-approved";
+const BASELINE_STATUS_TTL = 600_000;
 
 interface Props {
   children: ReactNode;
@@ -48,13 +48,11 @@ function ShellFrame({
           onClick={() => setMobileNavOpen(false)}
         />
       )}
-      <Suspense fallback={<aside className="app-sidebar" />}>
-        <Sidebar
-          baselineApproved={baselineApproved}
-          mobileOpen={mobileNavOpen}
-          onNavigate={() => setMobileNavOpen(false)}
-        />
-      </Suspense>
+      <Sidebar
+        baselineApproved={baselineApproved}
+        mobileOpen={mobileNavOpen}
+        onNavigate={() => setMobileNavOpen(false)}
+      />
       <div className="app-main">
         <header className="app-header">
           <div className="app-header-start">
@@ -84,7 +82,7 @@ function ShellFrame({
             </button>
           </div>
         </header>
-        <main className="app-content animate-fade-in">{children}</main>
+        <main className="app-content">{children}</main>
       </div>
     </div>
   );
@@ -93,9 +91,7 @@ function ShellFrame({
 export default function AppShell({ children, title, subtitle, actions }: Props) {
   const router = useRouter();
   const pathname = usePathname();
-  const { role, hydrated: authHydrated } = useAuth();
-  const [mounted, setMounted] = useState(false);
-  const [authed, setAuthed] = useState(true);
+  const { user, role, hydrated } = useAuth();
   const [baselineApproved, setBaselineApproved] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { theme, setTheme } = useTheme();
@@ -105,67 +101,40 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
   }, [pathname]);
 
   useEffect(() => {
-    let cancelled = false;
-    void fetchSession().then((user) => {
-      if (cancelled) return;
-      const ok = !!user;
-      setAuthed(ok);
-      setMounted(true);
+    if (!hydrated) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
 
-      const cached = cacheGet<boolean>(BASELINE_APPROVED_KEY);
-      if (cached !== null) setBaselineApproved(cached);
+    const cached = cacheGet<boolean>(BASELINE_APPROVED_KEY);
+    if (cached !== null) {
+      setBaselineApproved(cached);
+      return;
+    }
 
-      if (!ok) {
-        router.replace("/login");
-        return;
-      }
-
-      api
-        .get("/api/baseline/status")
-        .then(r => {
-          const approved = Boolean(r.data.approved);
-          setBaselineApproved(approved);
-          cacheSet(BASELINE_APPROVED_KEY, approved, 300_000);
-        })
-        .catch(() => {});
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
+    api
+      .get("/api/baseline/status")
+      .then(r => {
+        const approved = Boolean(r.data.approved);
+        setBaselineApproved(approved);
+        cacheSet(BASELINE_APPROVED_KEY, approved, BASELINE_STATUS_TTL);
+      })
+      .catch(() => {});
+  }, [hydrated, user, router]);
 
   useEffect(() => {
-    if (!authHydrated || !role) return;
+    if (!hydrated || !user || !role) return;
     const allowed = rolesForPath(pathname);
-    if (allowed && role && !allowed.includes(role)) {
+    if (allowed && !allowed.includes(role)) {
       router.replace("/dashboard");
     }
-  }, [authHydrated, pathname, role, router]);
+  }, [hydrated, pathname, role, user, router]);
 
   useEffect(() => {
-    if (!authHydrated || !role) return;
+    if (!hydrated || !user || !role) return;
     prefetchAllRoutes(role);
-  }, [authHydrated, role]);
-
-  if (!mounted) {
-    return (
-      <ShellFrame
-        title={title}
-        subtitle={subtitle}
-        actions={actions}
-        baselineApproved={false}
-        theme="light"
-        setTheme={() => {}}
-        mobileNavOpen={false}
-        setMobileNavOpen={() => {}}
-      >
-        {children}
-      </ShellFrame>
-    );
-  }
-
-  if (!authed) return null;
+  }, [hydrated, role, user]);
 
   return (
     <ShellFrame

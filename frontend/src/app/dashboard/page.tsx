@@ -186,49 +186,29 @@ function applyBootstrapPayload(
   setters.skipTrendsFetch.current = true;
 }
 
-function dashboardCacheInit() {
-  const cached = cacheGet<DashboardBootstrap>(DASHBOARD_BOOTSTRAP_KEY);
-  if (!cached) return null;
-  const wkList = cached.weeks?.weeks || [];
-  const initialCities = (
-    (cached.revenue_trends?.filters as { all_cities?: string[] } | undefined)?.all_cities || []
-  ).slice(0, DEFAULT_CITIES_COUNT);
-  return {
-    pipelineCard: cached.pipeline_card,
-    weeks: wkList,
-    selectedWeek: cached.weeks?.default_week || wkList[wkList.length - 1] || "",
-    analytics: cached.analytics,
-    trends: cached.revenue_trends,
-    selCities: initialCities,
-  };
-}
-
 export default function DashboardPage() {
   const { user, hydrated, role } = useAuth();
-  const cached = dashboardCacheInit();
-  const [pipelineCard, setPipelineCard] = useState<{ has_run: boolean; run_name?: string; status?: string } | null>(
-    () => cached?.pipelineCard ?? null,
-  );
-  const [weeks, setWeeks] = useState<string[]>(() => cached?.weeks ?? []);
-  const [selectedWeek, setSelectedWeek] = useState<string>(() => cached?.selectedWeek ?? "");
-  const [analytics, setAnalytics] = useState<any>(() => cached?.analytics ?? null);
-  const [shellLoading, setShellLoading] = useState(() => !cacheGet(DASHBOARD_BOOTSTRAP_KEY));
+  const [pipelineCard, setPipelineCard] = useState<{ has_run: boolean; run_name?: string; status?: string } | null>(null);
+  const [weeks, setWeeks] = useState<string[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<string>("");
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [shellLoading, setShellLoading] = useState(true);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [trends, setTrends] = useState<any>(() => cached?.trends ?? null);
+  const [trends, setTrends] = useState<any>(null);
   const [trendsLoading, setTrendsLoading] = useState(false);
-  const [selCities, setSelCities] = useState<string[]>(() => cached?.selCities ?? []);
+  const [selCities, setSelCities] = useState<string[]>([]);
   const [selCats, setSelCats] = useState<string[]>([]);
   const [selDays, setSelDays] = useState<string[]>([]);
   const [dodView, setDodView] = useState("City");
   const [wowView, setWowView] = useState("City");
   const [showDodTable, setShowDodTable] = useState(false);
   const [showWowTable, setShowWowTable] = useState(false);
-  const [filtersReady, setFiltersReady] = useState(() => !!cacheGet(DASHBOARD_BOOTSTRAP_KEY));
+  const [filtersReady, setFiltersReady] = useState(false);
   const [opsReady, setOpsReady] = useState(false);
 
-  const skipTrendsFetch = useRef(!!cacheGet(DASHBOARD_BOOTSTRAP_KEY));
-  const filtersInit = useRef(!!cached?.selCities.length);
+  const skipTrendsFetch = useRef(false);
+  const filtersInit = useRef(false);
   const bootstrapSeq = useRef(0);
 
   const bootstrapSetters = useMemo(
@@ -298,7 +278,7 @@ export default function DashboardPage() {
     try {
       const { data } = await api.get<DashboardBootstrap>("/api/dashboard/bootstrap");
       if (seq !== bootstrapSeq.current) return;
-      cacheSet(DASHBOARD_BOOTSTRAP_KEY, data, 180_000);
+      cacheSet(DASHBOARD_BOOTSTRAP_KEY, data, 300_000);
       applyBootstrap(data);
       setError("");
     } catch (e: unknown) {

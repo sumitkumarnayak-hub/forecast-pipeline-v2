@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { UrlTabs } from "@/components/ui/UrlTabs";
+import { NplProvider } from "@/context/NplContext";
 import NplWizard from "@/components/npl/NplWizard";
 import SubmissionHistory from "@/components/npl/SubmissionHistory";
 import SyncPhTab from "@/components/npl/SyncPhTab";
@@ -18,10 +19,12 @@ function NewProductLaunchContent() {
             id: "launch",
             label: "Launch Planning",
             content: (
-              <UrlTabs
-                param="type"
-                defaultTab="type1"
-                tabs={[
+              <NplProvider>
+                <UrlTabs
+                  param="type"
+                  defaultTab="type1"
+                  keepMounted={false}
+                  tabs={[
                   {
                     id: "type1",
                     label: "New Product Launch",
@@ -57,7 +60,8 @@ function NewProductLaunchContent() {
                   },
                   { id: "history", label: "Submission History", content: <SubmissionHistory /> },
                 ]}
-              />
+                />
+              </NplProvider>
             ),
           },
           { id: "sync-ph", label: "Sync to P-H Master", content: <SyncPhTab /> },

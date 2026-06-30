@@ -59,13 +59,18 @@ def get_submissions(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+_NPL_CACHE_TTL = 600.0
+_NPL_LOG_CACHE_TTL = 90.0
+
+
 @router.get("/masters/categories")
 def npl_categories(current_user: dict = Depends(get_current_user)):
-    try:
-        from planning_suite.features.new_product_launch import get_categories, load_product_master
+    from planning_suite.services.api_cache import CacheNS, cached
+    from planning_suite.services import npl_wizard as wiz
 
-        df = load_product_master()
-        return {"categories": get_categories(df)}
+    try:
+        categories = cached(CacheNS.NPL_WIZARD, "categories", wiz.list_categories, ttl=_NPL_CACHE_TTL)
+        return {"categories": categories}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -75,20 +80,27 @@ def npl_products(
     category: str = Query(...),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        from planning_suite.features.new_product_launch import get_products_by_category, load_product_master
+    from planning_suite.services.api_cache import CacheNS, cached
+    from planning_suite.features.new_product_launch import get_products_by_category, load_product_master
 
-        df = load_product_master()
-        return {"products": get_products_by_category(df, category)}
+    try:
+        def _products() -> list:
+            df = load_product_master()
+            return get_products_by_category(df, category)
+
+        products = cached(CacheNS.NPL_WIZARD, f"products:{category}", _products, ttl=_NPL_CACHE_TTL)
+        return {"products": products}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/masters/product-ids")
 def npl_all_product_ids(current_user: dict = Depends(get_current_user)):
+    from planning_suite.services.api_cache import CacheNS, cached
     from planning_suite.services import npl_wizard as wiz
 
-    return {"products": wiz.list_all_product_ids()}
+    products = cached(CacheNS.NPL_WIZARD, "product_ids", wiz.list_all_product_ids, ttl=_NPL_CACHE_TTL)
+    return {"products": products}
 
 
 @router.get("/salience/cities")
@@ -271,14 +283,10 @@ class StatusBody(BaseModel):
 
 @router.get("/wizard/context")
 def wizard_context(current_user: dict = Depends(get_current_user)):
-    from planning_suite.features.new_product_launch import get_earliest_monday
+    from planning_suite.services.api_cache import CacheNS, cached
     from planning_suite.services import npl_wizard as wiz
 
-    return {
-        "categories": wiz.list_categories(),
-        "cities": wiz.list_cities(),
-        "earliest_launch_date": str(get_earliest_monday()),
-    }
+    return cached(CacheNS.NPL_WIZARD, "context", wiz.wizard_context_payload, ttl=_NPL_CACHE_TTL)
 
 
 @router.get("/wizard/hubs")
@@ -390,10 +398,17 @@ def submissions_log(
 ):
     from planning_suite.services import npl_wizard as wiz
 
+    from planning_suite.services.api_cache import CacheNS, cached
+
     t = [x.strip() for x in types.split(",") if x.strip()] if types else None
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
-    return wiz.get_submission_log(types=t, statuses=s, product_ids=p)
+    cache_key = f"log:{types or ''}:{statuses or ''}:{product_ids or ''}"
+
+    def _log():
+        return wiz.get_submission_log(types=t, statuses=s, product_ids=p)
+
+    return cached(CacheNS.NPL_WIZARD, cache_key, _log, ttl=_NPL_LOG_CACHE_TTL)
 
 
 @router.patch("/submissions/{submission_id}/status")

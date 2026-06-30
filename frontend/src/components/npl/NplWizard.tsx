@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+import { useNplBootstrap } from "@/context/NplContext";
 import { ChevronRight, Download, Mail, Upload } from "lucide-react";
 
 const BASE_STAGES = ["upload", "split", "dates", "confirm"] as const;
@@ -16,12 +17,6 @@ interface NplWizardProps {
   subType: "New Launch" | "Expansion" | "Replacement";
   title: string;
   description: string;
-}
-
-interface ProductRow {
-  product_id: string;
-  product_name: string;
-  category: string;
 }
 
 interface EmailResult {
@@ -41,6 +36,10 @@ function stageLabels(subType: NplWizardProps["subType"]): string[] {
 
 export default function NplWizard({ subType, title, description }: NplWizardProps) {
   const { readOnly } = useAuth();
+  const { context, products: allProducts, loading: nplLoading, error: nplError, getProductsByCategory } =
+    useNplBootstrap();
+  const categories = context?.categories ?? [];
+  const cities = context?.cities ?? [];
   const isReplacement = subType === "Replacement";
   const isExpansion = subType === "Expansion";
   const stages = isReplacement ? REPLACEMENT_STAGES : BASE_STAGES;
@@ -49,8 +48,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
 
-  const [categories, setCategories] = useState<string[]>([]);
-  const [cities, setCities] = useState<string[]>([]);
   const [category, setCategory] = useState("");
   const [planLevel, setPlanLevel] = useState<"city" | "hub">("city");
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
@@ -61,7 +58,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [launchDate, setLaunchDate] = useState("");
   const [earliestDate, setEarliestDate] = useState("");
 
-  const [allProducts, setAllProducts] = useState<ProductRow[]>([]);
   const [expansionPid, setExpansionPid] = useState("");
   const [expansionName, setExpansionName] = useState("");
   const [expansionCategory, setExpansionCategory] = useState("");
@@ -84,47 +80,28 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     reason?: string;
   } | null>(null);
 
-  const loadContext = useCallback(async () => {
-    try {
-      const { data } = await api.get("/api/new-product-launch/wizard/context");
-      setCategories(data.categories || []);
-      setCities(data.cities || []);
-      setEarliestDate(data.earliest_launch_date || "");
-      setLaunchDate(data.earliest_launch_date || "");
-      if (data.categories?.length) {
-        setCategory(data.categories[0]);
-        setOldCategory(data.categories[0]);
-        setNewCategory(data.categories[0]);
-      }
-    } catch {
-      /* ignore */
+  useEffect(() => {
+    if (!context) return;
+    const minDate = context.earliest_launch_date || "";
+    setEarliestDate(minDate);
+    setLaunchDate(prev => prev || minDate);
+    if (context.categories?.length) {
+      const first = context.categories[0];
+      setCategory(prev => prev || first);
+      setOldCategory(prev => prev || first);
+      setNewCategory(prev => prev || first);
     }
-  }, []);
-
-  useEffect(() => {
-    loadContext();
-  }, [loadContext]);
-
-  useEffect(() => {
-    if (!isExpansion && !isReplacement) return;
-    api.get("/api/new-product-launch/masters/product-ids").then(({ data }) => {
-      setAllProducts(data.products || []);
-    }).catch(() => {});
-  }, [isExpansion, isReplacement]);
+  }, [context]);
 
   useEffect(() => {
     if (!oldCategory) return;
-    api.get("/api/new-product-launch/masters/products", { params: { category: oldCategory } })
-      .then(({ data }) => setOldProducts(data.products || []))
-      .catch(() => setOldProducts([]));
-  }, [oldCategory]);
+    getProductsByCategory(oldCategory).then(setOldProducts);
+  }, [oldCategory, getProductsByCategory]);
 
   useEffect(() => {
     if (!newCategory) return;
-    api.get("/api/new-product-launch/masters/products", { params: { category: newCategory } })
-      .then(({ data }) => setNewProducts(data.products || []))
-      .catch(() => setNewProducts([]));
-  }, [newCategory]);
+    getProductsByCategory(newCategory).then(setNewProducts);
+  }, [newCategory, getProductsByCategory]);
 
   useEffect(() => {
     if (!selectedCities.length) return;
@@ -297,12 +274,11 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const resolveProductId = async (cat: string, name: string): Promise<string> => {
-    const { data } = await api.get("/api/new-product-launch/masters/products", { params: { category: cat } });
-    const idx = (data.products as string[]).indexOf(name);
-    if (idx < 0) return "";
-    const { data: all } = await api.get("/api/new-product-launch/masters/product-ids");
-    const match = (all.products as ProductRow[]).find(p => p.product_name === name && p.category === cat);
-    return match?.product_id || "";
+    const match = allProducts.find(p => p.product_name === name && p.category === cat);
+    if (match) return match.product_id;
+    const names = await getProductsByCategory(cat);
+    if (!names.includes(name)) return "";
+    return allProducts.find(p => p.product_name === name && p.category === cat)?.product_id || "";
   };
 
   const finishReplacementSetup = async () => {
@@ -322,11 +298,27 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const labels = stageLabels(subType);
+  const categoryOptions =
+    categories.length > 0
+      ? categories
+      : nplLoading
+        ? ["Loading categories…"]
+        : ["No categories available"];
+  const categorySelectDisabled = readOnly || nplLoading || categories.length === 0;
 
   return (
     <div className="card" style={{ padding: "1.25rem" }}>
       <h4 style={{ margin: "0 0 0.25rem" }}>{title}</h4>
       <p className="text-xs text-muted mb-4">{description}</p>
+      {nplLoading && !context && (
+        <div className="alert alert-info mb-3 text-sm flex items-center gap-2">
+          <span className="spinner" style={{ width: 14, height: 14 }} />
+          Loading categories, cities, and products from master data…
+        </div>
+      )}
+      {nplError && !context && (
+        <div className="alert alert-danger mb-3 text-sm">{nplError}</div>
+      )}
       {msg.text && <div className={`alert alert-${msg.type} mb-3 text-sm`}>{msg.text}</div>}
 
       <div className="flex flex-wrap gap-2 mb-4 text-xs">
@@ -349,13 +341,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           <div className="grid-2 mb-3" style={{ maxWidth: 720 }}>
             <div>
               <p className="text-xs font-semibold mb-2">Old SKU (being replaced)</p>
-              <select className="form-input text-sm mb-2" value={oldCategory} onChange={e => setOldCategory(e.target.value)} disabled={readOnly}>
-                {categories.map(c => (
-                  <option key={c} value={c}>{c}</option>
+              <select className="form-input text-sm mb-2" value={oldCategory} onChange={e => setOldCategory(e.target.value)} disabled={categorySelectDisabled}>
+                {!oldCategory && <option value="">Select category</option>}
+                {categoryOptions.map(c => (
+                  <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
                 ))}
               </select>
-              <select className="form-input text-sm" value={oldProductName} onChange={e => setOldProductName(e.target.value)} disabled={readOnly}>
-                <option value="">Select product</option>
+              <select className="form-input text-sm" value={oldProductName} onChange={e => setOldProductName(e.target.value)} disabled={readOnly || !oldCategory}>
+                <option value="">{oldProducts.length ? "Select product" : "Loading products…"}</option>
                 {oldProducts.map(p => (
                   <option key={p} value={p}>{p}</option>
                 ))}
@@ -363,13 +356,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </div>
             <div>
               <p className="text-xs font-semibold mb-2">New SKU (replacement)</p>
-              <select className="form-input text-sm mb-2" value={newCategory} onChange={e => setNewCategory(e.target.value)} disabled={readOnly}>
-                {categories.map(c => (
-                  <option key={c} value={c}>{c}</option>
+              <select className="form-input text-sm mb-2" value={newCategory} onChange={e => setNewCategory(e.target.value)} disabled={categorySelectDisabled}>
+                {!newCategory && <option value="">Select category</option>}
+                {categoryOptions.map(c => (
+                  <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
                 ))}
               </select>
-              <select className="form-input text-sm" value={newProductName} onChange={e => setNewProductName(e.target.value)} disabled={readOnly}>
-                <option value="">Select product</option>
+              <select className="form-input text-sm" value={newProductName} onChange={e => setNewProductName(e.target.value)} disabled={readOnly || !newCategory}>
+                <option value="">{newProducts.length ? "Select product" : "Loading products…"}</option>
                 {newProducts.map(p => (
                   <option key={p} value={p}>{p}</option>
                 ))}
@@ -391,17 +385,21 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           <div className="form-group mb-3">
             <label className="form-label">Cities</label>
             <div className="flex flex-wrap gap-2">
-              {cities.slice(0, 40).map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
-                  onClick={() => toggleCity(c)}
-                  disabled={readOnly}
-                >
-                  {c}
-                </button>
-              ))}
+              {cities.length ? (
+                cities.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => toggleCity(c)}
+                    disabled={readOnly}
+                  >
+                    {c}
+                  </button>
+                ))
+              ) : (
+                <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+              )}
             </div>
           </div>
           <button type="button" className="btn btn-primary btn-sm" onClick={finishReplacementSetup} disabled={readOnly}>
@@ -419,9 +417,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                 className="form-input text-sm"
                 value={expansionPid}
                 onChange={e => onExpansionPidChange(e.target.value)}
-                disabled={readOnly}
+                disabled={readOnly || (nplLoading && allProducts.length === 0)}
               >
-                <option value="">Select product</option>
+                <option value="">{allProducts.length ? "Select product" : "Loading products…"}</option>
                 {allProducts.map(p => (
                   <option key={p.product_id} value={p.product_id}>
                     {p.product_id} — {p.product_name}
@@ -439,9 +437,10 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             {!isExpansion && (
               <div className="form-group">
                 <label className="form-label">Sub-Category</label>
-                <select className="form-input text-sm" value={category} onChange={e => setCategory(e.target.value)} disabled={readOnly || isExpansion}>
-                  {categories.map(c => (
-                    <option key={c} value={c}>{c}</option>
+                <select className="form-input text-sm" value={category} onChange={e => setCategory(e.target.value)} disabled={categorySelectDisabled || isExpansion}>
+                  {!category && <option value="">Select category</option>}
+                  {categoryOptions.map(c => (
+                    <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
                   ))}
                 </select>
               </div>
@@ -462,17 +461,21 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           <div className="form-group mb-3">
             <label className="form-label">Cities</label>
             <div className="flex flex-wrap gap-2">
-              {cities.slice(0, 40).map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
-                  onClick={() => toggleCity(c)}
-                  disabled={readOnly || (isReplacement && selectedCities.length > 0 && !selectedCities.includes(c) && stage === "upload")}
-                >
-                  {c}
-                </button>
-              ))}
+              {cities.length ? (
+                cities.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => toggleCity(c)}
+                    disabled={readOnly || (isReplacement && selectedCities.length > 0 && !selectedCities.includes(c) && stage === "upload")}
+                  >
+                    {c}
+                  </button>
+                ))
+              ) : (
+                <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+              )}
             </div>
           </div>
           {selectedCities.length > 0 && (planLevel === "hub" || planLevel === "city") && (

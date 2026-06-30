@@ -23,6 +23,7 @@ def _invalidate_baseline_cache() -> None:
     cache_invalidate(CacheNS.BASELINE_REPO)
     cache_invalidate(CacheNS.BASELINE_ACTIVE)
     cache_invalidate(CacheNS.BASELINE_PARAMS)
+    cache_invalidate(CacheNS.BASELINE_STATUS)
 
 
 class DateRangeBody(BaseModel):
@@ -71,27 +72,32 @@ def get_baseline_status(
     current_user: dict = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
-    approved = is_baseline_approved()
-    try:
-        with db.engine.connect() as conn:
-            from sqlalchemy import text
+    from planning_suite.services.api_cache import CacheNS, cached
 
-            latest = conn.execute(
-                text("""
-                    SELECT run_id, run_name, status, run_date, output_file,
-                           validation_status, approved_at, approved_by
-                    FROM baseline_runs ORDER BY run_date DESC LIMIT 1
-                """)
-            ).fetchone()
-        latest_dict = dict(latest._mapping) if latest else None
-    except Exception:
-        latest_dict = None
+    def _build():
+        approved = is_baseline_approved()
+        try:
+            with db.engine.connect() as conn:
+                from sqlalchemy import text
 
-    return {
-        "approved": approved,
-        "latest_run": latest_dict,
-        "active_dataset": manual.get_active_dataset_status(),
-    }
+                latest = conn.execute(
+                    text("""
+                        SELECT run_id, run_name, status, run_date, output_file,
+                               validation_status, approved_at, approved_by
+                        FROM baseline_runs ORDER BY run_date DESC LIMIT 1
+                    """)
+                ).fetchone()
+            latest_dict = dict(latest._mapping) if latest else None
+        except Exception:
+            latest_dict = None
+
+        return {
+            "approved": approved,
+            "latest_run": latest_dict,
+            "active_dataset": manual.get_active_dataset_status(),
+        }
+
+    return cached(CacheNS.BASELINE_STATUS, "global", _build, ttl=60.0)
 
 
 @router.get("/raw-data/status")

@@ -33,6 +33,19 @@ from planning_suite.features.new_product_launch import (
 )
 
 
+def wizard_context_payload() -> dict[str, Any]:
+    """Single sheet pass for categories + cities (avoids duplicate master/salience loads)."""
+    master = load_product_master()
+    sal = load_hub_salience()
+    return sanitize_for_json(
+        {
+            "categories": get_categories(master),
+            "cities": get_cities_from_salience(sal),
+            "earliest_launch_date": str(get_earliest_monday()),
+        }
+    )
+
+
 def list_categories() -> list[str]:
     return get_categories(load_product_master())
 
@@ -259,10 +272,15 @@ def get_submission_log(
         ]
         if c in work.columns
     ]
+    def _uniq_nonempty(col: str) -> list[str]:
+        if col not in df.columns:
+            return []
+        return sorted({str(v).strip() for v in df[col].dropna().tolist() if str(v).strip()})
+
     filters = {
-        "types": sorted(df["Submission_Type"].dropna().unique().tolist()) if "Submission_Type" in df.columns else [],
-        "statuses": sorted(df["Status"].dropna().unique().tolist()) if "Status" in df.columns else [],
-        "product_ids": sorted(df["Product ID"].dropna().unique().tolist()) if "Product ID" in df.columns else [],
+        "types": _uniq_nonempty("Submission_Type"),
+        "statuses": _uniq_nonempty("Status"),
+        "product_ids": _uniq_nonempty("Product ID"),
     }
     return sanitize_for_json(
         {

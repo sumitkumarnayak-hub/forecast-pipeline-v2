@@ -16,6 +16,10 @@ class CacheNS(str, Enum):
     BASELINE_REPO = "baseline_repo"
     BASELINE_ACTIVE = "baseline_active"
     BASELINE_PARAMS = "baseline_params"
+    BASELINE_STATUS = "baseline_status"
+    DASHBOARD = "dashboard"
+    USER_PROFILE = "user_profile"
+    NPL_WIZARD = "npl_wizard"
 
 
 _lock = threading.RLock()

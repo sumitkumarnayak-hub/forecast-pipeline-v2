@@ -2,16 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/lib/api";
-import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
+import {
+  readSessionBootstrapEntry,
+  writeSessionBootstrap,
+  BOOTSTRAP_TTL_MS,
+} from "@/lib/bootstrapCache";
 
 /**
- * Stale-while-revalidate: show cached bootstrap immediately, refresh in background.
+ * Stale-while-revalidate: show cached bootstrap after mount, refresh when half-stale.
  */
 export function useInstantBootstrap<T>(storageKey: string, url: string, ttlMs = BOOTSTRAP_TTL_MS) {
-  const [data, setData] = useState<T | null>(() => readSessionBootstrap<T>(storageKey, ttlMs));
-  const [loading, setLoading] = useState(() => !readSessionBootstrap<T>(storageKey, ttlMs));
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const seq = useRef(0);
+  const mounted = useRef(false);
 
   const fetchFresh = useCallback(
     async (opts?: { showLoading?: boolean }) => {
@@ -27,7 +32,7 @@ export function useInstantBootstrap<T>(storageKey: string, url: string, ttlMs = 
       } catch (e: unknown) {
         if (n !== seq.current) return;
         const err = e as { response?: { data?: { detail?: string } } };
-        if (!readSessionBootstrap<T>(storageKey, ttlMs)) {
+        if (!readSessionBootstrapEntry<T>(storageKey, ttlMs)) {
           setError(err?.response?.data?.detail || "Failed to load");
         }
       } finally {
@@ -38,11 +43,16 @@ export function useInstantBootstrap<T>(storageKey: string, url: string, ttlMs = 
   );
 
   useEffect(() => {
-    const cached = readSessionBootstrap<T>(storageKey, ttlMs);
+    if (mounted.current) return;
+    mounted.current = true;
+
+    const cached = readSessionBootstrapEntry<T>(storageKey, ttlMs);
     if (cached) {
-      setData(cached);
+      setData(cached.data);
       setLoading(false);
-      void fetchFresh();
+      if (cached.ageMs > ttlMs * 0.5) {
+        void fetchFresh();
+      }
     } else {
       void fetchFresh({ showLoading: true });
     }
