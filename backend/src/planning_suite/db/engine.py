@@ -364,6 +364,31 @@ class Database:
                 "system_details": row.system_details,
             }
 
+    def get_latest_auth_session_for_user(self, user_id: int) -> dict | None:
+        """Return the most recent auth_sessions row for a user."""
+        order_clause = _order_by_desc_nulls_last("created_at", self.backend)
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT session_id, user_id, created_at, expires_at, system_details
+                    FROM auth_sessions
+                    WHERE user_id = :user_id
+                    ORDER BY {order_clause}
+                    LIMIT 1
+                """),
+                {"user_id": user_id},
+            ).fetchone()
+        if not row:
+            return None
+        mapping = row._mapping
+        return {
+            "session_id": mapping["session_id"],
+            "user_id": mapping["user_id"],
+            "created_at": mapping["created_at"],
+            "expires_at": mapping["expires_at"],
+            "system_details": mapping["system_details"],
+        }
+
     def update_auth_session_system_details(self, session_id: str, system_details: str) -> bool:
         """Update system_details on an existing auth session row."""
         if not session_id or not system_details:

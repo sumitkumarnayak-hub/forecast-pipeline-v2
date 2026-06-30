@@ -397,3 +397,80 @@ def load_hub_suggestion_for_approve(
             "pivot_rows": df_to_records(pivot),
         }
     )
+
+
+HUB_SKU_CMP_CACHE = OUTPUT_PATH / "cmp_baseline_latest.parquet"
+
+
+def load_hub_sku_day_comparison(*, refresh: bool = False, write_sheet: bool = False) -> dict[str, Any]:
+    """Hub × SKU × Day previous vs current — Streamlit 'Load Comparison' parity."""
+    from planning_suite.services.baseline_comparison import (
+        build_hub_sku_day_comparison,
+        resolve_hub_suggestion_previous,
+        resolve_latest_summary,
+    )
+
+    if not refresh and HUB_SKU_CMP_CACHE.is_file():
+        cmp_df = pd.read_parquet(HUB_SKU_CMP_CACHE)
+        meta_path = RV_CACHE_DIR / "meta.json"
+        current_file = previous_file = None
+        if meta_path.is_file():
+            import json
+
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            current_file = meta.get("current_file")
+            previous_file = meta.get("previous_file")
+    else:
+        _CMP_CACHE_DIR = str(RV_CACHE_DIR)
+        sum_df, sum_name, _ = resolve_latest_summary(BASELINE_OUTPUTS_FOLDER, cache_dir=_CMP_CACHE_DIR)
+        log_df, log_source, log_path = resolve_hub_suggestion_previous(
+            log_folder=DP_LOGICS_FOLDER, cache_dir=_CMP_CACHE_DIR
+        )
+        cmp_df = build_hub_sku_day_comparison(sum_df, log_df)
+        OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+        cmp_df.to_parquet(HUB_SKU_CMP_CACHE, index=False)
+        current_file = sum_name
+        previous_file = os.path.basename(log_path) if log_path else log_source
+
+    prev_tot = int(cmp_df["Previous Baseline"].sum()) if not cmp_df.empty else 0
+    curr_tot = int(cmp_df["Current Baseline"].sum()) if not cmp_df.empty else 0
+    pct_tot = round((curr_tot - prev_tot) / prev_tot * 100, 1) if prev_tot else 0
+
+    sheet_status: dict[str, Any] = {"attempted": False}
+    if write_sheet and not cmp_df.empty:
+        sheet_status["attempted"] = True
+        try:
+            from planning_suite.config import VALIDATION_SHEET_URL
+            from planning_suite.services.google_sheets import GoogleSheetsManager
+            from gspread_dataframe import set_with_dataframe
+            import gspread
+
+            gsm = GoogleSheetsManager()
+            vss = gsm.gc.open_by_url(VALIDATION_SHEET_URL)
+            try:
+                vws = vss.worksheet("Baseline")
+            except gspread.exceptions.WorksheetNotFound:
+                vws = vss.add_worksheet(title="Baseline", rows=max(len(cmp_df) + 100, 500), cols=10)
+            vws.clear()
+            set_with_dataframe(vws, cmp_df)
+            sheet_status["success"] = True
+        except Exception as exc:
+            sheet_status["success"] = False
+            sheet_status["error"] = str(exc)
+
+    return sanitize_for_json(
+        {
+            "current_file": current_file,
+            "previous_file": previous_file,
+            "columns": cmp_df.columns.tolist(),
+            "rows": df_to_records(cmp_df),
+            "row_count": len(cmp_df),
+            "metrics": {
+                "previous_total": prev_tot,
+                "current_total": curr_tot,
+                "overall_delta_pct": pct_tot,
+            },
+            "sheet_write": sheet_status,
+        }
+    )
+

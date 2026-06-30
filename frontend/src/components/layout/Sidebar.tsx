@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { clearAuth } from "@/lib/auth";
+import { logout } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 import { SIDEBAR_NAV, type NavEntry, type NavLink } from "@/lib/navigation";
-import { ChevronDown, ChevronRight, Lock, LogOut } from "lucide-react";
+import DemoFilterPanel from "./DemoFilterPanel";
+import { prefetchRoute } from "@/lib/pagePrefetch";
+import { ChevronDown, ChevronRight, LogOut, LayoutGrid } from "lucide-react";
 
 const ROLE_BADGE: Record<string, string> = {
   admin: "Administrator",
@@ -17,30 +19,44 @@ const ROLE_BADGE: Record<string, string> = {
 function SidebarLink({
   item,
   active,
-  locked,
-  indent,
+  child,
+  onNavigate,
 }: {
   item: NavLink;
   active: boolean;
-  locked?: boolean;
-  indent?: boolean;
+  child?: boolean;
+  onNavigate?: () => void;
 }) {
   const Icon = item.icon;
   return (
     <Link
-      href={locked ? "#" : item.href}
-      className={`nav-item${active ? " active" : ""}${locked ? " locked" : ""}`}
-      style={indent ? { paddingLeft: "1.75rem", fontSize: "0.82rem" } : undefined}
-      title={locked ? "Unlocks after baseline approval" : item.label}
+      href={item.href}
+      prefetch
+      onMouseEnter={() => prefetchRoute(item.href)}
+      onFocus={() => prefetchRoute(item.href)}
+      onClick={() => {
+        prefetchRoute(item.href);
+        onNavigate?.();
+      }}
+      className={`nav-item${active ? " active" : ""}${child ? " nav-item-child" : ""}`}
     >
-      <Icon className="nav-icon" size={indent ? 14 : 16} />
-      {item.label}
-      {locked && <Lock size={10} style={{ marginLeft: "auto", opacity: 0.5 }} />}
+      <span className="nav-item-icon">
+        <Icon size={child ? 15 : 17} strokeWidth={active ? 2.25 : 2} />
+      </span>
+      <span className="nav-item-label">{item.label}</span>
     </Link>
   );
 }
 
-export default function Sidebar({ baselineApproved }: { baselineApproved?: boolean }) {
+export default function Sidebar({
+  baselineApproved,
+  mobileOpen,
+  onNavigate,
+}: {
+  baselineApproved?: boolean;
+  mobileOpen?: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, role, hydrated } = useAuth();
@@ -53,8 +69,8 @@ export default function Sidebar({ baselineApproved }: { baselineApproved?: boole
     if (pathname.startsWith("/baseline")) setBaselineOpen(true);
   }, [pathname]);
 
-  const handleLogout = () => {
-    clearAuth();
+  const handleLogout = async () => {
+    await logout();
     router.replace("/login");
   };
 
@@ -65,22 +81,15 @@ export default function Sidebar({ baselineApproved }: { baselineApproved?: boole
     return pathname === item.href || pathname.startsWith(`${item.href}/`);
   };
 
-  const visibleEntries = SIDEBAR_NAV.filter(entry => {
-    if (entry.type === "link") return entry.roles.includes(effectiveRole);
-    return entry.roles.includes(effectiveRole);
-  });
+  const visibleEntries = SIDEBAR_NAV.filter(entry => entry.roles.includes(effectiveRole));
 
   const renderEntry = (entry: NavEntry) => {
     if (entry.type === "link") {
-      const locked =
-        entry.lockUntilBaselineApproved && !baselineApproved && effectiveRole !== "admin";
+      if (entry.lockUntilBaselineApproved && !baselineApproved) {
+        return null;
+      }
       return (
-        <SidebarLink
-          key={entry.id}
-          item={entry}
-          active={isLinkActive(entry)}
-          locked={locked}
-        />
+        <SidebarLink key={entry.id} item={entry} active={isLinkActive(entry)} onNavigate={onNavigate} />
       );
     }
 
@@ -90,98 +99,80 @@ export default function Sidebar({ baselineApproved }: { baselineApproved?: boole
     const groupActive = children.some(c => isLinkActive(c));
 
     return (
-      <div key={entry.id}>
+      <div key={entry.id} className="nav-group">
         <button
           type="button"
-          className="nav-item"
-          style={{
-            width: "calc(100% - 1rem)",
-            fontWeight: 600,
-            color: groupActive ? "var(--blue)" : "var(--text-secondary)",
-          }}
+          className={`nav-group-toggle${groupActive ? " is-active" : ""}`}
           onClick={() => setBaselineOpen(v => !v)}
+          aria-expanded={baselineOpen}
         >
-          {baselineOpen ? (
-            <ChevronDown className="nav-icon" size={14} />
-          ) : (
-            <ChevronRight className="nav-icon" size={14} />
-          )}
-          {entry.label}
+          <span className="nav-group-chevron">
+            {baselineOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </span>
+          <span className="nav-group-label">{entry.label}</span>
         </button>
         {entry.caption && baselineOpen && (
-          <div
-            style={{
-              fontSize: "0.65rem",
-              color: "var(--text-muted)",
-              padding: "0 1rem 0.35rem 2.1rem",
-            }}
-          >
-            {entry.caption}
+          <p className="nav-group-caption">{entry.caption}</p>
+        )}
+        {baselineOpen && (
+          <div className="nav-sublist">
+            {children.map(child => (
+              <SidebarLink
+                key={child.id}
+                item={child}
+                active={isLinkActive(child)}
+                child
+                onNavigate={onNavigate}
+              />
+            ))}
           </div>
         )}
-        {baselineOpen &&
-          children.map(child => (
-            <SidebarLink
-              key={child.id}
-              item={child}
-              active={isLinkActive(child)}
-              indent
-            />
-          ))}
       </div>
     );
   };
 
+  const initials =
+    user?.full_name?.charAt(0)?.toUpperCase() ||
+    user?.username?.charAt(0)?.toUpperCase() ||
+    "?";
+
   return (
-    <aside className="app-sidebar animate-slide-left">
+    <aside className={`app-sidebar${mobileOpen ? " is-open" : ""}`}>
       <div className="sidebar-brand">
-        <div className="sidebar-brand-label">Demand Planning</div>
-        <div className="sidebar-brand-name">Planning Suite</div>
+        <div className="sidebar-brand-mark" aria-hidden>
+          <LayoutGrid size={18} strokeWidth={2.25} />
+        </div>
+        <div className="sidebar-brand-text">
+          <span className="sidebar-brand-name">Planning Suite</span>
+          <span className="sidebar-brand-tag">Demand Planning</span>
+        </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0.5rem 0" }}>
-        <div className="sidebar-section-label">Navigation</div>
-        {visibleEntries.map(renderEntry)}
-      </div>
+      <nav className="sidebar-nav" aria-label="Main navigation">
+        <p className="sidebar-section-label">Menu</p>
+        <div className="sidebar-nav-list">{visibleEntries.map(renderEntry)}</div>
+      </nav>
+
+      <DemoFilterPanel />
 
       {hydrated && user && (
-        <div className="sidebar-user">
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.6rem",
-              marginBottom: "0.65rem",
-            }}
-          >
-            <div
-              style={{
-                width: 30,
-                height: 30,
-                borderRadius: "50%",
-                background: "var(--blue-dim)",
-                border: "1px solid var(--border-accent)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "0.7rem",
-                fontWeight: 700,
-                color: "var(--blue)",
-                flexShrink: 0,
-              }}
-            >
-              {user.full_name?.charAt(0)?.toUpperCase() || user.username.charAt(0).toUpperCase()}
+        <footer className="sidebar-footer">
+          <div className="sidebar-user-card">
+            <div className="sidebar-avatar" aria-hidden>
+              {initials}
             </div>
-            <div style={{ minWidth: 0 }}>
-              <div className="sidebar-user-name truncate">{user.full_name || user.username}</div>
-              <div className="sidebar-user-role">{ROLE_BADGE[effectiveRole] || effectiveRole}</div>
+            <div className="sidebar-user-meta">
+              <span className="sidebar-user-name truncate">{user.full_name || user.username}</span>
+              <span className="sidebar-user-role">{ROLE_BADGE[effectiveRole] || effectiveRole}</span>
             </div>
           </div>
-          <button className="btn btn-secondary w-full btn-sm" onClick={handleLogout}>
-            <LogOut size={13} /> Sign Out
+          <button type="button" className="sidebar-logout-btn" onClick={handleLogout}>
+            <LogOut size={15} />
+            Sign out
           </button>
-        </div>
+        </footer>
       )}
     </aside>
   );
+
 }

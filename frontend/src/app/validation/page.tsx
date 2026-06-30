@@ -8,8 +8,9 @@ import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { Upload, Play, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 
+import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
+
 const BOOTSTRAP_KEY = "validation:bootstrap";
-const BOOTSTRAP_TTL_MS = 120_000;
 
 type Bootstrap = {
   logics?: {
@@ -26,22 +27,10 @@ type Bootstrap = {
   history_count?: number;
 };
 
-function readCache(): Bootstrap | null {
-  try {
-    const raw = sessionStorage.getItem(BOOTSTRAP_KEY);
-    if (!raw) return null;
-    const { ts, data } = JSON.parse(raw) as { ts: number; data: Bootstrap };
-    if (Date.now() - ts > BOOTSTRAP_TTL_MS) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
 function ValidationContent() {
   const { canWrite } = useAuth();
-  const [boot, setBoot] = useState<Bootstrap | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [boot, setBoot] = useState<Bootstrap | null>(() => readSessionBootstrap(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS));
+  const [loading, setLoading] = useState(() => !readSessionBootstrap(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS));
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
 
@@ -55,21 +44,26 @@ function ValidationContent() {
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
 
   const loadBootstrap = useCallback(async (force?: boolean) => {
-    if (!force) {
-      const cached = readCache();
-      if (cached) {
-        setBoot(cached);
-        setLoading(false);
-        return;
+    const cached = !force ? readSessionBootstrap<Bootstrap>(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS) : null;
+    if (cached && !force) {
+      setBoot(cached);
+      setLoading(false);
+      try {
+        const { data } = await api.get<Bootstrap>("/api/validation/bootstrap");
+        setBoot(data);
+        writeSessionBootstrap(BOOTSTRAP_KEY, data);
+      } catch {
+        /* keep cache */
       }
+      return;
     }
-    setLoading(true);
+    if (!cached) setLoading(true);
     try {
       const { data } = await api.get<Bootstrap>("/api/validation/bootstrap");
       setBoot(data);
-      sessionStorage.setItem(BOOTSTRAP_KEY, JSON.stringify({ ts: Date.now(), data }));
+      writeSessionBootstrap(BOOTSTRAP_KEY, data);
     } catch {
-      setMsg({ text: "Failed to load validation metadata", type: "danger" });
+      if (!cached) setMsg({ text: "Failed to load validation metadata", type: "danger" });
     }
     setLoading(false);
   }, []);

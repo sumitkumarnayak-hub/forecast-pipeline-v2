@@ -2,10 +2,12 @@
 
 import { useMemo, useState, Fragment } from "react";
 
+import { coerceNum } from "@/lib/coerceNum";
+
 type Props = {
   cities: string[];
   categories: string[];
-  values: (number | null)[][];
+  values: (number | string | null)[][];
 };
 
 /** Plotly colorscale: red → white at 0 → green (reporting.py inventory heatmap). */
@@ -17,8 +19,11 @@ const COLOR_STOPS: { pos: number; rgb: [number, number, number] }[] = [
 
 const ZMID = 0;
 
-function flattenValues(values: (number | null)[][]): number[] {
-  return values.flat().filter((v): v is number => v != null && !Number.isNaN(v));
+function flattenValues(values: (number | string | null)[][]): number[] {
+  return values
+    .flat()
+    .map(coerceNum)
+    .filter((v): v is number => v != null);
 }
 
 /** Match Plotly Heatmap zmid=0 — scale anchored at 0%, not a fixed ±50% clamp. */
@@ -79,7 +84,13 @@ export default function BufferHeatmapChart({ cities, categories, values }: Props
   const { zmin, zmax } = useMemo(() => {
     const flat = flattenValues(values);
     if (!flat.length) return { zmin: -1, zmax: 1 };
-    return { zmin: Math.min(...flat), zmax: Math.max(...flat) };
+    const dataMin = Math.min(...flat);
+    const dataMax = Math.max(...flat);
+    // Diverging scale always anchored at 0 (matches Plotly zmid=0).
+    return {
+      zmin: Math.min(dataMin, 0),
+      zmax: Math.max(dataMax, 0),
+    };
   }, [values]);
 
   const cellW = useMemo(
@@ -119,7 +130,8 @@ export default function BufferHeatmapChart({ cities, categories, values }: Props
                 {city}
               </div>
               {categories.map((cat, ci) => {
-                const v = values[ri]?.[ci] ?? null;
+                const raw = values[ri]?.[ci] ?? null;
+                const v = coerceNum(raw);
                 return (
                   <div
                     key={`${city}-${cat}`}

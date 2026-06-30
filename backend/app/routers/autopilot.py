@@ -366,6 +366,18 @@ def start_autopilot(
         raise HTTPException(status_code=409, detail="Run already in progress")
 
     with _RUN_START_LOCK:
+        # Drop stale in-memory locks when DB already recorded a terminal state
+        for rid in list(_ACTIVE):
+            if _ACTIVE[rid].get("status") != "running":
+                continue
+            detail = load_autopilot_run(rid)
+            if detail and (
+                detail.get("success")
+                or detail.get("failed_step") is not None
+                or detail.get("status") in ("completed", "failed")
+            ):
+                _ACTIVE.pop(rid, None)
+
         if _any_run_in_progress():
             raise HTTPException(
                 status_code=409,
@@ -434,6 +446,40 @@ def get_output_paths(current_user: dict = Depends(get_current_user)):
     }
 
 
+def _step_sse_payload(step_idx: int, step_log: dict, *, failed: bool = False) -> dict:
+    """Build SSE step payload with Streamlit-parity detail (text, metrics, warning)."""
+    step = AUTOPILOT_STEPS[step_idx] if step_idx < len(AUTOPILOT_STEPS) else {"key": "", "name": ""}
+    metrics = step_log.get("metrics") or {}
+    metric_lines = [f"{k}: {v}" for k, v in metrics.items()]
+    warning = step_log.get("warning") or ""
+    if failed:
+        message = step_log.get("error_summary") or step_log.get("text") or "Failed"
+        return {
+            "event": "step",
+            "index": step_idx,
+            "key": step["key"],
+            "label": step["name"],
+            "status": "failed",
+            "message": message,
+            "error": step_log.get("error_detail", ""),
+            "metrics": metrics,
+            "metric_lines": metric_lines,
+            "warning": warning,
+        }
+    message = step_log.get("text") or "Done"
+    return {
+        "event": "step",
+        "index": step_idx,
+        "key": step["key"],
+        "label": step["name"],
+        "status": "completed",
+        "message": message,
+        "metrics": metrics,
+        "metric_lines": metric_lines,
+        "warning": warning,
+    }
+
+
 async def _sse_generator(run_id: str, db: Database) -> AsyncGenerator[str, None]:
     """Poll DB for run progress — mirrors Streamlit step-by-step reruns."""
     last_completed = -1
@@ -457,14 +503,12 @@ async def _sse_generator(run_id: str, db: Database) -> AsyncGenerator[str, None]
             if len(completed) > last_completed:
                 for idx in range(last_completed + 1, len(completed)):
                     step_log = logs.get(str(idx)) or logs.get(idx) or {}
-                    step = AUTOPILOT_STEPS[idx] if idx < len(AUTOPILOT_STEPS) else {"key": "", "name": ""}
-                    yield f"data: {json.dumps({'event': 'step', 'index': idx, 'key': step['key'], 'label': step['name'], 'status': 'completed', 'message': step_log.get('text', 'Done')})}\n\n"
+                    yield f"data: {json.dumps(_step_sse_payload(idx, step_log))}\n\n"
                 last_completed = len(completed) - 1
 
             if failed is not None:
                 step_log = logs.get(str(failed)) or logs.get(failed) or {}
-                step = AUTOPILOT_STEPS[failed] if failed < len(AUTOPILOT_STEPS) else {"key": "", "name": ""}
-                yield f"data: {json.dumps({'event': 'step', 'index': failed, 'key': step['key'], 'label': step['name'], 'status': 'failed', 'message': step_log.get('error_summary', ''), 'error': step_log.get('error_detail', '')})}\n\n"
+                yield f"data: {json.dumps(_step_sse_payload(failed, step_log, failed=True))}\n\n"
                 yield f"data: {json.dumps({'event': 'failed', 'error': detail.get('error') or step_log.get('error_summary', '')})}\n\n"
                 return
 
@@ -493,8 +537,13 @@ async def _sse_generator(run_id: str, db: Database) -> AsyncGenerator[str, None]
 
 
 @router.get("/stream/{run_id}")
-async def stream_autopilot(run_id: str, db: Database = Depends(get_db)):
-    """SSE — subscribe to real-time Auto-Pilot progress by run_id."""
+async def stream_autopilot(
+    run_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """SSE — subscribe to real-time Auto-Pilot progress (cookie auth, same-origin)."""
+    _ = current_user
     return StreamingResponse(
         _sse_generator(run_id, db),
         media_type="text/event-stream",

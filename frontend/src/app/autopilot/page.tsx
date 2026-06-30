@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState, type ElementType } from "reac
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import api from "@/lib/api";
-import { useAuth } from "@/hooks/useAuth";
 import { cacheGet, cacheInvalidate, cacheSet } from "@/lib/queryCache";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Zap,
   Loader2,
@@ -171,13 +171,22 @@ export default function AutopilotPage() {
     if (!refresh) {
       const cached = cacheGet<Bootstrap>(cacheKey);
       if (cached) {
-        setBoot(prev => ({ ...prev, ...cached, state: prev.state, ui_status: prev.ui_status, step_rows: prev.step_rows }));
+        setBoot(prev => ({
+          ...prev,
+          ...cached,
+          state: prev.state,
+          ui_status: prev.ui_status,
+          step_rows: prev.step_rows,
+          step_idx: prev.step_idx,
+          progress_pct: prev.progress_pct,
+          resume_step: prev.resume_step,
+        }));
       }
     } else {
       cacheInvalidate(cacheKey);
     }
 
-    if (!silent && !cacheGet<Bootstrap>(cacheKey)) setRefreshing(true);
+    if (!silent) setRefreshing(true);
 
     try {
       const { data } = await api.get<Bootstrap>("/api/autopilot/bootstrap", {
@@ -199,12 +208,38 @@ export default function AutopilotPage() {
       const err = e as { response?: { data?: { detail?: string } } };
       setLoadError(err?.response?.data?.detail || "Failed to load Auto-Pilot config");
     } finally {
-      setRefreshing(false);
+      if (!silent) setRefreshing(false);
     }
   }, []);
 
   const fetchRunState = useCallback(async (silent = false, refresh = false) => {
-    if (!silent) setStateLoading(true);
+    const stateCacheKey = "autopilot:run-state";
+    if (!refresh && !silent) {
+      const cached = cacheGet<{
+        state: Record<string, unknown> | null;
+        ui_status: UiStatus;
+        resume_step: number | null;
+        step_idx: number;
+        progress_pct: number;
+        step_rows: Bootstrap["step_rows"];
+      }>(stateCacheKey);
+      if (cached) {
+        setBoot(prev => ({
+          ...prev,
+          state: cached.state,
+          ui_status: cached.ui_status,
+          resume_step: cached.resume_step,
+          step_idx: cached.step_idx,
+          progress_pct: cached.progress_pct,
+          step_rows: cached.step_rows,
+        }));
+        setStateLoading(false);
+      } else if (!silent) {
+        setStateLoading(true);
+      }
+    } else if (!silent) {
+      setStateLoading(true);
+    }
     try {
       const { data } = await api.get<{
         state: Record<string, unknown> | null;
@@ -216,6 +251,7 @@ export default function AutopilotPage() {
       }>("/api/autopilot/state", {
         params: refresh ? { refresh: true } : undefined,
       });
+      cacheSet(stateCacheKey, data, 15_000);
       setBoot(prev => ({
         ...prev,
         state: data.state,
@@ -232,7 +268,7 @@ export default function AutopilotPage() {
       const detail = err?.response?.data?.detail;
       if (detail) setLoadError(detail);
     } finally {
-      setStateLoading(false);
+      if (!silent) setStateLoading(false);
     }
   }, []);
 
@@ -257,11 +293,16 @@ export default function AutopilotPage() {
 
   const fetchPageData = useCallback(
     async (silent = false, refresh = false) => {
-      await Promise.all([
-        fetchBootstrap(silent, refresh),
-        fetchRunState(silent, refresh),
-      ]);
-      if (tab === "history") await fetchHistory(refresh);
+      if (!silent) setRefreshing(true);
+      try {
+        await Promise.all([
+          fetchBootstrap(true, refresh),
+          fetchRunState(true, refresh),
+        ]);
+        if (tab === "history") await fetchHistory(refresh);
+      } finally {
+        if (!silent) setRefreshing(false);
+      }
     },
     [fetchBootstrap, fetchRunState, fetchHistory, tab],
   );
@@ -295,42 +336,57 @@ export default function AutopilotPage() {
 
   const subscribeRun = (runId: string) => {
     esRef.current?.close();
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const es = new EventSource(`${API_BASE}/api/autopilot/stream/${runId}`);
+    const es = new EventSource(`/api/autopilot/stream/${runId}`, { withCredentials: true });
     esRef.current = es;
 
     es.onmessage = (e) => {
-      const payload = JSON.parse(e.data);
+      try {
+        const payload = JSON.parse(e.data);
         if (payload.event === "log") {
           setRunLog(payload.text || "");
         } else if (payload.event === "completed") {
-        setMsg("All 6 steps completed successfully.");
-        es.close();
-        activeRunRef.current = null;
-        stopPolling();
-        fetchRunState(true);
-      } else if (payload.event === "failed") {
-        setMsg(payload.error || "Pipeline failed");
-        if (payload.error) setErrorTrace(payload.error);
-        es.close();
-        activeRunRef.current = null;
-        stopPolling();
-        fetchRunState(true);
-      } else if (payload.event === "step" && payload.status === "failed") {
-        setErrorTrace(payload.error || payload.message || "");
+          setMsg("All 6 steps completed successfully.");
+          es.close();
+          activeRunRef.current = null;
+          stopPolling();
+          void fetchRunState(true, true);
+        } else if (payload.event === "failed") {
+          setMsg(payload.error || "Pipeline failed");
+          if (payload.error) setErrorTrace(payload.error);
+          es.close();
+          activeRunRef.current = null;
+          stopPolling();
+          void fetchRunState(true, true);
+        } else if (payload.event === "step") {
+          const lines = [payload.message].filter(Boolean);
+          if (Array.isArray(payload.metric_lines)) {
+            for (const line of payload.metric_lines) {
+              lines.push(`• ${line}`);
+            }
+          }
+          if (payload.warning) {
+            lines.push(`⚠ ${payload.warning}`);
+          }
+          if (lines.length) setMsg(lines.join("\n"));
+          void fetchRunState(true, true);
+          if (payload.status === "failed") {
+            setErrorTrace(payload.error || payload.message || "");
+          }
+        }
+      } catch {
+        // ignore malformed SSE payloads
       }
     };
     es.onerror = () => {
       es.close();
-      activeRunRef.current = null;
       stopPolling();
-      fetchRunState(true);
+      void fetchRunState(true, true);
     };
   };
 
   const startPolling = () => {
     stopPolling();
-    pollRef.current = setInterval(() => fetchRunState(true), 2500);
+    pollRef.current = setInterval(() => void fetchRunState(true, true), 2500);
   };
 
   const startAction = async (action: "run" | "resume" | "retry" | "restart") => {
@@ -377,9 +433,9 @@ export default function AutopilotPage() {
     { id: "manual", label: "Manual workflow", icon: MousePointer2 },
   ];
 
-  const actionButtons = !readOnly && (
+  const actionButtons = (
     <div className="flex flex-wrap items-center gap-2">
-      {uiStatus === "idle" && (
+      {!readOnly && uiStatus === "idle" && (
         <>
           <div className="form-group mb-3" style={{ maxWidth: 220 }}>
             <label className="form-label text-xs">Start from step (1–6)</label>
@@ -411,7 +467,7 @@ export default function AutopilotPage() {
           )}
         </>
       )}
-      {uiStatus === "failed" && (
+      {!readOnly && uiStatus === "failed" && (
         <>
           <button
             type="button"
@@ -430,7 +486,7 @@ export default function AutopilotPage() {
           </button>
         </>
       )}
-      {uiStatus === "success" && (
+      {!readOnly && uiStatus === "success" && (
         <button
           type="button"
           onClick={() => startAction("restart")}
@@ -442,11 +498,11 @@ export default function AutopilotPage() {
       )}
       <button
         type="button"
-        onClick={() => fetchPageData(true, true)}
-        disabled={refreshing}
+        onClick={() => void fetchPageData(false, true)}
+        disabled={refreshing || stateLoading}
         className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
       >
-        <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+        <RefreshCw className={`h-4 w-4 ${refreshing || stateLoading ? "animate-spin" : ""}`} />
         Refresh
       </button>
     </div>
@@ -813,7 +869,21 @@ python scripts/run_optimized_autopilot.py --from-step 2`}</pre>
   );
 
   return (
-    <AppShell title="Auto-Pilot" subtitle="6-step automated baseline pipeline">
+    <AppShell
+      title="Auto-Pilot"
+      subtitle="6-step automated baseline pipeline"
+      actions={
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={refreshing || stateLoading}
+          onClick={() => void fetchPageData(false, true)}
+        >
+          <RefreshCw size={13} className={refreshing || stateLoading ? "animate-spin" : ""} />
+          Refresh
+        </button>
+      }
+    >
       {/* Tab bar */}
       <div className="mb-6 flex flex-wrap gap-1 border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2">
         {tabs.map(({ id, label, icon: Icon }) => (

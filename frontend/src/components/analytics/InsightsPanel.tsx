@@ -5,7 +5,10 @@ import FilterChipSelect from "@/components/ui/FilterChipSelect";
 import GenericHeatmap from "@/components/analytics/GenericHeatmap";
 import { DualLineChart, StackedLossChart, SimpleBarChart } from "@/components/analytics/InsightCharts";
 import api from "@/lib/api";
+import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 import { AlertTriangle } from "lucide-react";
+
+const INSIGHTS_BOOTSTRAP_KEY = "insights:bootstrap";
 
 type Bootstrap = {
   empty?: boolean;
@@ -60,13 +63,18 @@ function PreviewTable({ columns, rows, maxCols = 10 }: { columns: string[]; rows
 }
 
 export default function InsightsPanel() {
-  const [boot, setBoot] = useState<Bootstrap | null>(null);
-  const [week, setWeek] = useState("");
+  const [boot, setBoot] = useState<Bootstrap | null>(() =>
+    readSessionBootstrap(INSIGHTS_BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS),
+  );
+  const [week, setWeek] = useState(() => {
+    const c = readSessionBootstrap<Bootstrap>(INSIGHTS_BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS);
+    return c?.default_week || "";
+  });
   const [cities, setCities] = useState<string[]>([]);
   const [view, setView] = useState("executive");
   const [subView, setSubView] = useState("");
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readSessionBootstrap(INSIGHTS_BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS));
   const [viewLoading, setViewLoading] = useState(false);
 
   const [oaThr, setOaThr] = useState(120);
@@ -79,12 +87,23 @@ export default function InsightsPanel() {
   const [minWastage, setMinWastage] = useState(500);
 
   useEffect(() => {
+    const cached = readSessionBootstrap<Bootstrap>(INSIGHTS_BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS);
+    const apply = (data: Bootstrap) => {
+      setBoot(data);
+      if (data.default_week) setWeek(data.default_week);
+    };
+    if (cached) {
+      apply(cached);
+      setLoading(false);
+    }
     api.get<Bootstrap>("/api/insights/bootstrap")
       .then(({ data }) => {
-        setBoot(data);
-        if (data.default_week) setWeek(data.default_week);
+        apply(data);
+        writeSessionBootstrap(INSIGHTS_BOOTSTRAP_KEY, data);
       })
-      .catch(() => setBoot({ empty: true, message: "Failed to load insights metadata." }))
+      .catch(() => {
+        if (!cached) setBoot({ empty: true, message: "Failed to load insights metadata." });
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -131,7 +150,7 @@ export default function InsightsPanel() {
     if (week) loadView();
   }, [week, cities, view, subView, oaThr, uaThr, minPlan, topN, granularity, paretoDim, categoryFocus, minWastage, loadView]);
 
-  if (loading) return <span className="spinner" />;
+  if (loading && !boot) return <span className="spinner" />;
   if (boot?.empty) {
     return (
       <div className="alert alert-warning">

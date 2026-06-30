@@ -8,19 +8,22 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from app.auth_cookies import AUTH_COOKIE_NAME
 from planning_suite.db.engine import Database, get_shared_database
 
 _bearer = HTTPBearer(auto_error=False)
 
-def get_db() -> Database:
-    return get_shared_database()
-
 SECRET = os.getenv("AUTH_SECRET_KEY", "dev-insecure-auth-key-change-before-production")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_DAYS = float(os.getenv("AUTH_COOKIE_DAYS", "7"))
+
+
+def get_db() -> Database:
+    """Shared DB singleton — one engine per process (required for autopilot + cache coherence)."""
+    return get_shared_database()
 
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
@@ -49,19 +52,29 @@ def decode_token(token: str) -> dict:
 
 # ── FastAPI dependency ─────────────────────────────────────────────────────────
 
-def get_db() -> Database:
-    return Database()
+def _extract_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials],
+) -> str | None:
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    cookie = request.cookies.get(AUTH_COOKIE_NAME)
+    if cookie:
+        return cookie
+    return None
 
 
 def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict:
-    if not credentials:
+    token = _extract_token(request, credentials)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    return decode_token(credentials.credentials)
+    return decode_token(token)
 
 
 def require_write(user: dict = Depends(get_current_user)) -> dict:

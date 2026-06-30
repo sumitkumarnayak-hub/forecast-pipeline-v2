@@ -10,23 +10,26 @@ import RevenueTrendChart from "@/components/charts/RevenueTrendChart";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { cacheGet, cacheInvalidate, cacheSet } from "@/lib/queryCache";
+import { coerceNum } from "@/lib/coerceNum";
 import {
   RefreshCw, ExternalLink, AlertTriangle, ChevronDown, ChevronUp,
   TrendingUp, BarChart3, Package, Building2, MapPin,
 } from "lucide-react";
 
-function deltaCellStyle(v: number | null | undefined): React.CSSProperties {
-  if (v == null || Number.isNaN(v)) return { color: "var(--text-muted)" };
-  if (v >= 10) return { background: "rgba(16,185,129,0.25)", color: "#10b981", fontWeight: 600 };
-  if (v > 0) return { background: "rgba(16,185,129,0.1)", color: "#10b981" };
-  if (v <= -10) return { background: "rgba(239,68,68,0.25)", color: "#ef4444", fontWeight: 600 };
-  if (v < 0) return { background: "rgba(239,68,68,0.1)", color: "#ef4444" };
+function deltaCellStyle(v: unknown): React.CSSProperties {
+  const n = coerceNum(v);
+  if (n == null) return { color: "var(--text-muted)" };
+  if (n >= 10) return { background: "rgba(16,185,129,0.25)", color: "#10b981", fontWeight: 600 };
+  if (n > 0) return { background: "rgba(16,185,129,0.1)", color: "#10b981" };
+  if (n <= -10) return { background: "rgba(239,68,68,0.25)", color: "#ef4444", fontWeight: 600 };
+  if (n < 0) return { background: "rgba(239,68,68,0.1)", color: "#ef4444" };
   return { background: "var(--bg-elevated)", color: "var(--text-muted)" };
 }
 
-function fmtDelta(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+function fmtDelta(v: unknown): string {
+  const n = coerceNum(v);
+  if (n == null) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 }
 
 type PivotTable = { label_col: string; columns: string[]; rows: Record<string, unknown>[] };
@@ -51,9 +54,9 @@ function DeltaTable({ table, labelCol }: { table: PivotTable; labelCol: string }
                 return (
                   <td
                     key={c}
-                    style={isLabel ? { fontWeight: 600, whiteSpace: "nowrap" } : deltaCellStyle(v as number | null)}
+                    style={isLabel ? { fontWeight: 600, whiteSpace: "nowrap" } : deltaCellStyle(v)}
                   >
-                    {isLabel ? String(v ?? "") : fmtDelta(v as number | null)}
+                    {isLabel ? String(v ?? "") : fmtDelta(v)}
                   </td>
                 );
               })}
@@ -183,29 +186,49 @@ function applyBootstrapPayload(
   setters.skipTrendsFetch.current = true;
 }
 
+function dashboardCacheInit() {
+  const cached = cacheGet<DashboardBootstrap>(DASHBOARD_BOOTSTRAP_KEY);
+  if (!cached) return null;
+  const wkList = cached.weeks?.weeks || [];
+  const initialCities = (
+    (cached.revenue_trends?.filters as { all_cities?: string[] } | undefined)?.all_cities || []
+  ).slice(0, DEFAULT_CITIES_COUNT);
+  return {
+    pipelineCard: cached.pipeline_card,
+    weeks: wkList,
+    selectedWeek: cached.weeks?.default_week || wkList[wkList.length - 1] || "",
+    analytics: cached.analytics,
+    trends: cached.revenue_trends,
+    selCities: initialCities,
+  };
+}
+
 export default function DashboardPage() {
   const { user, hydrated, role } = useAuth();
-  const [pipelineCard, setPipelineCard] = useState<{ has_run: boolean; run_name?: string; status?: string } | null>(null);
-  const [weeks, setWeeks] = useState<string[]>([]);
-  const [selectedWeek, setSelectedWeek] = useState<string>("");
-  const [analytics, setAnalytics] = useState<any>(null);
-  const [shellLoading, setShellLoading] = useState(true);
+  const cached = dashboardCacheInit();
+  const [pipelineCard, setPipelineCard] = useState<{ has_run: boolean; run_name?: string; status?: string } | null>(
+    () => cached?.pipelineCard ?? null,
+  );
+  const [weeks, setWeeks] = useState<string[]>(() => cached?.weeks ?? []);
+  const [selectedWeek, setSelectedWeek] = useState<string>(() => cached?.selectedWeek ?? "");
+  const [analytics, setAnalytics] = useState<any>(() => cached?.analytics ?? null);
+  const [shellLoading, setShellLoading] = useState(() => !cacheGet(DASHBOARD_BOOTSTRAP_KEY));
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [trends, setTrends] = useState<any>(null);
+  const [trends, setTrends] = useState<any>(() => cached?.trends ?? null);
   const [trendsLoading, setTrendsLoading] = useState(false);
-  const [selCities, setSelCities] = useState<string[]>([]);
+  const [selCities, setSelCities] = useState<string[]>(() => cached?.selCities ?? []);
   const [selCats, setSelCats] = useState<string[]>([]);
   const [selDays, setSelDays] = useState<string[]>([]);
   const [dodView, setDodView] = useState("City");
   const [wowView, setWowView] = useState("City");
   const [showDodTable, setShowDodTable] = useState(false);
   const [showWowTable, setShowWowTable] = useState(false);
-  const [filtersReady, setFiltersReady] = useState(false);
+  const [filtersReady, setFiltersReady] = useState(() => !!cacheGet(DASHBOARD_BOOTSTRAP_KEY));
   const [opsReady, setOpsReady] = useState(false);
 
-  const skipTrendsFetch = useRef(true);
-  const filtersInit = useRef(false);
+  const skipTrendsFetch = useRef(!!cacheGet(DASHBOARD_BOOTSTRAP_KEY));
+  const filtersInit = useRef(!!cached?.selCities.length);
   const bootstrapSeq = useRef(0);
 
   const bootstrapSetters = useMemo(
@@ -309,6 +332,7 @@ export default function DashboardPage() {
 
   const handleWeekChange = (week: string) => {
     setSelectedWeek(week);
+    cacheInvalidate(DASHBOARD_BOOTSTRAP_KEY);
     loadWeekAnalytics(week);
   };
 
@@ -597,8 +621,11 @@ export default function DashboardPage() {
                         ₹{trends.week_on_week.latest_metrics.actual_revenue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
                       </div>
                       <div className="stat-sub">
-                        {trends.week_on_week.latest_metrics.pct_vs_plan >= 0 ? "+" : ""}
-                        {trends.week_on_week.latest_metrics.pct_vs_plan.toFixed(1)}% vs Plan
+                        {(() => {
+                          const pct = coerceNum(trends.week_on_week.latest_metrics.pct_vs_plan);
+                          if (pct == null) return "— vs Plan";
+                          return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% vs Plan`;
+                        })()}
                       </div>
                     </div>
                     <div className="stat-card">

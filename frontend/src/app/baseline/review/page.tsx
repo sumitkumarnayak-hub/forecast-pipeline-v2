@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import BaselineStepShell from "@/components/baseline/BaselineStepShell";
 import SectionCard from "@/components/baseline/SectionCard";
@@ -18,10 +18,36 @@ interface ComparisonData {
   row_count?: number;
 }
 
+type Thresholds = {
+  negStrong: number;
+  negMod: number;
+  posMod: number;
+  posStrong: number;
+};
+
+const DEFAULT_THRESHOLDS: Thresholds = {
+  negStrong: -20,
+  negMod: -10,
+  posMod: 10,
+  posStrong: 20,
+};
+
+function deltaStyle(val: unknown, t: Thresholds): CSSProperties {
+  const n = typeof val === "number" ? val : parseFloat(String(val));
+  if (Number.isNaN(n)) return {};
+  if (n <= t.negStrong) return { background: "rgba(239,68,68,0.15)" };
+  if (n <= t.negMod) return { background: "rgba(249,115,22,0.15)" };
+  if (n >= t.posStrong) return { background: "rgba(34,197,94,0.15)" };
+  if (n >= t.posMod) return { background: "rgba(245,158,11,0.15)" };
+  return {};
+}
+
 function ComparisonPanel({ view }: { view: string }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<ComparisonData | null>(null);
   const [msg, setMsg] = useState("");
+  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
+  const [dimFilter, setDimFilter] = useState("All");
 
   const load = useCallback(
     async (refresh = false) => {
@@ -32,6 +58,7 @@ function ComparisonPanel({ view }: { view: string }) {
           params: { view, refresh },
         });
         setData(res);
+        setDimFilter("All");
       } catch (e: unknown) {
         const err = e as { response?: { data?: { detail?: string } } };
         setMsg(err?.response?.data?.detail || "Failed to load comparison");
@@ -52,17 +79,93 @@ function ComparisonPanel({ view }: { view: string }) {
   if (!data?.rows?.length) return <p className="text-sm text-muted">No comparison rows for this view.</p>;
 
   const cols = data.columns || Object.keys(data.rows[0]);
+  const dimCol = cols.find(c => !["Previous Baseline", "Current Baseline", "Delta %"].includes(c)) || cols[0];
+  const dimValues = ["All", ...Array.from(new Set(data.rows.map(r => String(r[dimCol] ?? "")))).filter(Boolean).sort()];
+  const filtered =
+    dimFilter === "All" ? data.rows : data.rows.filter(r => String(r[dimCol]) === dimFilter);
+
+  const prevTot = filtered.reduce((s, r) => s + Number(r["Previous Baseline"] || 0), 0);
+  const currTot = filtered.reduce((s, r) => s + Number(r["Current Baseline"] || 0), 0);
+  const pctTot = prevTot ? Math.round(((currTot - prevTot) / prevTot) * 1000) / 10 : 0;
+
+  const downloadCsv = () => {
+    const header = cols.join(",");
+    const lines = filtered.map(r => cols.map(c => JSON.stringify(r[c] ?? "")).join(","));
+    const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `comparison-${view}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <>
+      <details className="mb-3">
+        <summary className="text-sm font-semibold cursor-pointer">Configure change thresholds</summary>
+        <div className="grid-4 gap-2 mt-2">
+          {(
+            [
+              ["negStrong", "Strong ↓ %", -20],
+              ["negMod", "Moderate ↓ %", -10],
+              ["posMod", "Moderate ↑ %", 10],
+              ["posStrong", "Strong ↑ %", 20],
+            ] as const
+          ).map(([key, label, def]) => (
+            <label key={key} className="text-xs">
+              {label}
+              <input
+                type="number"
+                className="form-input text-sm w-full mt-1"
+                value={thresholds[key]}
+                onChange={e => setThresholds(t => ({ ...t, [key]: Number(e.target.value) }))}
+              />
+            </label>
+          ))}
+        </div>
+      </details>
+
       {(data.current_file || data.previous_file) && (
         <p className="text-xs text-muted mb-3">
           Current: <strong>{data.current_file || "—"}</strong>
           {" · "}
           Previous: <strong>{data.previous_file || "—"}</strong>
           {" · "}
-          {data.row_count ?? data.rows.length} rows
+          {filtered.length} rows
         </p>
       )}
+
+      <div className="stat-grid grid-3 mb-3">
+        <div className="stat-card">
+          <div className="stat-label">Previous total</div>
+          <div className="stat-value">{prevTot.toLocaleString()}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Current total</div>
+          <div className="stat-value">{currTot.toLocaleString()}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Overall delta %</div>
+          <div className="stat-value">{pctTot >= 0 ? "+" : ""}{pctTot}%</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3 items-center">
+        <label className="text-xs">
+          Filter {dimCol}:{" "}
+          <select className="form-input text-sm" value={dimFilter} onChange={e => setDimFilter(e.target.value)}>
+            {dimValues.map(v => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={downloadCsv}>Download CSV</button>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => load(true)}>
+          <RefreshCw size={13} /> Rebuild cache
+        </button>
+      </div>
+
       <div className="table-wrap" style={{ maxHeight: 480, overflow: "auto" }}>
         <table>
           <thead>
@@ -73,10 +176,17 @@ function ComparisonPanel({ view }: { view: string }) {
             </tr>
           </thead>
           <tbody>
-            {data.rows.map((row, i) => (
+            {filtered.map((row, i) => (
               <tr key={i}>
                 {cols.map(c => (
-                  <td key={c} style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>
+                  <td
+                    key={c}
+                    style={{
+                      fontSize: "0.72rem",
+                      whiteSpace: "nowrap",
+                      ...(c === "Delta %" ? deltaStyle(row[c], thresholds) : {}),
+                    }}
+                  >
                     {String(row[c] ?? "—")}
                   </td>
                 ))}
@@ -85,9 +195,88 @@ function ComparisonPanel({ view }: { view: string }) {
           </tbody>
         </table>
       </div>
-      <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={() => load(true)}>
-        <RefreshCw size={13} /> Rebuild comparison cache
-      </button>
+    </>
+  );
+}
+
+function HubSkuComparisonPanel() {
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<ComparisonData & { metrics?: Record<string, number>; sheet_write?: Record<string, unknown> } | null>(null);
+  const [msg, setMsg] = useState("");
+
+  const load = async (refresh = true, writeSheet = false) => {
+    setLoading(true);
+    setMsg("");
+    try {
+      const { data: res } = await api.get("/api/baseline/review/hub-sku-comparison", {
+        params: { refresh, write_sheet: writeSheet },
+      });
+      setData(res);
+      if (writeSheet && res.sheet_write?.success) {
+        setMsg("Comparison written to Baseline tab in Google Sheet.");
+      } else if (writeSheet && res.sheet_write?.error) {
+        setMsg(`Sheet write failed: ${res.sheet_write.error}`);
+      }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg(err?.response?.data?.detail || "Failed to load comparison");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const m = data?.metrics;
+  const cols = data?.columns || [];
+  const rows = data?.rows || [];
+
+  return (
+    <>
+      <p className="text-xs text-muted mb-3">Hub × SKU Class Prod × Day — previous vs current baseline.</p>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => load(true, true)} disabled={loading}>
+          {loading ? "Loading…" : "Load comparison (+ write to sheet)"}
+        </button>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => load(false, false)} disabled={loading}>
+          Show cached
+        </button>
+      </div>
+      {msg && <div className="alert alert-info text-sm mb-3">{msg}</div>}
+      {m && (
+        <div className="stat-grid grid-3 mb-3">
+          <div className="stat-card">
+            <div className="stat-label">Previous total</div>
+            <div className="stat-value">{m.previous_total?.toLocaleString()}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Current total</div>
+            <div className="stat-value">{m.current_total?.toLocaleString()}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Overall delta %</div>
+            <div className="stat-value">{m.overall_delta_pct >= 0 ? "+" : ""}{m.overall_delta_pct}%</div>
+          </div>
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="table-wrap" style={{ maxHeight: 400, overflow: "auto" }}>
+          <table>
+            <thead>
+              <tr>{cols.map(c => <th key={c}>{c}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 500).map((row, i) => (
+                <tr key={i}>
+                  {cols.map(c => (
+                    <td key={c} style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>{String(row[c] ?? "—")}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {rows.length > 500 && <p className="text-xs text-muted mt-2">Showing first 500 of {rows.length} rows.</p>}
+        </div>
+      )}
     </>
   );
 }
@@ -265,6 +454,10 @@ function ReviewContent() {
             })()}
           </>
         )}
+      </SectionCard>
+
+      <SectionCard title="Base Plan: Previous vs Current">
+        <HubSkuComparisonPanel />
       </SectionCard>
 
       <SectionCard title="Multi-level Comparison">

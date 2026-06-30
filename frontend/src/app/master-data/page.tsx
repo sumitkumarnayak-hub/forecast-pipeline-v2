@@ -2,7 +2,7 @@
 import { Suspense, useCallback, useEffect, useState, useMemo } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { UrlTabs } from "@/components/ui/UrlTabs";
-import api from "@/lib/api";
+import api, { apiLong } from "@/lib/api";
 import { cacheGet, cacheInvalidate, cacheSet } from "@/lib/queryCache";
 import { useAuth } from "@/hooks/useAuth";
 import { downloadCsv } from "@/lib/downloadCsv";
@@ -23,8 +23,8 @@ export default function MasterDataPage() {
 
 function MasterDataPageInner() {
   const { canWrite } = useAuth();
-  const [history, setHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [history, setHistory] = useState<any[]>(() => cacheGet<any[]>("master:sync-history") ?? []);
+  const [baseLoading, setBaseLoading] = useState(false);
   const [msg, setMsg] = useState({ text: "", type: "" });
 
   // P Master State
@@ -33,7 +33,7 @@ function MasterDataPageInner() {
   const [pSearch, setPSearch] = useState("");
   const [pCategory, setPCategory] = useState("All");
 
-  // P-H Master State
+  const [phMeta, setPhMeta] = useState<{ total_rows?: number; truncated?: boolean }>({});
   const [phData, setPhData] = useState<{ rows: any[]; columns: string[] }>({ rows: [], columns: [] });
   const [phLoading, setPhLoading] = useState(false);
   const [phSearch, setPhSearch] = useState("");
@@ -68,26 +68,37 @@ function MasterDataPageInner() {
   const [syncingInv, setSyncingInv] = useState(false);
 
   // Snapshot Rollback State
-  const [runs, setRuns] = useState<any[]>([]);
+  const [runs, setRuns] = useState<any[]>(() => cacheGet<any[]>("master:snapshot-runs") ?? []);
   const [selectedRun, setSelectedRun] = useState("");
   const [confirmRollback, setConfirmRollback] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
+  const [legacyTypes, setLegacyTypes] = useState<{ id: string; label: string }[]>(
+    () => cacheGet<{ id: string; label: string }[]>("master:legacy-sync-types") ?? [],
+  );
+  const [legacyBusy, setLegacyBusy] = useState("");
+
   const loadBaseData = async () => {
-    setLoading(true);
+    setBaseLoading(true);
     try {
-      const [hist, hc, rns] = await Promise.all([
+      const [hist, hc, rns, legacy] = await Promise.all([
         api.get("/api/master-data/sync-history"),
         api.get("/api/master-data/hub-changes"),
         api.get("/api/master-data/snapshot-runs"),
+        api.get("/api/master-data/legacy-sync-types"),
       ]);
       setHistory(hist.data);
       setHubChanges(hc.data);
       setEditedChanges(hc.data.rows || []);
       setRuns(rns.data || []);
+      setLegacyTypes(legacy.data || []);
+      cacheSet("master:sync-history", hist.data, 120_000);
+      cacheSet("master:hub-changes", hc.data, 120_000);
+      cacheSet("master:snapshot-runs", rns.data || [], 120_000);
+      cacheSet("master:legacy-sync-types", legacy.data || [], 120_000);
       if (rns.data?.length > 0) setSelectedRun(rns.data[0].id);
     } catch {}
-    setLoading(false);
+    setBaseLoading(false);
   };
 
   const loadSheet = useCallback(
@@ -97,6 +108,7 @@ function MasterDataPageInner() {
       apply: (data: { rows: any[]; columns: string[] }) => void,
       setBusy: (v: boolean) => void,
       force = false,
+      onMeta?: (data: Record<string, unknown>) => void,
     ) => {
       if (!force) {
         const cached = cacheGet<{ rows: any[]; columns: string[] }>(cacheKey);
@@ -112,12 +124,18 @@ function MasterDataPageInner() {
       }
 
       try {
-        const { data } = await api.get(path);
-        apply(data);
-        cacheSet(cacheKey, data, 180_000);
-      } catch {
+        const client = path.includes("ph-master") || path.includes("p-master") ? apiLong : api;
+        const { data } = await client.get(path, {
+          params: force ? { refresh: true } : undefined,
+        });
+        apply({ rows: data.rows || [], columns: data.columns || [] });
+        cacheSet(cacheKey, { rows: data.rows || [], columns: data.columns || [] }, 180_000);
+        onMeta?.(data);
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { detail?: string } }; message?: string };
+        const detail = err?.response?.data?.detail || err?.message || "Request failed";
         if (!cacheGet(cacheKey)) {
-          setMsg({ text: `❌ Failed to load ${cacheKey}`, type: "danger" });
+          setMsg({ text: `Failed to load ${cacheKey.replace("master:", "")}: ${detail}`, type: "danger" });
         }
       } finally {
         setBusy(false);
@@ -130,7 +148,9 @@ function MasterDataPageInner() {
     loadBaseData();
     // Prefetch master sheets in parallel — cached for instant tab switches
     void loadSheet("master:p-master", "/api/master-data/p-master", setPData, setPLoading);
-    void loadSheet("master:ph-master", "/api/master-data/ph-master", setPhData, setPhLoading);
+    void loadSheet("master:ph-master", "/api/master-data/ph-master", setPhData, setPhLoading, false, d =>
+      setPhMeta({ total_rows: d.total_rows as number, truncated: d.truncated as boolean }),
+    );
     void loadSheet("master:hub-master", "/api/master-data/hub-master", setHubData, setHubLoading);
   }, [loadSheet]);
 
@@ -140,7 +160,14 @@ function MasterDataPageInner() {
   };
 
   const loadPHMaster = async (force = false) => {
-    await loadSheet("master:ph-master", "/api/master-data/ph-master", setPhData, setPhLoading, force);
+    await loadSheet(
+      "master:ph-master",
+      "/api/master-data/ph-master",
+      setPhData,
+      setPhLoading,
+      force,
+      d => setPhMeta({ total_rows: d.total_rows as number, truncated: d.truncated as boolean }),
+    );
   };
 
   const loadHubMaster = async (force = false) => {
@@ -194,7 +221,7 @@ function MasterDataPageInner() {
   };
 
   const handleSyncExcel = async () => {
-    setLoading(true);
+    setBaseLoading(true);
     try {
       const { data } = await api.post("/api/master-data/sync");
       setMsg({ text: `✅ Excel Master synced successfully!`, type: "success" });
@@ -208,7 +235,23 @@ function MasterDataPageInner() {
     } catch (e: any) {
       setMsg({ text: `❌ ${e?.response?.data?.detail || "Excel sync failed"}`, type: "danger" });
     }
-    setLoading(false);
+    setBaseLoading(false);
+  };
+
+  const handleLegacySync = async (masterType: string) => {
+    setLegacyBusy(masterType);
+    try {
+      const { data } = await api.post(`/api/master-data/sync-legacy/${masterType}`);
+      setMsg({
+        text: `✅ ${data.detail} (${data.row_count?.toLocaleString?.() ?? data.row_count} rows)`,
+        type: "success",
+      });
+      loadBaseData();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({ text: err?.response?.data?.detail || "Legacy sync failed", type: "danger" });
+    }
+    setLegacyBusy("");
   };
 
   const handleSyncInventoryExcel = async () => {
@@ -342,7 +385,7 @@ function MasterDataPageInner() {
         )}
 
         {pData.rows?.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: "1rem", marginBottom: "1rem" }}>
+          <div className="layout-split-narrow mb-4">
             <div style={{ position: "relative" }}>
               <span style={{ position: "absolute", left: "0.85rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}>
                 <Search size={15} />
@@ -441,6 +484,13 @@ function MasterDataPageInner() {
           )}
         </div>
 
+        {phMeta.truncated && (
+          <div className="alert alert-info text-sm mb-3">
+            Showing {phData.rows?.length?.toLocaleString()} of {phMeta.total_rows?.toLocaleString()} rows (preview).
+            Use filters or CSV export for the visible subset. Full sheet sync uses Google Sheets directly.
+          </div>
+        )}
+
         {phData.rows?.length > 0 && (
           <div className="stat-grid" style={{ marginBottom: "1.5rem" }}>
             <div className="stat-card">
@@ -464,7 +514,7 @@ function MasterDataPageInner() {
 
         {phData.rows?.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "1rem" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 180px", gap: "1rem" }}>
+            <div className="layout-filter-row">
               <div style={{ position: "relative" }}>
                 <span style={{ position: "absolute", left: "0.85rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}>
                   <Search size={15} />
@@ -650,9 +700,27 @@ function MasterDataPageInner() {
         <p className="text-xs text-muted mb-4" style={{ lineHeight: 1.6 }}>
           Export the latest Google Sheets master sheets to a local file (`Product_Masters.xlsx`). This updates core reference databases on the server.
         </p>
-        <button className="btn btn-secondary text-sm" onClick={handleSyncExcel} disabled={loading || !canWrite}>
+        <button className="btn btn-secondary text-sm" onClick={handleSyncExcel} disabled={baseLoading || !canWrite}>
           📥 Sync Masters to Excel
         </button>
+      </div>
+
+      <div className="card" style={{ padding: "1.5rem" }}>
+        <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem", fontWeight: 700 }}>Legacy per-master sync</h4>
+        <p className="text-xs text-muted mb-3">Pull individual worksheets from Google Sheets (Streamlit legacy buttons).</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+          {legacyTypes.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={!canWrite || legacyBusy === t.id}
+              onClick={() => handleLegacySync(t.id)}
+            >
+              {legacyBusy === t.id ? "Syncing…" : t.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -707,7 +775,7 @@ function MasterDataPageInner() {
         )}
 
         {hubData.rows?.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+          <div className="grid-2 mb-4">
             <div>
               <select className="form-input text-sm" value={hubCity} onChange={e => setHubCity(e.target.value)}>
                 <option value="All">All Cities</option>
@@ -988,7 +1056,7 @@ function MasterDataPageInner() {
     <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
       <div className="card" style={{ padding: "1.5rem" }}>
         <h4 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>📜 Master Sync History</h4>
-        {loading ? (
+        {baseLoading && history.length === 0 ? (
           <div style={{ textAlign: "center", padding: "3.5rem" }}><span className="spinner" /></div>
         ) : history.length === 0 ? (
           <div className="text-xs text-muted text-center" style={{ padding: "2rem" }}>No sync history logs found.</div>
@@ -1033,7 +1101,7 @@ function MasterDataPageInner() {
           <div className="text-sm text-muted text-center" style={{ padding: "2rem" }}>No versioned master sync snapshots yet. Run Sync Masters first.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "1.25rem", alignItems: "flex-end" }}>
+            <div className="layout-split-sidebar">
               <div>
                 <label className="form-label" style={{ fontWeight: 600 }}>Select snapshot to restore:</label>
                 <select className="form-input text-sm" value={selectedRun} onChange={e => setSelectedRun(e.target.value)}>
@@ -1082,8 +1150,8 @@ function MasterDataPageInner() {
       title="Master Data"
       subtitle="Demand planning masters, inventory buffer, sync history"
       actions={
-        <button className="btn btn-secondary btn-sm" onClick={loadBaseData} disabled={loading}>
-          <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
+        <button className="btn btn-secondary btn-sm" onClick={loadBaseData} disabled={baseLoading}>
+          <RefreshCw size={13} className={baseLoading ? "animate-spin" : ""} /> Refresh
         </button>
       }
     >

@@ -4,8 +4,9 @@ FastAPI entry point for the Planning Suite backend.
 All existing business logic lives in src/planning_suite/ — untouched.
 This file only wires up routes, CORS, lifespan, and the DB init.
 """
-import sys
+import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,24 +20,54 @@ if str(SRC_DIR) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(BACKEND_DIR / ".env")
 
+from app.logging_config import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
+_sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[
+            FastApiIntegration(),
+            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+        environment=os.getenv("APP_ENV", "development"),
+        release=os.getenv("APP_RELEASE", "planning-suite@2.0.0"),
+    )
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.middleware import RequestContextMiddleware
 from app.routers import auth, dashboard, master_data, baseline, autopilot
-from app.routers import final_plan, new_product_launch, insights, settings, validation
+from app.routers import final_plan, new_product_launch, insights, settings, validation, demo_filter
+
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure DB tables exist on startup (uses existing Database().init_db())
     try:
         from planning_suite.db.engine import get_shared_database
         db = get_shared_database()
         db.init_database()
-        print("[startup] Database initialised OK", flush=True)
+        logger.info("Database initialised")
     except Exception as exc:
-        print(f"[startup] DB init warning: {exc}", flush=True)
+        logger.warning("DB init warning: %s", exc)
     yield
 
 
@@ -47,13 +78,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS (allow Next.js dev server) ───────────────────────────────────────────
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,6 +94,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     """Return JSON errors with CORS headers (avoids browser 'CORS' masking of 500s)."""
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -79,6 +108,7 @@ app.include_router(new_product_launch.router, prefix="/api/new-product-launch", 
 app.include_router(insights.router,           prefix="/api/insights",           tags=["Insights"])
 app.include_router(settings.router,           prefix="/api/settings",           tags=["Settings"])
 app.include_router(validation.router,         prefix="/api/validation",         tags=["Validation"])
+app.include_router(demo_filter.router,        prefix="/api/demo-filter",        tags=["Demo Filter"])
 
 
 @app.get("/api/health")

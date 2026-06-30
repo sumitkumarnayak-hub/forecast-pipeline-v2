@@ -141,6 +141,44 @@ def _streamlit_context_details() -> dict[str, str]:
     return details
 
 
+def _request_headers_details(headers: dict[str, str] | None) -> dict[str, str]:
+    """Best-effort request metadata from HTTP headers (FastAPI / reverse proxy)."""
+    if not headers:
+        return {}
+    details: dict[str, str] = {}
+    normalized = {str(k).lower(): str(v) for k, v in headers.items() if v}
+    for header_key, label in (
+        ("user-agent", "user_agent"),
+        ("host", "host"),
+        ("x-forwarded-for", "forwarded_for"),
+        ("accept-language", "accept_language"),
+    ):
+        value = normalized.get(header_key)
+        if value:
+            details[label] = value
+    return details
+
+
+def collect_system_details_api(
+    *,
+    client_info: dict[str, str] | None = None,
+    request_headers: dict[str, str] | None = None,
+) -> str:
+    """
+    Build environment JSON for the Next.js API (no Streamlit dependency).
+    """
+    details: dict[str, str] = {}
+    details.update(_server_details())
+    details.update(_request_headers_details(request_headers))
+
+    for key, value in (client_info or {}).items():
+        if value is not None and str(value).strip():
+            details[f"client_{key}" if not key.startswith("client_") else key] = str(value)
+
+    details["captured_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return json.dumps(details, ensure_ascii=False)
+
+
 def collect_system_details(*, client_info: dict[str, str] | None = None) -> str:
     """
     Build a JSON snapshot of the environment at login time.

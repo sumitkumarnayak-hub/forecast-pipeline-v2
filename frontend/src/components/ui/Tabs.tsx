@@ -15,7 +15,7 @@ export function Tabs({ tabs, defaultTab }: TabsProps) {
   const [activeTab, setActiveTab] = useState(defaultTab || tabs[0].id);
 
   return (
-    <div style={{ width: "100%" }}>
+    <div style={{ width: "100%", minWidth: 0, maxWidth: "100%" }}>
       <div 
         className="tabs-scroll"
         style={{

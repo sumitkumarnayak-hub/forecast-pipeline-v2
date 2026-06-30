@@ -1,6 +1,7 @@
 /**
- * Auth helpers — token and user management in localStorage.
+ * Auth helpers — user profile in sessionStorage; JWT in httpOnly cookie (set by API).
  */
+import api from "./api";
 
 export interface User {
   id: number;
@@ -10,27 +11,21 @@ export interface User {
   role: "admin" | "planner" | "viewer";
 }
 
-const TOKEN_KEY = "ps_token";
 const USER_KEY = "ps_user";
 
-export function saveAuth(token: string, user: User) {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+export function saveUser(user: User) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export function clearAuth() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-}
-
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem(USER_KEY);
 }
 
 export function getUser(): User | null {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(USER_KEY);
+  const raw = sessionStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as User;
@@ -39,8 +34,29 @@ export function getUser(): User | null {
   }
 }
 
+/** Verify httpOnly session cookie via /me (also hydrates user cache). */
+export async function fetchSession(): Promise<User | null> {
+  try {
+    const { data } = await api.get<User>("/api/auth/me");
+    saveUser(data);
+    return data;
+  } catch {
+    clearAuth();
+    return null;
+  }
+}
+
 export function isAuthenticated(): boolean {
-  return !!getToken();
+  return !!getUser();
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api.post("/api/auth/logout");
+  } catch {
+    /* cookie may already be cleared */
+  }
+  clearAuth();
 }
 
 // RBAC helpers
@@ -50,7 +66,13 @@ export const canApprove = (role?: string) => role === "admin";
 export const isAdmin = (role?: string) => role === "admin";
 
 export const ALLOWED_PAGES: Record<string, string[]> = {
-  admin: ["Dashboard", "Baseline", "Master Data", "Product Launch", "Final Plan", "Analytics", "Settings"],
-  planner: ["Dashboard", "Baseline", "Master Data", "Product Launch", "Final Plan", "Analytics", "Settings"],
+  admin: [
+    "Dashboard", "Auto-Pilot", "Baseline", "Master Data", "Product Launch",
+    "Final Plan", "Validation", "Analytics", "Settings",
+  ],
+  planner: [
+    "Dashboard", "Auto-Pilot", "Baseline", "Master Data", "Product Launch",
+    "Final Plan", "Validation", "Analytics", "Settings",
+  ],
   viewer: ["Dashboard", "Master Data", "Analytics", "Settings"],
 };

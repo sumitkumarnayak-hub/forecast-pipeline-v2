@@ -23,8 +23,10 @@
 | 6 | Final Plan | `/final-plan` | Done |
 | 7 | Analytics (Insights + Reports) | `/analytics` | Done |
 | 8 | Validation | `/validation` | Done |
-| 9 | Settings | `/settings` | Mostly done |
-| — | Sidebar demo filter (admin) | Sidebar component | Not started |
+| 9 | Settings | `/settings` | Done |
+| — | Sidebar demo filter (admin) | Sidebar component | Done |
+
+**Migration status: complete** — all sidebar pages and extras migrated. Residual items are optional polish (autopilot message verbatim, NPL dry-run on Sync tab if Streamlit had it on a different sub-tab).
 
 ---
 
@@ -268,10 +270,13 @@
 - Email Settings (test send, recipients CRUD)
 - Session, About (system details save)
 
-### Next.js current state
+### Done
 
-- Preferences, env status, email recipients — mostly done
-- Missing: test email, system details, session tab
+- Five tabs — Profile, Preferences, Email Settings, Session, About
+- Single `GET /api/settings/bootstrap` with 120s client cache
+- Session tab: live client info from browser, save to `auth_sessions.system_details`
+- Email: SMTP status, test send to DB recipient, CRUD + edit, recent email log
+- Fixed preferences/recipient API (`save_user_preferences`, `create_email_recipient`)
 
 ---
 
@@ -279,11 +284,14 @@
 
 | Feature | Streamlit | Next.js |
 |---------|-----------|---------|
-| Role-based nav | `allowed_pages()` | `Sidebar.tsx` roles array |
-| Final Plan lock | Hidden until baseline approved | Lock icon on nav item |
-| Demo city filter (admin) | City selectbox + hub multiselect + badge | Not implemented |
-| Manual baseline caption | "follow steps 1 → 5" | Not shown |
+| Role-based nav | `allowed_pages()` | `Sidebar.tsx` + `rolesForPath()` redirect in `AppShell` |
+| Final Plan lock | Hidden until baseline approved | Hidden from nav until approved (all roles) |
+| Demo city filter (admin) | City selectbox + hub multiselect + badge | `DemoFilterPanel` in sidebar + generate banner |
+| Manual baseline caption | "follow steps 1 → 5" | Shown under Manual Baseline group |
 | Sign out | Auth manager panel | Sign Out button |
+| Review Hub×SKU comparison | Load + sheet write | `/api/baseline/review/hub-sku-comparison` |
+| Legacy master sync | Per-master buttons | Master Data → legacy sync button grid |
+| Approve → Final Plan | Continue nav | Footer link when approved |
 
 ---
 

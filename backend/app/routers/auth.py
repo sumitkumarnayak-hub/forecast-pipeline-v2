@@ -1,7 +1,8 @@
 """Auth router — login / logout / me."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from pydantic import BaseModel
 
+from app.auth_cookies import clear_auth_cookie, set_auth_cookie
 from app.deps import create_access_token, get_current_user, get_db
 from planning_suite.db.engine import Database
 from planning_suite.services.login_sync import load_user_preferences
@@ -16,17 +17,15 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    token: str
     user: dict
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(body: LoginRequest, db: Database = Depends(get_db)):
+def login(body: LoginRequest, response: Response, db: Database = Depends(get_db)):
     user = db.authenticate_user(body.username.strip(), body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    # Mirror what _complete_login does in Streamlit auth
     db.update_last_login(user["id"])
     try:
         load_user_preferences(user["id"], db)
@@ -34,7 +33,8 @@ def login(body: LoginRequest, db: Database = Depends(get_db)):
         pass
 
     token = create_access_token(user, remember_me=body.remember_me)
-    return LoginResponse(token=token, user=user)
+    set_auth_cookie(response, token, remember_me=body.remember_me)
+    return LoginResponse(user=user)
 
 
 @router.get("/me")
@@ -49,6 +49,6 @@ def me(current_user: dict = Depends(get_current_user), db: Database = Depends(ge
 
 
 @router.post("/logout")
-def logout(current_user: dict = Depends(get_current_user)):
-    # JWT is stateless — client simply discards the token
+def logout(response: Response):
+    clear_auth_cookie(response)
     return {"detail": "Logged out successfully"}

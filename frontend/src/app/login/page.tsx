@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import api from "@/lib/api";
-import { saveAuth } from "@/lib/auth";
+import { saveUser } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,7 +18,7 @@ export default function LoginPage() {
     setLoading(true); setError("");
     try {
       const { data } = await api.post("/api/auth/login", { username: username.trim(), password, remember_me: rememberMe });
-      saveAuth(data.token, data.user);
+      saveUser(data.user);
       router.replace("/dashboard");
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Invalid username or password.");

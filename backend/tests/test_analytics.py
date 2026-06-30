@@ -43,6 +43,26 @@ def test_insights_view_executive(client, auth_headers):
     assert resp.json()["kpis"]["plan_revenue"] == 100.0
 
 
+def test_revenue_trends_chart_x_keys_align():
+    """Chart x_values must match series point x keys (frontend joins on strict equality)."""
+    from planning_suite.services.dashboard_revenue_trends import build_revenue_trends
+
+    try:
+        payload = build_revenue_trends(dod_view="City")
+    except FileNotFoundError:
+        return
+    chart = payload.get("day_on_day", {}).get("chart")
+    if not chart:
+        return
+    for x in chart.get("x_values", []):
+        for series in chart.get("series", []):
+            if any(p["x"] == x for p in series.get("points", [])):
+                continue
+            for p in series.get("points", []):
+                if str(p["x"]).startswith(str(x)[:10]) and p["x"] != x:
+                    raise AssertionError(f"x format mismatch: {x!r} vs {p['x']!r}")
+
+
 def test_reports_city_revenue_trends(client, auth_headers):
     with patch(
         "planning_suite.services.dashboard_revenue_trends.build_revenue_trends",

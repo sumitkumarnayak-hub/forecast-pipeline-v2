@@ -15,6 +15,8 @@ from planning_suite.services.api_cache import CacheNS, cached, cache_invalidate
 router = APIRouter()
 
 _SHEET_TTL = 60.0
+_DEFAULT_PREVIEW_ROWS = 3000
+_MAX_PREVIEW_ROWS = 10_000
 
 
 def _read_master_worksheet(
@@ -23,22 +25,45 @@ def _read_master_worksheet(
     *,
     cache_key: str,
     refresh: bool = False,
+    limit: int | None = None,
 ) -> dict:
+    preview_limit = limit if limit is not None else _DEFAULT_PREVIEW_ROWS
+    preview_limit = max(100, min(int(preview_limit), _MAX_PREVIEW_ROWS))
+
     def factory() -> dict:
         gsm = get_sheets_manager()
         df = gsm.read_worksheet_to_df("demand_planning_masters", worksheet_key, range_notation)
-        if df is None or df.empty:
-            return {"rows": [], "columns": []}
+        if df is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not read {worksheet_key} from Google Sheets — check credentials and network.",
+            )
+        if df.empty:
+            return {"rows": [], "columns": [], "total_rows": 0, "truncated": False}
         df = clean_sheet_df(df)
-        return {"rows": df_to_records(df), "columns": list(df.columns)}
+        total = len(df)
+        if total > preview_limit:
+            df = df.head(preview_limit)
+        return {
+            "rows": df_to_records(df),
+            "columns": list(df.columns),
+            "total_rows": total,
+            "truncated": total > preview_limit,
+            "preview_limit": preview_limit,
+        }
 
-    return cached(
-        CacheNS.MASTER_SHEET,
-        cache_key,
-        factory,
-        ttl=_SHEET_TTL,
-        skip_cache=refresh,
-    )
+    try:
+        return cached(
+            CacheNS.MASTER_SHEET,
+            f"{cache_key}:limit={preview_limit}",
+            factory,
+            ttl=_SHEET_TTL,
+            skip_cache=refresh,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 # ── Sheets Reading ─────────────────────────────────────────────────────────────
 
@@ -46,39 +71,33 @@ def _read_master_worksheet(
 def get_p_master(
     current_user: dict = Depends(get_current_user),
     refresh: bool = Query(False),
+    limit: int = Query(_DEFAULT_PREVIEW_ROWS, ge=100, le=_MAX_PREVIEW_ROWS),
 ):
-    try:
-        return _read_master_worksheet(
-            "product_master", "A:K", cache_key="p-master", refresh=refresh
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _read_master_worksheet(
+        "product_master", "A:K", cache_key="p-master", refresh=refresh, limit=limit
+    )
 
 
 @router.get("/ph-master")
 def get_ph_master(
     current_user: dict = Depends(get_current_user),
     refresh: bool = Query(False),
+    limit: int = Query(_DEFAULT_PREVIEW_ROWS, ge=100, le=_MAX_PREVIEW_ROWS),
 ):
-    try:
-        return _read_master_worksheet(
-            "product_hub_master", "A:AX", cache_key="ph-master", refresh=refresh
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _read_master_worksheet(
+        "product_hub_master", "A:AX", cache_key="ph-master", refresh=refresh, limit=limit
+    )
 
 
 @router.get("/hub-master")
 def get_hub_master(
     current_user: dict = Depends(get_current_user),
     refresh: bool = Query(False),
+    limit: int = Query(_DEFAULT_PREVIEW_ROWS, ge=100, le=_MAX_PREVIEW_ROWS),
 ):
-    try:
-        return _read_master_worksheet(
-            "hub_mapping", "A:F", cache_key="hub-master", refresh=refresh
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _read_master_worksheet(
+        "hub_mapping", "A:F", cache_key="hub-master", refresh=refresh, limit=limit
+    )
 
 
 @router.get("/inventory-buffer")
@@ -314,6 +333,52 @@ def get_sync_history(
 
 
 # ── Master sync trigger ────────────────────────────────────────────────────────
+
+LEGACY_MASTER_TYPES = {
+    "cluster_mapping": "Cluster mapping",
+    "avl_flag": "Availability flag",
+    "outlier": "Outlier",
+    "city_drops": "City drops",
+    "percentile": "Percentile",
+    "hub_sku_master": "Hub SKU master",
+    "sell_through": "Sell through",
+    "hub_changes": "Hub changes",
+}
+
+
+@router.get("/legacy-sync-types")
+def list_legacy_sync_types(current_user: dict = Depends(get_current_user)):
+    return [{"id": k, "label": v} for k, v in LEGACY_MASTER_TYPES.items()]
+
+
+@router.post("/sync-legacy/{master_type}")
+def sync_legacy_master(
+    master_type: str,
+    current_user: dict = Depends(require_write),
+    db: Database = Depends(get_db),
+):
+    if master_type not in LEGACY_MASTER_TYPES:
+        raise HTTPException(status_code=404, detail=f"Unknown master type: {master_type}")
+    try:
+        gsm = get_sheets_manager()
+        df = gsm.sync_master_data(master_type)
+        row_count = len(df) if df is not None else 0
+        user_id = int(current_user["sub"])
+        db.log_master_sync({
+            "master_type": master_type,
+            "user_id": user_id,
+            "records_synced": row_count,
+            "status": "success" if df is not None else "empty",
+        })
+        return {
+            "detail": f"{LEGACY_MASTER_TYPES[master_type]} synced",
+            "master_type": master_type,
+            "row_count": row_count,
+            "columns": list(df.columns) if df is not None and not df.empty else [],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @router.post("/sync")
 def trigger_master_sync(

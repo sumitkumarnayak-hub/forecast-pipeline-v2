@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import BaselineStepShell from "@/components/baseline/BaselineStepShell";
 import SectionCard from "@/components/baseline/SectionCard";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
-import { CheckCircle, RefreshCw, ThumbsDown, ThumbsUp, XCircle } from "lucide-react";
+import { CheckCircle, ChevronRight, RefreshCw, ThumbsDown, ThumbsUp, XCircle } from "lucide-react";
 
 interface HubSuggestionData {
   source?: string;
@@ -140,7 +141,7 @@ export default function ApprovePage() {
         >
           <RefreshCw size={13} className={hubLoading ? "animate-spin" : ""} /> Load / Refresh
         </button>
-        <div className="stat-grid mb-4" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+        <div className="stat-grid grid-4 mb-4">
           <div className="stat-card">
             <div className="stat-label">Total Base Plan</div>
             <div className="stat-value">{m ? m.total_base_plan.toLocaleString() : "—"}</div>
@@ -268,6 +269,15 @@ export default function ApprovePage() {
           <p className="text-sm text-muted">You do not have permission to approve the baseline.</p>
         )}
       </SectionCard>
+
+      {status?.approved && (
+        <div className="mt-8 flex justify-end border-t pt-6" style={{ borderColor: "var(--border)" }}>
+          <Link href="/final-plan" className="btn btn-primary">
+            Continue to Final Plan
+            <ChevronRight className="h-4 w-4" />
+          </Link>
+        </div>
+      )}
     </BaselineStepShell>
   );
 }

@@ -323,6 +323,20 @@ def review_comparison(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/review/hub-sku-comparison")
+def review_hub_sku_comparison(
+    refresh: bool = Query(False),
+    write_sheet: bool = Query(False),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return wave.load_hub_sku_day_comparison(refresh=refresh, write_sheet=write_sheet)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/approve/hub-suggestion")
 def approve_hub_suggestion(
     refresh: bool = Query(False),

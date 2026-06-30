@@ -11,6 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { coerceNum } from "@/lib/coerceNum";
 
 export type TrendChartPayload = {
   title: string;
@@ -44,18 +45,24 @@ function sortXValues(values: string[], xLabel: string): string[] {
   return unique.sort();
 }
 
+function normalizeX(x: string, xLabel: string): string {
+  if (xLabel === "Date" && x.includes("T")) return x.split("T")[0];
+  return x;
+}
+
 function buildChartRows(chart: TrendChartPayload) {
   const fromSeries = chart.series.flatMap(s => s.points.map(p => p.x));
-  const xValues = chart.x_values?.length
+  const xValues = (chart.x_values?.length
     ? chart.x_values
-    : sortXValues(fromSeries, chart.x_label);
+    : sortXValues(fromSeries, chart.x_label)
+  ).map(x => normalizeX(String(x), chart.x_label));
 
   return xValues.map(x => {
     const row: Record<string, string | number | null> = { x };
     chart.series.forEach((s, i) => {
-      const pt = s.points.find(p => p.x === x);
-      row[`a_${i}`] = pt?.actual ?? null;
-      row[`p_${i}`] = pt?.plan ?? null;
+      const pt = s.points.find(p => normalizeX(String(p.x), chart.x_label) === x);
+      row[`a_${i}`] = coerceNum(pt?.actual);
+      row[`p_${i}`] = coerceNum(pt?.plan);
     });
     return row;
   });
@@ -83,8 +90,8 @@ function TrendTooltip({ active, payload, label, chart }: TooltipProps) {
   if (!active || !payload?.length || label == null) return null;
 
   const groups = chart.series.map((s, i) => {
-    const actual = payload.find(p => p.dataKey === `a_${i}`)?.value;
-    const plan = payload.find(p => p.dataKey === `p_${i}`)?.value;
+    const actual = coerceNum(payload.find(p => p.dataKey === `a_${i}`)?.value);
+    const plan = coerceNum(payload.find(p => p.dataKey === `p_${i}`)?.value);
     if (actual == null && plan == null) return null;
     return { name: s.group, color: s.color, actual, plan };
   }).filter(Boolean) as { name: string; color: string; actual?: number; plan?: number }[];

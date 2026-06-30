@@ -133,8 +133,8 @@ function PreviewTable({
 
 export default function FinalPlanPage() {
   const { canWrite } = useAuth();
-  const [boot, setBoot] = useState<FinalPlanBootstrap | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [boot, setBoot] = useState<FinalPlanBootstrap | null>(() => readBootstrapCache());
+  const [loading, setLoading] = useState(() => !readBootstrapCache());
   const [syncing, setSyncing] = useState("");
   const [uploading, setUploading] = useState("");
   const [running, setRunning] = useState(false);
@@ -144,15 +144,13 @@ export default function FinalPlanPage() {
 
   const load = useCallback(async (opts?: { force?: boolean }) => {
     const seq = ++loadSeq.current;
-    if (!opts?.force) {
-      const cached = readBootstrapCache();
-      if (cached) {
-        setBoot(cached);
-        setLoading(false);
-        return;
-      }
+    const cached = !opts?.force ? readBootstrapCache() : null;
+    if (cached) {
+      setBoot(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
     }
-    setLoading(true);
     try {
       const { data } = await api.get<FinalPlanBootstrap>("/api/final-plan/bootstrap");
       if (seq !== loadSeq.current) return;
@@ -161,8 +159,10 @@ export default function FinalPlanPage() {
       setMsg({ text: "", type: "" });
     } catch (e: unknown) {
       if (seq !== loadSeq.current) return;
-      const err = e as { response?: { data?: { detail?: string } } };
-      setMsg({ text: err?.response?.data?.detail || "Failed to load Final Plan", type: "danger" });
+      if (!cached) {
+        const err = e as { response?: { data?: { detail?: string } } };
+        setMsg({ text: err?.response?.data?.detail || "Failed to load Final Plan", type: "danger" });
+      }
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
@@ -498,13 +498,13 @@ export default function FinalPlanPage() {
           <>
             <p className="text-sm mb-2">
               <strong>{String(output.file)}</strong> — {Number(output.rows).toLocaleString()} rows
-              {output.validation && (
+              {output.validation ? (
                 <span
-                  className={`badge badge-${(output.validation as Record<string, unknown>).valid ? "green" : "red"} ml-2`}
+                  className={`badge badge-${(output.validation as { valid?: boolean }).valid ? "green" : "red"} ml-2`}
                 >
-                  {(output.validation as Record<string, unknown>).valid ? "Valid" : "Invalid"}
+                  {(output.validation as { valid?: boolean }).valid ? "Valid" : "Invalid"}
                 </span>
-              )}
+              ) : null}
             </p>
             <PreviewTable
               columns={(output.columns as string[]) || []}

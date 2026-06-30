@@ -23,6 +23,7 @@ function GenerateContent() {
   const [runs, setRuns] = useState<Record<string, unknown>[]>([]);
   const [targetWeek, setTargetWeek] = useState(28);
   const [targetYear, setTargetYear] = useState(2026);
+  const [demoFilter, setDemoFilter] = useState<{ active?: boolean; city?: string; hubs?: string[] } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +47,7 @@ function GenerateContent() {
 
   useEffect(() => {
     load();
+    api.get("/api/demo-filter").then(r => setDemoFilter(r.data)).catch(() => {});
   }, [load]);
 
   const fetchPrevious = async () => {
@@ -109,6 +111,15 @@ function GenerateContent() {
       )}
       {msg.text && <div className={`alert alert-${msg.type} mb-4`}>{msg.text}</div>}
 
+      {demoFilter?.active && (
+        <div className="alert alert-info text-sm mb-4">
+          <strong>Demo mode active</strong>
+          {demoFilter.city && demoFilter.city !== "All Cities" && <> — City: {demoFilter.city}</>}
+          {demoFilter.hubs && demoFilter.hubs.length > 0 && <> — Hubs: {demoFilter.hubs.join(", ")}</>}
+          . Baseline will run on the filtered dataset only.
+        </div>
+      )}
+
       {!active?.exists && (
         <div className="alert alert-warning text-sm mb-4">
           No active dataset — complete steps 1–2 first.
@@ -170,7 +181,7 @@ function GenerateContent() {
           )}
           {fetchingPrev ? "Fetching…" : "Fetch Previous Baseline"}
         </button>
-        {prevPreview?.preview_rows && Array.isArray(prevPreview.preview_rows) && (
+        {Array.isArray(prevPreview?.preview_rows) && (
           <div className="table-wrap mt-4" style={{ maxHeight: 280, overflow: "auto" }}>
             <table>
               <thead>

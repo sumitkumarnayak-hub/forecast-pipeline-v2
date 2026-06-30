@@ -56,7 +56,9 @@ export default function SyncPhTab() {
 
   return (
     <div className="card">
-      <p className="text-sm text-muted mb-3">Preview and confirm P-H Master writes for new product IDs.</p>
+      <p className="text-sm text-muted mb-3">
+        Preview and confirm P-H Master writes for new product IDs. Preview is a dry run — no sheet writes until you confirm.
+      </p>
       {msg.text && <div className={`alert alert-${msg.type} mb-3 text-sm`}>{msg.text}</div>}
       <textarea
         className="form-input mb-3"

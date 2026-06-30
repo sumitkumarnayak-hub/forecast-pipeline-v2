@@ -94,6 +94,21 @@ def _sort_x_values(values: list, x_col: str) -> list:
     return sorted(unique, key=lambda x: str(x))
 
 
+def _format_x_value(x_raw: object, x_col: str) -> str:
+    """Stable x keys for chart point lookup (date-only, no time component)."""
+    if x_col in ("date", "process_dt"):
+        try:
+            return pd.Timestamp(x_raw).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            pass
+    if hasattr(x_raw, "isoformat") and not isinstance(x_raw, str):
+        iso = x_raw.isoformat()
+        if x_col in ("date", "process_dt") and "T" in iso:
+            return iso.split("T", 1)[0]
+        return iso
+    return str(x_raw)
+
+
 def _series_payload(
     agg: pd.DataFrame,
     group_col: str,
@@ -115,7 +130,7 @@ def _series_payload(
         points = []
         for _, row in gdf.iterrows():
             x_raw = row[x_col]
-            x = x_raw.isoformat() if hasattr(x_raw, "isoformat") else str(x_raw)
+            x = _format_x_value(x_raw, x_col)
             points.append({
                 "x": x,
                 "actual": float(row["revenue"]) if pd.notna(row["revenue"]) else None,
@@ -130,7 +145,7 @@ def _series_payload(
     return {
         "title": title,
         "x_label": x_label,
-        "x_values": [v.isoformat() if hasattr(v, "isoformat") else str(v) for v in x_values],
+        "x_values": [_format_x_value(v, x_col) for v in x_values],
         "series": series,
     }
 

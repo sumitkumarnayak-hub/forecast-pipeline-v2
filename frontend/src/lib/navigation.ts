@@ -127,6 +127,23 @@ export const SIDEBAR_NAV: NavEntry[] = [
   },
   {
     type: "link",
+    id: "final-plan",
+    label: "Final Plan",
+    href: "/final-plan",
+    icon: ClipboardList,
+    roles: ["admin", "planner"],
+    lockUntilBaselineApproved: true,
+  },
+  {
+    type: "link",
+    id: "validation",
+    label: "Validation",
+    href: "/validation",
+    icon: ShieldCheck,
+    roles: ["admin", "planner"],
+  },
+  {
+    type: "link",
     id: "analytics",
     label: "Analytics",
     href: "/analytics",
@@ -140,23 +157,6 @@ export const SIDEBAR_NAV: NavEntry[] = [
     href: "/settings",
     icon: Settings,
     roles: ["admin", "planner", "viewer"],
-  },
-  {
-    type: "link",
-    id: "validation",
-    label: "Validation",
-    href: "/validation",
-    icon: ShieldCheck,
-    roles: ["admin", "planner"],
-  },
-  {
-    type: "link",
-    id: "final-plan",
-    label: "Final Plan",
-    href: "/final-plan",
-    icon: ClipboardList,
-    roles: ["admin", "planner"],
-    lockUntilBaselineApproved: true,
   },
 ];
 
@@ -246,3 +246,22 @@ export const PAGE_TAB_TREES = {
     ],
   },
 } as const;
+
+/** Resolve allowed roles for a pathname (longest prefix match). */
+export function rolesForPath(pathname: string): string[] | null {
+  const flat: NavLink[] = [];
+  for (const entry of SIDEBAR_NAV) {
+    if (entry.type === "link") flat.push(entry);
+    else flat.push(...entry.children);
+  }
+  flat.sort((a, b) => b.href.length - a.href.length);
+  for (const link of flat) {
+    if (pathname === link.href || pathname.startsWith(`${link.href}/`)) {
+      return link.roles;
+    }
+  }
+  if (pathname.startsWith("/baseline")) {
+    return ["admin", "planner"];
+  }
+  return null;
+}

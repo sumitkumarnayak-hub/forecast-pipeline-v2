@@ -580,13 +580,19 @@ def run_baseline_engine(*, user_id: int, target_week: int | None = None, target_
     if target_week is not None or target_year is not None:
         gsm.write_pipeline_params({"target_week": tw, "target_year": ty})
 
-    gen = _generator()
     _env = copy.copy(os.environ)
     _env["PYTHONIOENCODING"] = "utf-8"
     _env["PYTHONUTF8"] = "1"
 
-    with _silent_streamlit():
-        _active_ds, _env, filter_error = gen._prepare_demo_filter_dataset(_env)
+    from planning_suite.services.demo_filter_dataset import prepare_demo_filter_dataset
+    from planning_suite.services.demo_filter_store import get_demo_filter
+
+    _demo = get_demo_filter(user_id)
+    _active_ds, _env, filter_error, _demo_info = prepare_demo_filter_dataset(
+        _env,
+        demo_city=_demo.city,
+        demo_hubs=_demo.hubs,
+    )
     if filter_error:
         raise ValueError(filter_error)
 

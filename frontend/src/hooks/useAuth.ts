@@ -1,19 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { canApprove as roleCanApprove, canWrite as roleCanWrite, getUser, type User } from "@/lib/auth";
+import {
+  canApprove as roleCanApprove,
+  canWrite as roleCanWrite,
+  fetchSession,
+  getUser,
+  type User,
+} from "@/lib/auth";
 
 /**
  * Client auth state safe for SSR hydration.
- * Until `hydrated` is true, `readOnly` is true and `canWrite` is false so server HTML matches the first client paint.
+ * Until `hydrated` is true, `readOnly` is true and `canWrite` is false.
  */
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setUser(getUser());
-    setHydrated(true);
+    let cancelled = false;
+    const cached = getUser();
+    if (cached) setUser(cached);
+
+    void fetchSession().then((sessionUser) => {
+      if (cancelled) return;
+      setUser(sessionUser);
+      setHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const role = user?.role ?? "viewer";

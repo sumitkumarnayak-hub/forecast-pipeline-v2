@@ -47,7 +47,7 @@ export function UrlTabs({
   if (!tabs.length) return null;
 
   return (
-    <div className={className} style={{ width: "100%" }}>
+    <div className={className} style={{ width: "100%", minWidth: 0, maxWidth: "100%" }}>
       <div
         className="tabs-scroll"
         style={{
