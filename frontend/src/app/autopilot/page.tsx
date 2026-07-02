@@ -16,6 +16,7 @@ import {
   RotateCcw,
   CornerUpLeft,
   AlertCircle,
+  Link2,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -40,7 +41,12 @@ import {
   manualLinkForStepIndex,
   manualLinkForStepKey,
 } from "@/lib/autopilotManualLinks";
-import type { Bootstrap, UiStatus } from "@/app/autopilot/types";
+import type { Bootstrap, ManualSyncResult, StepRow, UiStatus } from "@/app/autopilot/types";
+import {
+  clearManualSyncCache,
+  fetchManualSync,
+  prefetchManualSync,
+} from "@/lib/autopilotManualSync";
 
 type TabId = "run" | "history" | "manual";
 
@@ -95,6 +101,12 @@ const STATUS_META: Record<string, { label: string; pill: string; node: string; I
     node: "bg-white border-slate-200 text-slate-600",
     Icon: Circle,
   },
+  manual_done: {
+    label: "Done (manual)",
+    pill: "bg-teal-100 text-teal-800 ring-1 ring-teal-200",
+    node: "bg-teal-50 border-teal-500 text-teal-800",
+    Icon: CheckCircle2,
+  },
 };
 
 function statusBanner(status: UiStatus) {
@@ -112,6 +124,31 @@ function statusBanner(status: UiStatus) {
 
 function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-lg bg-slate-200/80 ${className}`} />;
+}
+
+function mergeManualStepRows(
+  rows: StepRow[] | undefined,
+  manual: ManualSyncResult | null,
+  uiStatus: UiStatus,
+): StepRow[] {
+  if (!rows?.length) return rows || [];
+  if (!manual || uiStatus === "running") return rows;
+  const completed = new Set(manual.completed_steps);
+  return rows.map(row => {
+    if (row.status === "done" || row.status === "running" || row.status === "failed") {
+      return row;
+    }
+    if (completed.has(row.index)) {
+      const step = manual.steps.find(s => s.index === row.index);
+      return {
+        ...row,
+        status: "manual_done",
+        detail: step?.message || "Detected from manual workflow",
+        source: "manual",
+      };
+    }
+    return row;
+  });
 }
 
 export default function AutopilotPage() {
@@ -133,6 +170,9 @@ export default function AutopilotPage() {
   const [errorTrace, setErrorTrace] = useState("");
   const [loadError, setLoadError] = useState("");
   const [fromStep, setFromStep] = useState(0);
+  const [manualSync, setManualSync] = useState<ManualSyncResult | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncBanner, setSyncBanner] = useState("");
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchSeq = useRef(0);
@@ -310,11 +350,53 @@ export default function AutopilotPage() {
   useEffect(() => {
     void fetchBootstrap();
     void fetchRunState();
+    prefetchManualSync();
     return () => {
       esRef.current?.close();
       stopPolling();
     };
   }, [fetchBootstrap, fetchRunState, stopPolling]);
+
+  const applyManualSync = useCallback((data: ManualSyncResult, showBanner = true) => {
+    setManualSync(data);
+    if (data.suggested_from_step > 0 && data.suggested_from_step < 6) {
+      setFromStep(data.suggested_from_step);
+    } else if (data.completed_steps.length >= 6) {
+      setFromStep(5);
+    } else {
+      setFromStep(data.suggested_from_step);
+    }
+    if (showBanner) {
+      setSyncBanner(data.summary);
+    }
+  }, []);
+
+  const syncWithManual = useCallback(
+    async (refresh = false) => {
+      setSyncLoading(true);
+      try {
+        const data = await fetchManualSync({ refresh, preferCache: !refresh });
+        applyManualSync(data, true);
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { detail?: string } } };
+        setSyncBanner(err?.response?.data?.detail || "Manual sync failed");
+      } finally {
+        setSyncLoading(false);
+      }
+    },
+    [applyManualSync],
+  );
+
+  useEffect(() => {
+    if (readOnly) return;
+    void fetchManualSync({ preferCache: true })
+      .then(data => {
+        if (data.completed_steps.length > 0) {
+          applyManualSync(data, false);
+        }
+      })
+      .catch(() => {});
+  }, [readOnly, applyManualSync]);
 
   useEffect(() => {
     if (tab === "history" && !historyLoaded && !historyLoading) {
@@ -395,6 +477,9 @@ export default function AutopilotPage() {
     setMsg("");
     setErrorTrace("");
     setLoadError("");
+    setSyncBanner("");
+    setManualSync(null);
+    clearManualSyncCache();
     setBoot(prev => (prev ? { ...prev, ui_status: "running" } : prev));
     try {
       const { data } = await api.post("/api/autopilot/run", {
@@ -420,6 +505,16 @@ export default function AutopilotPage() {
   const total = boot.steps_config?.length ?? 6;
   const stepIdx = boot.step_idx ?? 0;
   const progress = boot.progress_pct ?? 0;
+  const displayRows = mergeManualStepRows(boot.step_rows, manualSync, uiStatus);
+  const manualDoneCount = manualSync?.completed_steps.length ?? 0;
+  const displayProgress =
+    uiStatus === "idle" && manualSync && manualDoneCount > 0
+      ? Math.min(100, Math.round((manualDoneCount / total) * 100))
+      : progress;
+  const displayStepIdx =
+    uiStatus === "idle" && manualSync && manualDoneCount > 0
+      ? manualSync.suggested_from_step
+      : Math.min(stepIdx, total);
   const failedStepIndex =
     boot.state?.failed_step != null ? Number(boot.state.failed_step) : null;
   const failedManualLink =
@@ -443,10 +538,21 @@ export default function AutopilotPage() {
               {[0, 1, 2, 3, 4, 5].map(n => (
                 <option key={n} value={n}>
                   Step {n + 1}
+                  {manualSync?.suggested_from_step === n && manualDoneCount > 0 ? " (suggested)" : ""}
                 </option>
               ))}
             </select>
           </div>
+          <button
+            type="button"
+            onClick={() => void syncWithManual(true)}
+            disabled={syncLoading}
+            className="inline-flex items-center gap-2 rounded-lg border border-teal-300 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-900 shadow-sm transition hover:bg-teal-100 disabled:opacity-50"
+            title="Detect steps completed via Manual Baseline / Master Data"
+          >
+            <Link2 className={`h-4 w-4 ${syncLoading ? "animate-pulse" : ""}`} />
+            {syncLoading ? "Syncing…" : "Sync manual progress"}
+          </button>
           <button
             type="button"
             onClick={() => startAction("run")}
@@ -525,6 +631,18 @@ export default function AutopilotPage() {
 
         {actionButtons}
 
+        {syncBanner && uiStatus === "idle" && (
+          <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+            <span className="font-semibold">Manual sync — </span>
+            {syncBanner}
+            {manualSync && manualSync.suggested_from_step < total && (
+              <span className="block mt-1 text-teal-800">
+                Ready to run from step {manualSync.suggested_from_step + 1}.
+              </span>
+            )}
+          </div>
+        )}
+
         {boot?.resume_step != null && uiStatus === "idle" && !readOnly && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             Previous run did not finish — resume from step {boot.resume_step + 1} without re-running earlier steps.
@@ -548,7 +666,7 @@ export default function AutopilotPage() {
             <div className="flex items-center gap-2">
               <span className={`text-sm font-bold ${banner.cls}`}>{banner.label}</span>
               <span className="text-sm text-slate-500">
-                {progress}% · {Math.min(stepIdx, total)}/{total}
+                {displayProgress}% · {Math.min(displayStepIdx, total)}/{total}
               </span>
             </div>
             <code className="rounded bg-white px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
@@ -560,14 +678,14 @@ export default function AutopilotPage() {
         <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-100">
           <div
             className="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out"
-            style={{ width: `${progress}%` }}
+            style={{ width: `${displayProgress}%` }}
           />
         </div>
 
         {/* Pipeline nodes — Streamlit-style horizontal stepper */}
         <div className="mt-6 flex items-stretch gap-0 overflow-x-auto pb-2">
           {boot?.steps_config?.map((cfg, i) => {
-            const row = boot.step_rows?.[i];
+            const row = displayRows?.[i];
             const vis = row?.status || "ready";
             const meta = STATUS_META[vis] || STATUS_META.ready;
             const StepIcon = STEP_ICONS[cfg.icon] || ClipboardList;
@@ -601,7 +719,7 @@ export default function AutopilotPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {boot?.step_rows?.map(row => {
+              {displayRows?.map(row => {
                 const meta = STATUS_META[row.status] || STATUS_META.ready;
                 const manual = manualLinkForStepKey(row.key);
                 return (

@@ -97,7 +97,13 @@ function MasterDataPageInner() {
       cacheSet("master:snapshot-runs", rns.data || [], 120_000);
       cacheSet("master:legacy-sync-types", legacy.data || [], 120_000);
       if (rns.data?.length > 0) setSelectedRun(rns.data[0].id);
-    } catch {}
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setMsg({
+        text: err?.response?.data?.detail || "Failed to load master data metadata",
+        type: "danger",
+      });
+    }
     setBaseLoading(false);
   };
 

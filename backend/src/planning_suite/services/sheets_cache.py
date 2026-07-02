@@ -23,11 +23,15 @@ def _ttl(name: str, default: int) -> int:
 
 DEFAULT_TTL_SECONDS: dict[str, int] = {
     "P Master": _ttl("masters", 1800),
+    "P-L Master": _ttl("masters", 1800),
     "P-H Master": _ttl("masters", 1800),
     "Hub Mapping": _ttl("masters", 1800),
     "HTT Mapping": _ttl("masters", 1800),
     "Hub_Changes": _ttl("pipeline_params", 300),
     "Variables": _ttl("pipeline_params", 300),
+    "Submission_Log": _ttl("npl_log", 300),
+    "Hub level Suggestion": _ttl("dp_logics", 1800),
+    "Launch_Output": _ttl("npl_log", 300),
 }
 
 WORKSHEET_TTL_BY_CATEGORY: dict[str, int] = {

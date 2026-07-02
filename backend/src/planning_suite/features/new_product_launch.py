@@ -146,8 +146,22 @@ def _open_sheet(spreadsheet_id: str, sheet_name: str):
 # ──────────────────────────────────────────────────────────────────
 
 def load_product_master() -> pd.DataFrame:
-    sheet = _open_sheet(MASTER_FILE_ID, MASTER_SHEET_NAME)
-    data  = sheet.get_values("B:N")
+    from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
+
+    def _fetch():
+        from planning_suite.services.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(MASTER_FILE_ID, MASTER_SHEET_NAME)
+            return sheet.get_values("B:N")
+
+    data = read_sheet_values_cached(
+        MASTER_FILE_ID,
+        MASTER_SHEET_NAME,
+        "B:N",
+        sheet_category="demand_planning_masters",
+        fetcher=_fetch,
+    )
     if len(data) < 2:
         return pd.DataFrame()
     df = pd.DataFrame(data[1:], columns=data[0])
@@ -207,8 +221,22 @@ def get_product_info(df_master: pd.DataFrame, product_id: str) -> dict:
 
 def load_salience_source() -> pd.DataFrame:
     """Load hub-level plan from Hub Level Planning sheet (Product parity)."""
-    sheet = _open_sheet(SPREADSHEET_ID, SALIENCE_SHEET_NAME)
-    data = sheet.get_values("A:F")
+    from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
+
+    def _fetch():
+        from planning_suite.services.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(SPREADSHEET_ID, SALIENCE_SHEET_NAME)
+            return sheet.get_values("A:F")
+
+    data = read_sheet_values_cached(
+        SPREADSHEET_ID,
+        SALIENCE_SHEET_NAME,
+        "A:F",
+        sheet_category="hub_level_planning",
+        fetcher=_fetch,
+    )
     if not data or len(data) < 2:
         return pd.DataFrame()
     df = pd.DataFrame(data[1:], columns=data[0])
@@ -601,9 +629,24 @@ def _ensure_log():
 
 
 def load_log() -> pd.DataFrame:
+    from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
+
     _ensure_log()
-    sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
-    data  = sheet.get_all_values()
+
+    def _fetch():
+        from planning_suite.services.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
+            return sheet.get_all_values()
+
+    data = read_sheet_values_cached(
+        SPREADSHEET_ID,
+        LOG_SHEET_NAME,
+        "all",
+        sheet_category="hub_level_planning",
+        fetcher=_fetch,
+    )
     if len(data) <= 1:
         return pd.DataFrame(columns=LOG_HEADERS)
     df = pd.DataFrame(data[1:], columns=data[0])
@@ -655,6 +698,15 @@ def save_to_log(rows_df: pd.DataFrame):
         _sanitize(rows_df),
         key_cols=["Submission_Type", "Product ID", "City", "Hub"],
     )
+    from planning_suite.services.npl_sheet_reads import invalidate_npl_sheet_cache
+
+    invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
+    try:
+        from planning_suite.services.api_cache import CacheNS, cache_invalidate
+
+        cache_invalidate(CacheNS.NPL_WIZARD)
+    except Exception:
+        pass
 
 
 def update_submission_status(sub_id: str, status: str, reason: str = ""):
@@ -683,6 +735,15 @@ def update_submission_status(sub_id: str, status: str, reason: str = ""):
                 })
     if batch_updates:
         sheet.batch_update(batch_updates)
+        from planning_suite.services.npl_sheet_reads import invalidate_npl_sheet_cache
+
+        invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
+        try:
+            from planning_suite.services.api_cache import CacheNS, cache_invalidate
+
+            cache_invalidate(CacheNS.NPL_WIZARD)
+        except Exception:
+            pass
 
 
 def _col_letter(col_idx: int) -> str:

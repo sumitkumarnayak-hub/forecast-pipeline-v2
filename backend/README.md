@@ -69,7 +69,8 @@ Base URL: `/api`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | None | Liveness check. Returns `{ status, service }`. |
+| `GET` | `/health` | None | Liveness — process up. |
+| `GET` | `/health/ready` | None | Readiness — database connectivity check (use for load balancers). |
 
 ---
 
@@ -108,7 +109,8 @@ Maps to Streamlit **Auto-Pilot** page (`optimized_baseline.display_autopilot_pag
 
 | Method | Path | Auth | Query / body | Response | Notes |
 |--------|------|------|--------------|----------|-------|
-| `POST` | `/run` | Write | `from_step=0` | `{ task_id }` | Starts 6-step `run_autopilot()` in a background thread. |
+| `GET` | `/manual-sync` | Bearer | `refresh?` | Detect manual workflow progress; suggests `from_step`. Cached 25s. |
+| `POST` | `/run` | Write | `from_step=0` | `{ task_id }` | Starts 6-step pipeline in a background thread. |
 | `GET` | `/status/{task_id}` | Bearer | — | Task object | Poll task `{ status, steps[], error }`. |
 | `GET` | `/stream/{task_id}` | None* | — | SSE stream | Real-time step events: `{ event: "step"|"completed"|"failed", ... }`. |
 | `GET` | `/state` | Bearer | — | JSON | Contents of `outputs/autopilot_state.json`. |
@@ -116,13 +118,15 @@ Maps to Streamlit **Auto-Pilot** page (`optimized_baseline.display_autopilot_pag
 
 \* SSE endpoint does not validate JWT today; task IDs are UUIDs. Frontend passes token via separate status polling.
 
-**Steps (in order):** master_sync → new_hub_launch → pull_raw_data → sync_config → run_engine → notify.
+**Steps (in order):** master_sync → new_product_launch → pull_raw_data → sync_config → run_engine → notify.
+
+Step labels and descriptions are defined once in `planning_suite/automation/autopilot_ui_config.py` (shared by runner + UI).
 
 ---
 
 ### Baseline (manual workflow) — `/api/baseline`
 
-Partial coverage of Streamlit manual steps **1–5** (`display_load_raw_data_page` … `display_approve_baseline_page`). Heavy operations (fetch raw data, run engine, review tables) still run in Streamlit logic but are **not yet** fully exposed as REST endpoints.
+Maps to Streamlit manual steps **1–5** (load raw data through approve baseline). REST endpoints cover status, runs, approve/reject, config, and step-specific operations via the baseline router.
 
 | Method | Path | Auth | Response | Notes |
 |--------|------|------|----------|-------|
@@ -132,7 +136,7 @@ Partial coverage of Streamlit manual steps **1–5** (`display_load_raw_data_pag
 | `POST` | `/reject` | Approve | `{ detail }` | Revokes approval state. |
 | `GET` | `/config` | Bearer | Path config | Masters XLSX, raw actuals, DP logics, outputs folder, params sheet URL. |
 
-**Streamlit parity gap:** Load raw data, configure params, generate baseline, review/validate tabs need dedicated endpoints wrapping `optimized_baseline.py` methods.
+Additional step endpoints (raw data pull, params sync, engine run, review tables) are exposed on the same router — see `/docs` for the full list.
 
 ---
 
@@ -155,13 +159,13 @@ Maps to Streamlit **Master Data** page tabs.
 | `POST` | `/sync` | Write | — | Trigger `run_master_data_sync()`. |
 | `GET` | `/hub-changes` | Bearer | — | Load editable Hub Changes dataframe. |
 | `POST` | `/hub-changes` | Write | `{ rows: object[] }` | Save Hub Changes back to sheet. |
-| `GET` | `/users` | Admin | — | List all users. |
+| `GET` | `/users` | Admin | — | List all users (includes `is_active`). Legacy — prefer `/api/settings/users`. |
 
 ---
 
 ### Final Plan — `/api/final-plan`
 
-Maps to Streamlit **Final Plan** page (not in sidebar until baseline approved).
+Maps to Streamlit **Final Plan** page (unlocked after baseline approval).
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
@@ -171,46 +175,46 @@ Maps to Streamlit **Final Plan** page (not in sidebar until baseline approved).
 | `POST` | `/sync-inventory` | Write | Sync inventory buffer sheet → Excel |
 | `GET` | `/config` | Bearer | FF inputs / inv logic folder paths |
 
-**Streamlit parity gap:** Hub suggestions, city mapping load, file upload, and **Run Final Plan** engine trigger are not yet API endpoints.
+Hub suggestions, mapping load, upload, and run-engine triggers are on this router — see Swagger `/docs`.
 
 ---
 
 ### Product Launch — `/api/new-product-launch`
 
-Maps to Streamlit **Product Launch** page.
+Maps to Streamlit **Product Launch** page (wizard, sync, submission history).
 
 | Method | Path | Auth | Body | Notes |
 |--------|------|------|------|-------|
-| `POST` | `/upload` | Write | multipart `file` (.xlsx) | Validates via `validate_npl_upload()`; returns Pandera result. |
-| `GET` | `/submissions` | Bearer | — | Launch_Output sheet rows (max 200). |
+| `GET` | `/context` | Bearer | — | Wizard bootstrap (categories, cities, masters) — cached |
+| `GET` | `/submission-log` | Bearer | `view=summary\|detail`, `submission_id?` | Submission_Log sheet (grouped summary or hub detail) |
+| `PATCH` | `/submissions/{id}/status` | Write/Approve | `{ status, reason? }` | Approve/reject/withdraw |
+| `POST` | `/upload` | Write | multipart `file` (.xlsx) | Validates via `validate_npl_upload()` |
 
-**Streamlit parity gap:** Dry-run sync, full new-product sync runner, and plan tabs need additional endpoints.
+NPL Google Sheet reads use parquet cache (`npl_sheet_reads.py`); warm-up runs on API startup. See `DATA_SOURCES.md`.
 
 ---
 
 ### Insights / Analytics — `/api/insights`
 
-Maps to Streamlit **Analytics → Insights** and partial dashboard 6w data.
+Maps to Streamlit **Analytics → Insights** and dashboard 6w data.
 
 | Method | Path | Auth | Query | Notes |
 |--------|------|------|-------|-------|
 | `GET` | `/availability-loss` | Bearer | `limit=500` | Avail Led Rev Loss worksheet. |
 | `GET` | `/6w-summary` | Bearer | — | Lightweight parquet sample from `outputs/6w_v3.parquet`. |
 
-**Streamlit parity gap:** Full 6w dashboard aggregates, Insights charts (RCA, pareto, OA/UA), and Reports section need expanded endpoints using `analytics_6w.py` (to be ported).
+Full dashboard aggregates are served from `/api/dashboard/analytics`.
 
 ---
 
 ### Validation — `/api/validation`
 
-Maps to Streamlit **Validation** page (admin/planner; not in sidebar nav but in `PAGE_ORDER`).
+Maps to Streamlit **Validation** page.
 
 | Method | Path | Auth | Body | Notes |
 |--------|------|------|------|-------|
 | `POST` | `/validate-baseline-output` | Write | multipart Excel | Pandera validation of baseline Summary file. |
 | `GET` | `/validation-logs` | Bearer | `limit=20` | Failed/warning rows from `master_sync_log`. |
-
-**Streamlit parity gap:** Input validation upload, master validation, and validate-latest-on-disk buttons.
 
 ---
 
@@ -220,14 +224,20 @@ Maps to Streamlit **Settings** page.
 
 | Method | Path | Auth | Body | Notes |
 |--------|------|------|------|-------|
-| `GET` | `/env-status` | Bearer | — | Redacted env summary (DB backend, SMTP, credentials path). |
+| `GET` | `/bootstrap` | Bearer | — | Profile, prefs, env, email recipients (admin), session |
+| `GET` | `/env-status` | Bearer | — | Redacted env summary |
 | `GET` | `/preferences` | Bearer | — | User preferences from DB. |
 | `POST` | `/preferences` | Bearer | `{ email_notifications?, auto_sync_masters?, preview_rows? }` | Update preferences. |
+| `GET` | `/users` | Admin | — | List users (`is_active`, roles). |
+| `POST` | `/users` | Admin | `{ username, password, full_name?, email?, role }` | Create user. |
+| `PATCH` | `/users/{user_id}` | Admin | `{ full_name?, email?, role?, is_active? }` | Update / deactivate. |
+| `POST` | `/users/{user_id}/reset-password` | Admin | `{ password }` | Reset password. |
 | `GET` | `/email-recipients` | Admin | — | Notification recipient list. |
 | `POST` | `/email-recipients` | Admin | `{ email, display_name?, category, enabled? }` | Add recipient. |
 | `DELETE` | `/email-recipients/{recipient_id}` | Admin | — | Remove recipient. |
+| `POST` | `/test-email` | Admin | `{ recipient_id?, to_email?, message? }` | Send test email. |
 
-**Streamlit parity gap:** Test email send, system details save, profile/session tabs.
+Inactive users cannot log in (`users.is_active = false`).
 
 ---
 
@@ -291,5 +301,7 @@ backend/
 ## Related docs
 
 - Root `README.md` — monorepo quick start
-- `MIGRATION.md` — phased Streamlit → Next.js UI parity checklist
-- Original Streamlit `agentContext.md` — business logic and architecture reference
+- `MIGRATION.md` — Streamlit → Next.js parity checklist (**complete**)
+- `DATA_SOURCES.md` — Sheets vs DB vs local files
+- `PRODUCT_GAPS.md` — remaining optional gaps
+- `OPS_RUNBOOK.md` — production operations

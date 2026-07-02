@@ -681,11 +681,17 @@ class OptimizedBaselineGenerator:
             }
 
         if step_idx == 3:
+            import os as _os
+
             os.makedirs(DP_LOGICS_FOLDER, exist_ok=True)
+            _skip_dp = _os.getenv("AUTOPILOT_SKIP_DP_SHEETS_IF_FRESH_HOURS", "").strip()
+            _max_local = float(_skip_dp) if _skip_dp else None
             sync_results = sheets.sync_dp_logics_worksheets_to_folder(
                 DP_LOGICS_FOLDER,
                 DP_LOGICS_WORKSHEET_NAMES,
                 allow_local_fallback=True,
+                parallel=True,
+                max_local_age_hours=_max_local,
             )
             local_used = [ws for ws, info in sync_results.items() if info.get("status") == "local"]
             metrics = {

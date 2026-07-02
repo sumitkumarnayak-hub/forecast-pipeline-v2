@@ -30,6 +30,12 @@ async def request_context_middleware(request: Request, call_next):
             },
         )
         response.headers["X-Request-Id"] = rid
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
     except Exception:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)

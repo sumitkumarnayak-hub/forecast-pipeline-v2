@@ -1,42 +1,51 @@
-"""Static Auto-Pilot UI config — no Streamlit / OptimizedBaselineGenerator import."""
+"""Static Auto-Pilot UI config — single source for step keys, labels, and descriptions."""
 from __future__ import annotations
 
 import os
 
 from planning_suite import config as cfg
 
-AUTOPILOT_STEPS_UI: list[dict[str, str]] = [
+AUTOPILOT_STEPS: list[dict[str, str]] = [
     {
+        "key": "master_sync",
         "name": "Step 1: Master Data Sync & Validation",
         "desc": "Read Google Sheets masters, run Polars validation, export to Product_Masters.xlsx.",
         "icon": "clipboard",
     },
     {
+        "key": "new_product_launch",
         "name": "Step 2: New Product Launch (P-H Master)",
         "desc": "Auto-discover new products in P Master and append P-H Master rows for all active hubs.",
         "icon": "rocket",
     },
     {
+        "key": "pull_raw_data",
         "name": "Step 3: Pull Raw Data",
         "desc": "Fetch the latest week of raw actuals from RDS cache and update the active Parquet dataset.",
         "icon": "download",
     },
     {
+        "key": "sync_config",
         "name": "Step 4: Sync Config Parameters",
         "desc": "Sync DP Logics worksheets (City_Cat, STF, Percentile, Avl_Flag, etc.) to local Excel.",
         "icon": "settings",
     },
     {
+        "key": "run_engine",
         "name": "Step 5: Run Baseline Engine",
         "desc": "Execute optimized_baseline_avail_correction.py on the active dataset.",
         "icon": "calculator",
     },
     {
+        "key": "notify",
         "name": "Step 6: Email Notification",
         "desc": "Send success notification when all prior steps complete.",
         "icon": "mail",
     },
 ]
+
+# Alias used by the REST bootstrap and frontend step cards.
+AUTOPILOT_STEPS_UI: list[dict[str, str]] = AUTOPILOT_STEPS
 
 
 def output_paths_reference() -> list[dict[str, str]]:

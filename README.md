@@ -43,3 +43,9 @@ npm run dev
 ```
 
 Visit [http://localhost:3000](http://localhost:3000) to log in and use the pipeline.
+
+## Production & onboarding
+
+- **Deploy:** See [`DEPLOY.md`](DEPLOY.md) (Vercel + Render + Postgres).
+- **Operations:** [`OPS_RUNBOOK.md`](OPS_RUNBOOK.md), [`DATA_SOURCES.md`](DATA_SOURCES.md).
+- **Team guide:** After login, open **About & Guide** in the sidebar (`/about`) for a plain-language walkthrough of the weekly workflow and each page.

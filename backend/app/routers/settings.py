@@ -272,3 +272,91 @@ def send_test_email_endpoint(
             raise HTTPException(status_code=400, detail=err)
         raise HTTPException(status_code=500, detail=err)
     return result
+
+
+# ── User management (admin only) ────────────────────────────────────────────────
+
+@router.get("/users")
+def list_users_admin(
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    try:
+        return {"users": db.list_users_admin()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: str = "planner"
+
+
+@router.post("/users")
+def create_user_admin(
+    body: UserCreate,
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    try:
+        user = db.create_user(
+            username=body.username,
+            password=body.password,
+            full_name=body.full_name,
+            email=body.email,
+            role=body.role,
+        )
+        return {"detail": f"User {body.username} created", "user": user}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@router.patch("/users/{user_id}")
+def update_user_admin(
+    user_id: int,
+    body: UserUpdate,
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return {"detail": "No changes"}
+    try:
+        user = db.update_user(user_id, **updates)
+        return {"detail": "User updated", "user": user}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class PasswordReset(BaseModel):
+    password: str
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password_admin(
+    user_id: int,
+    body: PasswordReset,
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    try:
+        db.reset_user_password(user_id, body.password)
+        return {"detail": "Password reset"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -43,39 +43,7 @@ from planning_suite.automation.autopilot_state import (
     log_autopilot_step,
     save_autopilot_state,
 )
-
-AUTOPILOT_STEPS: list[dict[str, str]] = [
-    {
-        "key": "master_sync",
-        "name": "Step 1: Master Data Sync & Validation",
-        "desc": "Read Google Sheets masters, validate, export to Product_Masters.xlsx.",
-    },
-    {
-        "key": "new_product_launch",
-        "name": "Step 2: New Product Launch (P-H Master)",
-        "desc": "Auto-discover new products in P Master and append P-H Master rows for active hubs.",
-    },
-    {
-        "key": "pull_raw_data",
-        "name": "Step 3: Pull Raw Data",
-        "desc": "Fetch latest week of raw actuals and update active_dataset.parquet.",
-    },
-    {
-        "key": "sync_config",
-        "name": "Step 4: Sync Config Parameters",
-        "desc": "Sync DP Logics worksheets to local Excel files.",
-    },
-    {
-        "key": "run_engine",
-        "name": "Step 5: Run Baseline Engine",
-        "desc": "Execute optimized_baseline_avail_correction.py (baseline engine).",
-    },
-    {
-        "key": "notify",
-        "name": "Step 6: Email Notification",
-        "desc": "Send baseline-completed notification email.",
-    },
-]
+from planning_suite.automation.autopilot_ui_config import AUTOPILOT_STEPS
 
 _ACTIVE_RUN_ID: str | None = None
 

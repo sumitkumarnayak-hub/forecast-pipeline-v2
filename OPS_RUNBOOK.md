@@ -48,8 +48,13 @@ Set `NEXT_PUBLIC_API_URL` to the internal backend URL used by Next rewrites at *
 
 ```bash
 curl -s http://localhost:8000/api/health
-# {"status":"ok","service":"Planning Suite API v2"}
+# {"status":"ok","service":"Planning Suite API v2",...}
+
+curl -s http://localhost:8000/api/health/ready
+# {"status":"ready","database":"postgresql",...}
 ```
+
+Use `/api/health/ready` for Render/Kubernetes readiness probes.
 
 ## Logs
 

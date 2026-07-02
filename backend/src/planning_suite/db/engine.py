@@ -127,6 +127,7 @@ class Database:
             self._migrate_auth_sessions(conn)
             self._migrate_session_id_columns(conn)
             self._migrate_pipeline_run_log_lines(conn)
+            self._migrate_users_is_active(conn)
         if not IS_PRODUCTION:
             self.create_default_users()
 
@@ -207,6 +208,27 @@ class Database:
             """)
         )
 
+    def _migrate_users_is_active(self, conn) -> None:
+        """Add is_active flag for account deactivation."""
+        if self.backend == "postgresql":
+            conn.execute(
+                text(
+                    "ALTER TABLE users "
+                    "ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL"
+                )
+            )
+            return
+
+        rows = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+        existing = {row[1] for row in rows}
+        if "is_active" not in existing:
+            conn.execute(
+                text(
+                    "ALTER TABLE users "
+                    "ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                )
+            )
+
     @staticmethod
     def _resolve_session_id(explicit: str | None = None) -> str | None:
         if explicit:
@@ -268,6 +290,8 @@ class Database:
             user = session.query(User).filter_by(username=username).first()
 
         if user and bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
+            if getattr(user, "is_active", True) is False:
+                return None
             return {
                 "id": user.id,
                 "username": user.username,
@@ -289,6 +313,8 @@ class Database:
 
         if not user:
             return None
+        if getattr(user, "is_active", True) is False:
+            return None
         return {
             "id": user.id,
             "username": user.username,
@@ -308,7 +334,122 @@ class Database:
             user = session.query(User).filter_by(id=user_id).first()
         if not user:
             return None
+        if getattr(user, "is_active", True) is False:
+            return None
         return self._row_to_user(user)
+
+    @staticmethod
+    def _user_admin_row(user) -> dict:
+        created = getattr(user, "created_at", None)
+        last_login = getattr(user, "last_login", None)
+        return {
+            "id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role,
+            "is_active": bool(getattr(user, "is_active", True)),
+            "created_at": created.isoformat() if created is not None else None,
+            "last_login": last_login.isoformat() if last_login is not None else None,
+        }
+
+    def list_users_admin(self) -> list[dict]:
+        from sqlalchemy.orm import Session
+        from planning_suite.db.models import User
+
+        with Session(self.engine) as session:
+            users = session.query(User).order_by(User.id).all()
+        return [self._user_admin_row(u) for u in users]
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        full_name: str | None,
+        email: str | None,
+        role: str,
+    ) -> dict:
+        import bcrypt
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session
+        from planning_suite.config import USER_ROLES
+        from planning_suite.db.models import User
+
+        if role not in USER_ROLES:
+            raise ValueError(f"Invalid role: {role}")
+        username = username.strip()
+        if not username or not password:
+            raise ValueError("Username and password are required")
+
+        password_hash = bcrypt.hashpw(
+            password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+
+        with Session(self.engine) as session:
+            user = User(
+                username=username,
+                password_hash=password_hash,
+                full_name=(full_name or "").strip() or None,
+                email=(email or "").strip() or None,
+                role=role,
+                is_active=True,
+            )
+            try:
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("Username already exists") from exc
+        return self._user_admin_row(user)
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        full_name: str | None = None,
+        email: str | None = None,
+        role: str | None = None,
+        is_active: bool | None = None,
+    ) -> dict:
+        from sqlalchemy.orm import Session
+        from planning_suite.config import USER_ROLES
+        from planning_suite.db.models import User
+
+        with Session(self.engine) as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                raise ValueError("User not found")
+            if full_name is not None:
+                user.full_name = full_name.strip() or None
+            if email is not None:
+                user.email = email.strip() or None
+            if role is not None:
+                if role not in USER_ROLES:
+                    raise ValueError(f"Invalid role: {role}")
+                user.role = role
+            if is_active is not None:
+                user.is_active = bool(is_active)
+            session.commit()
+            session.refresh(user)
+            return self._user_admin_row(user)
+
+    def reset_user_password(self, user_id: int, new_password: str) -> None:
+        import bcrypt
+        from sqlalchemy.orm import Session
+        from planning_suite.db.models import User
+
+        if not new_password:
+            raise ValueError("Password is required")
+        password_hash = bcrypt.hashpw(
+            new_password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+        with Session(self.engine) as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                raise ValueError("User not found")
+            user.password_hash = password_hash
+            session.commit()
 
     @staticmethod
     def _row_to_user(row) -> dict:

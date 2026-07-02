@@ -24,6 +24,9 @@ def get_active_sheets_manager() -> GoogleSheetsManager | None:
 
 def begin_pipeline_sheets_session() -> GoogleSheetsManager:
     """Start a new shared Sheets session (Auto-Pilot CLI/UI)."""
+    from planning_suite.services.sheets_throttle import begin_pipeline_throttle
+
+    begin_pipeline_throttle()
     global _cli_manager
     _cli_manager = GoogleSheetsManager()
     return _cli_manager
@@ -31,5 +34,8 @@ def begin_pipeline_sheets_session() -> GoogleSheetsManager:
 
 def end_pipeline_sheets_session() -> None:
     """Clear the shared Sheets session after a pipeline run."""
+    from planning_suite.services.sheets_throttle import end_pipeline_throttle
+
     global _cli_manager
     _cli_manager = None
+    end_pipeline_throttle()

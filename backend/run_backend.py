@@ -19,4 +19,11 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         reload_dirs=["app", "src"],
+        reload_excludes=[
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/outputs/**",
+            "**/*.parquet",
+            "**/*.sqlite",
+        ],
     )

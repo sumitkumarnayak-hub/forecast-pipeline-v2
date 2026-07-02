@@ -85,8 +85,30 @@ def dashboard_bootstrap(
                 "analytics": analytics,
                 "revenue_trends": revenue_trends,
             }
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+        except FileNotFoundError as exc:
+            state = load_autopilot_state()
+            if not state:
+                pipeline_card = {"has_run": False, "run_name": None, "status": None}
+            else:
+                if state.get("success"):
+                    status = "Success"
+                elif state.get("failed_step") is not None:
+                    status = "Failed"
+                else:
+                    status = "In progress"
+                pipeline_card = {
+                    "has_run": True,
+                    "run_name": (state.get("run_name") or "—")[:28],
+                    "status": status,
+                }
+            detail = str(exc)
+            return {
+                "pipeline_card": pipeline_card,
+                "weeks": {"weeks": [], "default_week": None},
+                "analytics": {"empty": True, "message": detail},
+                "revenue_trends": {"empty": True},
+                "data_warning": detail,
+            }
         except HTTPException:
             raise
         except Exception as exc:
@@ -118,10 +140,10 @@ def get_dashboard_weeks(current_user: dict = Depends(get_current_user)):
     """ISO week labels for the dashboard week selector."""
     try:
         return list_available_weeks()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except FileNotFoundError as exc:
+        return {"weeks": [], "default_week": None, "message": str(exc)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/analytics")
@@ -136,10 +158,10 @@ def get_dashboard_analytics(
         if not week_label:
             return {"empty": True, "message": "No data found in the 6-week rolling file."}
         return build_week_analytics(week_label)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except FileNotFoundError as exc:
+        return {"empty": True, "message": str(exc)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/revenue-trends")
@@ -163,10 +185,10 @@ def get_revenue_trends(
             dod_view=dod_view,
             wow_view=wow_view,
         )
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=describe_missing_6w_sources())
+    except FileNotFoundError as exc:
+        return {"empty": True, "message": str(exc)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/pipeline-flow")

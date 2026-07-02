@@ -17,6 +17,7 @@ import {
   Settings,
   ClipboardList,
   ShieldCheck,
+  BookOpen,
 } from "lucide-react";
 
 export interface NavLink {
@@ -156,6 +157,14 @@ export const SIDEBAR_NAV: NavEntry[] = [
     label: "Settings",
     href: "/settings",
     icon: Settings,
+    roles: ["admin", "planner", "viewer"],
+  },
+  {
+    type: "link",
+    id: "about",
+    label: "About & Guide",
+    href: "/about",
+    icon: BookOpen,
     roles: ["admin", "planner", "viewer"],
   },
 ];

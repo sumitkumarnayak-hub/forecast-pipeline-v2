@@ -5,6 +5,7 @@ import api from "@/lib/api";
 import { cacheGet, cacheSet } from "@/lib/queryCache";
 import { writeSessionBootstrap, readSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 import { prefetchNplBootstrap } from "@/lib/nplBootstrap";
+import { prefetchManualSync } from "@/lib/autopilotManualSync";
 import { SIDEBAR_NAV, type NavLink } from "@/lib/navigation";
 
 const inflight = new Map<string, Promise<void>>();
@@ -45,6 +46,7 @@ async function prefetchDashboard(): Promise<void> {
 }
 
 async function prefetchAutopilot(): Promise<void> {
+  prefetchManualSync();
   if (cacheGet(KEYS.autopilotShell)) return;
   await withConcurrencyLimit(async () => {
     const { data } = await api.get("/api/autopilot/bootstrap");

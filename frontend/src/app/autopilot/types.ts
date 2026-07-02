@@ -13,6 +13,25 @@ export interface StepRow {
   icon: string;
   status: string;
   detail: string;
+  source?: "autopilot" | "manual";
+}
+
+export interface ManualSyncStep {
+  index: number;
+  key: string;
+  name: string;
+  detected: boolean;
+  confidence: string;
+  message: string;
+  evidence: string;
+}
+
+export interface ManualSyncResult {
+  completed_steps: number[];
+  suggested_from_step: number;
+  steps: ManualSyncStep[];
+  summary: string;
+  checked_at: string;
 }
 
 export interface Bootstrap {

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -170,6 +171,42 @@ def write_masters_excel(
     return round(out_path.stat().st_size / 1024, 1)
 
 
+def _load_masters_from_local_excel(excel_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """Load the four master sheets from an on-disk Product_Masters.xlsx."""
+    path = Path(excel_path)
+    if not path.is_file() or path.stat().st_size < 4096:
+        return None
+    try:
+        xl = pd.ExcelFile(path)
+        sheets = {name.strip(): name for name in xl.sheet_names}
+
+        def _read(tab: str) -> pd.DataFrame:
+            actual = sheets.get(tab)
+            if not actual:
+                return pd.DataFrame()
+            return clean_sheet_df(pd.read_excel(xl, sheet_name=actual))
+
+        return (
+            _read("P Master"),
+            _read("HTT"),
+            _read("Hub Mapping"),
+            _read("P-H Master"),
+        )
+    except Exception:
+        return None
+
+
+def _fresh_masters_skip_hours() -> float | None:
+    raw = os.getenv("AUTOPILOT_SKIP_FRESH_MASTERS_HOURS", "").strip()
+    if not raw:
+        return None
+    try:
+        hours = float(raw)
+        return hours if hours > 0 else None
+    except ValueError:
+        return None
+
+
 def run_master_data_excel_sync(
     excel_path: str | Path | None = None,
     user_id: int | None = None,
@@ -204,10 +241,23 @@ def run_master_data_excel_sync(
         pass
 
     try:
-        p_df, htt_df, hub_df, ph_df = read_demand_planning_masters_from_sheets(
-            progress=progress,
-            sheets_manager=sheets_manager,
-        )
+        skip_hours = _fresh_masters_skip_hours()
+        loaded_local = False
+        if skip_hours is not None:
+            age_h = (time.time() - Path(excel_path).stat().st_mtime) / 3600 if Path(excel_path).is_file() else 999
+            if age_h <= skip_hours:
+                local = _load_masters_from_local_excel(excel_path)
+                if local is not None:
+                    p_df, htt_df, hub_df, ph_df = local
+                    loaded_local = True
+                    if progress:
+                        progress(f"Using fresh local masters ({age_h:.1f}h old) — skipped Sheets read", 0.75)
+
+        if not loaded_local:
+            p_df, htt_df, hub_df, ph_df = read_demand_planning_masters_from_sheets(
+                progress=progress,
+                sheets_manager=sheets_manager,
+            )
     except Exception as exc:
         result.error = f"Could not read from Google Sheets: {exc}"
         _record_versioning_failure(

@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { Tabs } from "@/components/ui/Tabs";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import {
   User,
+  Users,
   Settings,
   Mail,
   Monitor,
   Info,
+  BookOpen,
   PlusCircle,
   Trash2,
   RefreshCw,
@@ -19,6 +22,7 @@ import {
   Save,
 } from "lucide-react";
 import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
+import UsersAdminTab from "@/components/settings/UsersAdminTab";
 
 const DEFAULT_RECIPIENT_CATEGORIES: Record<string, string> = {
   all: "All notifications",
@@ -566,9 +570,27 @@ export default function SettingsPage() {
     </div>
   );
 
+  const usersTab = admin ? (
+    <UsersAdminTab onMessage={(text, type) => setMsg({ text, type })} />
+  ) : (
+    <div className="card" style={{ padding: "1.5rem" }}>
+      <p className="text-sm text-muted">Only administrators can manage users.</p>
+    </div>
+  );
+
   const aboutTab = (
-    <div className="card" style={{ padding: "1.5rem", maxWidth: 640 }}>
-      <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>About Planning Suite</h4>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 640 }}>
+      <div className="card" style={{ padding: "1.25rem 1.5rem" }}>
+        <h4 style={{ margin: "0 0 0.5rem", fontWeight: 700 }}>Team user guide</h4>
+        <p className="text-sm text-muted" style={{ margin: "0 0 1rem", lineHeight: 1.6 }}>
+          New to Planning Suite? Read the step-by-step guide: weekly workflow, page overview, roles, and troubleshooting.
+        </p>
+        <Link href="/about" className="btn btn-primary btn-sm">
+          <BookOpen size={14} /> Open About &amp; User Guide
+        </Link>
+      </div>
+      <div className="card" style={{ padding: "1.5rem" }}>
+      <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>System information</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", fontSize: "0.84rem" }}>
         <div><span className="text-muted">Application:</span> {boot?.about?.app_name || "Planning Suite"}</div>
         <div><span className="text-muted">API version:</span> {boot?.about?.api_version || "2.0.0"}</div>
@@ -593,13 +615,16 @@ export default function SettingsPage() {
       )}
       <p className="text-xs text-muted mt-3" style={{ lineHeight: 1.6 }}>
         Backend parameters are configured via the server <code>.env</code> file. Restart the FastAPI server after changes.
+        See <code>DEPLOY.md</code> and <code>OPS_RUNBOOK.md</code> in the repository for production setup.
       </p>
+      </div>
     </div>
   );
 
   const mainTabs = [
     { id: "profile", label: <><User size={14} /> Profile</>, content: profileTab },
     { id: "preferences", label: <><Settings size={14} /> Preferences</>, content: preferencesTab },
+    ...(admin ? [{ id: "users", label: <><Users size={14} /> Users</>, content: usersTab }] : []),
     { id: "email", label: <><Mail size={14} /> Email Settings</>, content: emailTab },
     { id: "session", label: <><Monitor size={14} /> Session</>, content: sessionTab },
     { id: "about", label: <><Info size={14} /> About</>, content: aboutTab },

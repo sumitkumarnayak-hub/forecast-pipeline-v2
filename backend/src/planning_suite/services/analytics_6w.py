@@ -61,23 +61,36 @@ def _ensure_rds_parquet_cache() -> str | None:
         return None
 
 
-def resolve_6w_read_path() -> str:
-    """Pick the fastest available 6w source (parquet preferred)."""
+def resolve_6w_read_path(*, allow_rds_build: bool = False) -> str:
+    """Pick the fastest available 6w source (parquet preferred).
+
+  ``allow_rds_build=False`` (default) avoids blocking API requests on a slow
+  pyreadr conversion — that build belongs on **Load Raw Data**, not dashboard bootstrap.
+    """
     candidates: list[str] = []
+    local_6w = os.path.join("outputs", "6w_v3.parquet")
+    if os.path.exists(local_6w):
+        candidates.append(local_6w)
     if os.path.exists(OUTPUT_RDS_CACHE):
         candidates.append(OUTPUT_RDS_CACHE)
     dp = drive_parquet_path()
     if os.path.exists(dp):
         candidates.append(dp)
-    built = _ensure_rds_parquet_cache()
-    if built and built not in candidates:
-        candidates.append(built)
+    if allow_rds_build:
+        built = _ensure_rds_parquet_cache()
+        if built and built not in candidates:
+            candidates.append(built)
     dc = drive_csv_path()
     if os.path.exists(dc):
         candidates.append(dc)
     if candidates:
         return candidates[0]
     raise FileNotFoundError(describe_missing_6w_sources())
+
+
+def build_rds_parquet_cache() -> str | None:
+    """Explicit RDS → parquet build (Load Raw Data / admin). May take several minutes."""
+    return _ensure_rds_parquet_cache()
 
 
 def _parquet_columns(path: str) -> set[str]:

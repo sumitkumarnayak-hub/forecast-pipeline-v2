@@ -20,6 +20,7 @@ class CacheNS(str, Enum):
     DASHBOARD = "dashboard"
     USER_PROFILE = "user_profile"
     NPL_WIZARD = "npl_wizard"
+    AUTOPILOT_MANUAL_SYNC = "autopilot_manual_sync"
 
 
 _lock = threading.RLock()

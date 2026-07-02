@@ -62,6 +62,8 @@ def _read_master_worksheet(
         )
     except HTTPException:
         raise
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -522,7 +524,11 @@ def list_users(
         with db.engine.connect() as conn:
             from sqlalchemy import text
             rows = conn.execute(
-                text("SELECT id, username, full_name, email, role, created_at, last_login FROM users ORDER BY id")
+                text(
+                    "SELECT id, username, full_name, email, role, "
+                    "COALESCE(is_active, 1) AS is_active, created_at, last_login "
+                    "FROM users ORDER BY id"
+                )
             ).fetchall()
         return [dict(r._mapping) for r in rows]
     except Exception as exc:

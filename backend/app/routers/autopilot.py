@@ -25,11 +25,12 @@ from planning_suite.automation.autopilot_state import (
     tail_autopilot_log,
 )
 from planning_suite.automation.autopilot_ui_config import AUTOPILOT_STEPS_UI, output_paths_reference
-from planning_suite.automation.optimized_autopilot import AUTOPILOT_STEPS, run_optimized_autopilot
+from planning_suite.automation.autopilot_ui_config import AUTOPILOT_STEPS
+from planning_suite.automation.optimized_autopilot import run_optimized_autopilot
 from planning_suite.core.dataframe import df_to_records, sanitize_for_json
 from planning_suite.core.permissions import can_write
 from planning_suite.db.engine import Database
-from planning_suite.services.api_cache import CacheNS, cache_get, cache_invalidate, cache_set
+from planning_suite.services.api_cache import CacheNS, cached, cache_get, cache_invalidate, cache_set
 from planning_suite.services.helpers import generate_run_id
 
 router = APIRouter()
@@ -239,6 +240,7 @@ def _run_thread(run_id: str, user_id: int, from_step: int, run_name: str) -> Non
     finally:
         cache_invalidate(CacheNS.AUTOPILOT_BOOTSTRAP)
         cache_invalidate(CacheNS.AUTOPILOT_HISTORY)
+        cache_invalidate(CacheNS.AUTOPILOT_MANUAL_SYNC)
 
         def _cleanup() -> None:
             entry = _ACTIVE.get(run_id)
@@ -274,6 +276,30 @@ def autopilot_bootstrap_static(
 ):
     """Alias for static bootstrap — instant first paint."""
     return _build_bootstrap(current_user, db, state=None)
+
+
+@router.get("/manual-sync")
+def manual_autopilot_sync(
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    refresh: bool = Query(False, description="Bypass short-lived manual-sync cache"),
+):
+    """
+    Detect which Auto-Pilot steps were completed via manual workflow (files + DB).
+    Returns contiguous completed prefix and suggested ``from_step`` for the next run.
+    """
+    from planning_suite.services.manual_autopilot_sync import detect_manual_autopilot_progress
+
+    def _build() -> dict[str, Any]:
+        return detect_manual_autopilot_progress(db)
+
+    return cached(
+        CacheNS.AUTOPILOT_MANUAL_SYNC,
+        "global",
+        _build,
+        ttl=25.0,
+        skip_cache=refresh,
+    )
 
 
 @router.get("/history")
@@ -386,6 +412,7 @@ def start_autopilot(
         _ACTIVE[run_id] = {"status": "running", "user_id": user_id}
         cache_invalidate(CacheNS.AUTOPILOT_BOOTSTRAP)
         cache_invalidate(CacheNS.AUTOPILOT_HISTORY)
+        cache_invalidate(CacheNS.AUTOPILOT_MANUAL_SYNC)
 
     db.ensure_autopilot_run(run_id, user_id, run_name=run_name, source="ui")
 

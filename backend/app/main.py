@@ -47,6 +47,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.middleware import request_context_middleware
+from app.production import public_error_detail, validate_production_environment
 from app.routers import auth, dashboard, master_data, baseline, autopilot
 from app.routers import final_plan, new_product_launch, insights, settings, validation, demo_filter
 
@@ -62,10 +63,14 @@ def _cors_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        validate_production_environment()
         from planning_suite.db.engine import get_shared_database
         db = get_shared_database()
         db.init_database()
         logger.info("Database initialised")
+        from planning_suite.services.cache_warmup import start_cache_warmup
+
+        start_cache_warmup()
     except Exception as exc:
         logger.warning("DB init warning: %s", exc)
     yield
@@ -99,7 +104,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return JSONResponse(status_code=500, content={"detail": public_error_detail(exc)})
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router,               prefix="/api/auth",               tags=["Auth"])
@@ -117,4 +122,29 @@ app.include_router(demo_filter.router,        prefix="/api/demo-filter",        
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "Planning Suite API v2"}
+    return {
+        "status": "ok",
+        "service": "Planning Suite API v2",
+        "version": "2.0.0",
+        "environment": os.getenv("APP_ENV", "development"),
+    }
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    """Readiness probe — verifies database connectivity."""
+    from sqlalchemy import text
+    from planning_suite.db.engine import get_shared_database
+
+    try:
+        db = get_shared_database()
+        with db.engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {
+            "status": "ready",
+            "database": db.backend,
+            "connection": db.connection_label(),
+        }
+    except Exception as exc:
+        logger.warning("Readiness check failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Database not ready") from exc

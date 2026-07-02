@@ -153,6 +153,7 @@ type DashboardBootstrap = {
   weeks: { weeks?: string[]; default_week?: string };
   analytics: Record<string, unknown>;
   revenue_trends: Record<string, unknown>;
+  data_warning?: string;
 };
 
 function applyBootstrapPayload(
@@ -195,6 +196,7 @@ export default function DashboardPage() {
   const [shellLoading, setShellLoading] = useState(true);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [dataWarning, setDataWarning] = useState("");
   const [trends, setTrends] = useState<any>(null);
   const [trendsLoading, setTrendsLoading] = useState(false);
   const [selCities, setSelCities] = useState<string[]>([]);
@@ -280,6 +282,7 @@ export default function DashboardPage() {
       if (seq !== bootstrapSeq.current) return;
       cacheSet(DASHBOARD_BOOTSTRAP_KEY, data, 300_000);
       applyBootstrap(data);
+      setDataWarning(data.data_warning || "");
       setError("");
     } catch (e: unknown) {
       if (seq !== bootstrapSeq.current) return;
@@ -402,6 +405,17 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {dataWarning && (
+        <div className="alert alert-warning dashboard-error" style={{ whiteSpace: "pre-wrap" }}>
+          <strong>6-week dashboard data not available.</strong>
+          <div className="text-sm mt-2">{dataWarning}</div>
+          <div className="text-sm mt-2">
+            Run <a href="/baseline/load-raw" className="font-semibold underline">Manual Baseline → Load Raw Data</a> once,
+            or mount the planning drive CSV, then refresh.
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="alert alert-danger dashboard-error">{error}</div>

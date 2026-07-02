@@ -114,8 +114,11 @@ class GoogleSheetsManager:
             if not sheet_config:
                 return None
             worksheet_name = sheet_config["worksheets"].get(worksheet_key, worksheet_key)
-            worksheet = self._get_worksheet_quiet(sheet_category, worksheet_name)
-            df = self._worksheet_data_to_df(worksheet, range_notation)
+            from planning_suite.services.sheets_throttle import sheets_slot
+
+            with sheets_slot():
+                worksheet = self._get_worksheet_quiet(sheet_category, worksheet_name)
+                df = self._worksheet_data_to_df(worksheet, range_notation)
             if use_cache and df is not None and not df.empty:
                 path = sheets_cache.cache_path_for_category(
                     sheet_category, worksheet_key, range_notation,
@@ -163,15 +166,163 @@ class GoogleSheetsManager:
         worksheet_names: list[str] | None = None,
         *,
         allow_local_fallback: bool = True,
+        parallel: bool = True,
+        max_local_age_hours: float | None = None,
     ) -> dict[str, dict]:
         """
         Save DP Logics worksheets as local Excel files.
 
         Tries hub_level_planning config, then DP_LOGICS_SHEET_URL, then existing
         local files when allow_local_fallback is True.
+        When parallel=True (default), fetches all worksheets in one batch API call.
         """
         worksheet_names = worksheet_names or list(DP_LOGICS_WORKSHEETS.keys())
         os.makedirs(output_folder, exist_ok=True)
+
+        if max_local_age_hours is not None and max_local_age_hours > 0:
+            fresh = self._dp_logics_local_fresh(output_folder, worksheet_names, max_local_age_hours)
+            if fresh is not None:
+                return fresh
+
+        if parallel:
+            try:
+                return self._sync_dp_logics_parallel(
+                    output_folder,
+                    worksheet_names,
+                    allow_local_fallback=allow_local_fallback,
+                )
+            except Exception:
+                pass
+
+        return self._sync_dp_logics_sequential(
+            output_folder,
+            worksheet_names,
+            allow_local_fallback=allow_local_fallback,
+        )
+
+    @staticmethod
+    def _dp_logics_local_fresh(
+        output_folder: str,
+        worksheet_names: list[str],
+        max_age_hours: float,
+    ) -> dict[str, dict] | None:
+        """Return sidecar refresh result if all local xlsx files are younger than max_age_hours."""
+        import time
+
+        now = time.time()
+        max_age_sec = max_age_hours * 3600
+        results: dict[str, dict] = {}
+        for ws_name in worksheet_names:
+            save_path = os.path.join(output_folder, f"{ws_name}.xlsx")
+            if not os.path.isfile(save_path):
+                return None
+            age = now - os.path.getmtime(save_path)
+            if age > max_age_sec:
+                return None
+            try:
+                df = pd.read_excel(save_path)
+                if df.empty:
+                    return None
+                try:
+                    write_dp_logics_parquet_sidecar(df, save_path)
+                except Exception:
+                    pass
+                results[ws_name] = {
+                    "status": "local",
+                    "rows": len(df),
+                    "source": "local_fresh",
+                }
+            except Exception:
+                return None
+        return results
+
+    def _sync_dp_logics_parallel(
+        self,
+        output_folder: str,
+        worksheet_names: list[str],
+        *,
+        allow_local_fallback: bool,
+    ) -> dict[str, dict]:
+        from planning_suite.config import HUB_LEVEL_PLANNING_SHEET_KEY, SHEETS_CONFIG
+
+        ws_config = SHEETS_CONFIG["hub_level_planning"]["worksheets"]
+        specs: list[tuple[str, str]] = []
+        name_by_tab: dict[str, str] = {}
+        for ws_name in worksheet_names:
+            mapping = DP_LOGICS_WORKSHEETS.get(ws_name)
+            if not mapping:
+                continue
+            _category, key = mapping
+            tab_name = ws_config.get(key, key)
+            specs.append((tab_name, ""))
+            name_by_tab[tab_name] = ws_name
+
+        raw = self.batch_read_worksheets(
+            HUB_LEVEL_PLANNING_SHEET_KEY,
+            specs,
+            max_workers=len(specs) or 1,
+        )
+
+        results: dict[str, dict] = {}
+        missing: list[str] = []
+        for tab_name, ws_name in name_by_tab.items():
+            save_path = os.path.join(output_folder, f"{ws_name}.xlsx")
+            data = raw.get(tab_name) or []
+            if not data or len(data) < 2:
+                missing.append(ws_name)
+                continue
+            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            if df.empty:
+                missing.append(ws_name)
+                continue
+            self._persist_dp_logics_table(df, save_path)
+            results[ws_name] = {
+                "status": "synced",
+                "rows": len(df),
+                "source": "google_sheets_batch",
+            }
+
+        for ws_name in worksheet_names:
+            if ws_name in results:
+                continue
+            save_path = os.path.join(output_folder, f"{ws_name}.xlsx")
+            synced = False
+            if allow_local_fallback and os.path.exists(save_path):
+                try:
+                    df = pd.read_excel(save_path)
+                    if not df.empty:
+                        try:
+                            write_dp_logics_parquet_sidecar(df, save_path)
+                        except Exception:
+                            pass
+                        results[ws_name] = {
+                            "status": "local",
+                            "rows": len(df),
+                            "source": "local_cache",
+                        }
+                        synced = True
+                except Exception:
+                    pass
+            if not synced:
+                missing.append(ws_name)
+                results[ws_name] = {"status": "missing", "rows": 0, "source": ""}
+
+        if missing:
+            raise FileNotFoundError(
+                "Could not sync or find local copies of: "
+                f"{', '.join(sorted(set(missing)))}. "
+                "Use **Configure Parameters → Sync All** when Sheets is available, "
+                "or ensure files exist in the DP Logics folder."
+            )
+        return results
+
+    def _sync_dp_logics_sequential(
+        self,
+        output_folder: str,
+        worksheet_names: list[str],
+        *,
+        allow_local_fallback: bool,
+    ) -> dict[str, dict]:
         results: dict[str, dict] = {}
         missing: list[str] = []
 
@@ -362,11 +513,22 @@ class GoogleSheetsManager:
         max_workers: int | None = None,
     ) -> dict[str, list]:
         from concurrent.futures import ThreadPoolExecutor
+        from planning_suite.services.sheets_throttle import in_pipeline_mode
 
         if not self.client:
             self.client = self._initialize_client()
         if not self.client:
             return {}
+
+        if not worksheets:
+            return {}
+
+        # One API round-trip for all ranges — much faster than N parallel get_all_values.
+        if in_pipeline_mode() and len(worksheets) > 1:
+            try:
+                return self._batch_fetch_via_values_batch_get(spreadsheet_key, worksheets)
+            except Exception:
+                pass
 
         spreadsheet = self.client.open_by_key(spreadsheet_key)
         workers = max_workers or len(worksheets) or 1
@@ -380,10 +542,35 @@ class GoogleSheetsManager:
                 data = ws.get_all_values()
             return name, data or []
 
-        if not worksheets:
-            return {}
         with ThreadPoolExecutor(max_workers=workers) as executor:
             return dict(executor.map(_fetch, worksheets))
+
+    def _batch_fetch_via_values_batch_get(
+        self,
+        spreadsheet_key: str,
+        worksheets: list[tuple[str, str]],
+    ) -> dict[str, list]:
+        """Fetch multiple worksheet ranges in a single Sheets API batchGet call."""
+        spreadsheet = self.client.open_by_key(spreadsheet_key)
+        range_specs: list[str] = []
+        names: list[str] = []
+        for name, range_notation in worksheets:
+            quoted = name.replace("'", "''")
+            if range_notation:
+                range_specs.append(f"'{quoted}'!{range_notation}")
+            else:
+                range_specs.append(f"'{quoted}'")
+            names.append(name)
+
+        batch = spreadsheet.values_batch_get(range_specs)
+        value_ranges = batch.get("valueRanges") or []
+        out: dict[str, list] = {}
+        for idx, name in enumerate(names):
+            if idx < len(value_ranges):
+                out[name] = value_ranges[idx].get("values") or []
+            else:
+                out[name] = []
+        return out
 
     def read_demand_planning_masters_parallel(
         self,
