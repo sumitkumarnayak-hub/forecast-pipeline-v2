@@ -136,9 +136,11 @@ Configure Render health check path: `/api/health/ready`
 
 ### Environment variables (Vercel → Settings → Environment Variables)
 
-| Variable | Required | Notes |
-|----------|----------|--------|
-| `BACKEND_URL` | **Yes** (optional on Vercel) | Defaults to `https://forecast-pipeline-v2.onrender.com` when deployed on Vercel |
+Set these for **Production** (and Preview if you use preview URLs):
+
+| Variable | Value | Required |
+|----------|--------|----------|
+| `BACKEND_URL` | `https://forecast-pipeline-v2.onrender.com` | **Yes** (recommended — also defaults in code if omitted) |
 
 **Production URLs**
 
@@ -147,7 +149,17 @@ Configure Render health check path: `/api/health/ready`
 | Frontend | https://forecast-pipeline-v2-frontend-nu.vercel.app |
 | Backend | https://forecast-pipeline-v2.onrender.com |
 
-The frontend proxies `/api/*` to `BACKEND_URL` so httpOnly auth cookies work same-origin.
+The frontend calls `/api/*` on the Vercel domain; the Next.js route handler proxies to `BACKEND_URL` (Render). You do **not** point the browser directly at Render.
+
+**Render backend** (separate from Vercel) must include:
+
+```env
+CORS_ORIGINS=https://forecast-pipeline-v2-frontend-nu.vercel.app,http://localhost:3000
+APP_ENV=production
+AUTH_COOKIE_SECURE=true
+```
+
+After changing env vars on Vercel, click **Redeploy**.
 
 **Do not** set `BACKEND_URL` to `http://localhost:8000` on Vercel — Vercel runs in the cloud and **cannot** reach your PC's localhost (login will return **502 Bad Gateway**).
 

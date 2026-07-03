@@ -62,10 +62,20 @@ const HOP_BY_HOP = new Set([
   "host",
 ]);
 
+/** fetch() decompresses gzip bodies but may leave Content-Encoding — breaks browsers. */
+const STRIP_RESPONSE_HEADERS = new Set([
+  ...HOP_BY_HOP,
+  "content-encoding",
+  "content-length",
+]);
+
 function forwardRequestHeaders(request: NextRequest): Headers {
   const headers = new Headers();
   request.headers.forEach((value, key) => {
-    if (HOP_BY_HOP.has(key.toLowerCase())) return;
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower)) return;
+    // Avoid upstream gzip; prevents ERR_CONTENT_DECODING_FAILED after proxy decompresses.
+    if (lower === "accept-encoding") return;
     headers.set(key, value);
   });
   return headers;
@@ -75,7 +85,7 @@ function buildResponseHeaders(upstream: Response, requestIsHttps: boolean): Head
   const headers = new Headers();
   upstream.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
-    if (HOP_BY_HOP.has(lower) || lower === "set-cookie") return;
+    if (STRIP_RESPONSE_HEADERS.has(lower) || lower === "set-cookie") return;
     headers.append(key, value);
   });
   if (typeof upstream.headers.getSetCookie === "function") {
@@ -123,7 +133,8 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
     );
   }
 
-  return new NextResponse(upstream.body, {
+  const body = await upstream.arrayBuffer();
+  return new NextResponse(body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: buildResponseHeaders(upstream, requestIsHttps),
@@ -143,3 +154,6 @@ export const PUT = handler;
 export const PATCH = handler;
 export const DELETE = handler;
 export const OPTIONS = handler;
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
