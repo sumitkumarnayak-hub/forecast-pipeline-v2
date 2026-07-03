@@ -20,6 +20,8 @@ def is_cloud_deploy() -> bool:
     """True on Render/production hosts — not local dev with STORAGE_BACKEND=drive."""
     if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
         return True
+    if os.getenv("SPACE_ID"):  # Hugging Face Spaces
+        return True
     return os.getenv("APP_ENV", "").strip().lower() in {"production", "prod"}
 
 
@@ -38,17 +40,21 @@ def data_root(base_dir: Path) -> Path:
     """
     Writable data directory.
 
-    Render free tier has no /var/data unless you attach a persistent disk.
-    Default: ``backend/data`` (ephemeral, writable under the project tree).
+    Render/Hugging Face: use /app/data (ephemeral container disk).
     """
     explicit = os.getenv("DATA_ROOT", "").strip()
     if explicit and not (is_cloud_deploy() and is_legacy_windows_path(explicit)):
         candidate = Path(explicit)
         if _mkdir_writable(candidate):
             return candidate
-        logger.warning("DATA_ROOT not writable (%s) — using backend/data", candidate)
+        logger.warning("DATA_ROOT not writable (%s) — using fallback", candidate)
 
-    fallback = base_dir / "data"
+    if os.getenv("SPACE_ID"):
+        fallback = Path("/app/data")
+    elif os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+        fallback = base_dir / "data"
+    else:
+        fallback = base_dir / "data"
     _mkdir_writable(fallback)
     return fallback
 

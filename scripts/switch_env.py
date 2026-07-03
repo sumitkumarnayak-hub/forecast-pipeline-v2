@@ -31,12 +31,12 @@ def _activate(profile: str) -> None:
     shutil.copy2(src, BACKEND_DIR / ".env")
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
     ACTIVE_MARKER.write_text(profile + "\n", encoding="utf-8")
-    print(f"[ok] backend/.env <- dotenv-profiles/{profile}.env")
+    print(f"[ok] backend/.env <- backend/dotenv-profiles/{profile}.env")
 
     fe = _fe(profile)
     if fe.is_file():
         shutil.copy2(fe, FRONTEND_DIR / ".env.local")
-        print(f"[ok] frontend/.env.local <- dotenv-profiles/{profile}.env")
+        print(f"[ok] frontend/.env.local <- frontend/dotenv-profiles/{profile}.env")
 
 
 def _status() -> None:

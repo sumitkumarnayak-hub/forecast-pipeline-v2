@@ -1,0 +1,35 @@
+# Python / venv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Local secrets and env profiles
+.env
+.env.*
+dotenv-profiles/
+*.sqlite
+forecasting_db.sqlite
+
+# Runtime artifacts (pulled from Drive at startup)
+outputs/
+data/
+*.parquet
+*.xlsx
+Summary_*.xlsx
+Hub_Dist_Wk*.xlsx
+
+# Dev / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.md
+!README_HF.md
+
+# Tests (not needed in image)
+tests/
