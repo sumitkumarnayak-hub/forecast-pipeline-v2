@@ -153,14 +153,14 @@ Set these for **Production** (and Preview if you use preview URLs):
 
 | Variable | Value | Required |
 |----------|--------|----------|
-| `BACKEND_URL` | `https://forecast-pipeline-v2.onrender.com` | **Yes** (recommended — also defaults in code if omitted) |
+| `BACKEND_URL` | `https://forecast-pipeline-v2-production.up.railway.app` | **Yes** (recommended — also defaults in code if omitted) |
 
 **Production URLs**
 
 | Service | URL |
 |---------|-----|
 | Frontend | https://forecast-pipeline-v2-frontend-nu.vercel.app |
-| Backend | https://forecast-pipeline-v2.onrender.com |
+| Backend | https://forecast-pipeline-v2-production.up.railway.app |
 
 The frontend calls `/api/*` on the Vercel domain; the Next.js route handler proxies to `BACKEND_URL` (Render). You do **not** point the browser directly at Render.
 
@@ -176,7 +176,7 @@ After changing env vars on Vercel, click **Redeploy**.
 
 **Do not** set `BACKEND_URL` to `http://localhost:8000` on Vercel — Vercel runs in the cloud and **cannot** reach your PC's localhost (login will return **502 Bad Gateway**).
 
-Optional: set `BACKEND_URL=https://forecast-pipeline-v2.onrender.com` in Vercel → Settings → Environment Variables (the app already defaults to this on Vercel if unset).
+Optional: set `BACKEND_URL=https://forecast-pipeline-v2-production.up.railway.app` in Vercel → Settings → Environment Variables (the app already defaults to this on Vercel if unset).
 
 ### Render keep-alive (GitHub Actions)
 

@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /** Render API — used on Vercel when BACKEND_URL is not set in project env. */
-const PRODUCTION_BACKEND_URL = "https://forecast-pipeline-v2.onrender.com";
+const PRODUCTION_BACKEND_URL = "https://forecast-pipeline-v2-production.up.railway.app";
 
 function resolveBackendUrl(): string {
   const fromEnv = process.env.BACKEND_URL?.trim() || process.env.NEXT_PUBLIC_API_URL?.trim();

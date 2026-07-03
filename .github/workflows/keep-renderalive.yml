@@ -13,6 +13,6 @@ jobs:
       - name: Ping Render backend
         run: |
           curl -fsS --max-time 30 \
-            "https://forecast-pipeline-v2.onrender.com/api/health" \
+            "https://forecast-pipeline-v2-production.up.railway.app/api/health" \
             || curl -fsS --max-time 30 \
-            "https://forecast-pipeline-v2.onrender.com/api/health/ready"
+            "https://forecast-pipeline-v2-production.up.railway.app/api/health/ready"
