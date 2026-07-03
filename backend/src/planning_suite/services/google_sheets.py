@@ -5,17 +5,16 @@ import os
 from pathlib import Path
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from planning_suite.config import (
     DP_LOGICS_SHEET_URL,
-    GOOGLE_CREDENTIALS_PATH,
     HUB_CHANGES_COLUMNS,
     PIPELINE_PARAMS_HUB_CHANGES_TAB,
     PIPELINE_PARAMS_SHEET_URL,
     PIPELINE_PARAMS_VARIABLES_TAB,
     SHEETS_CONFIG,
 )
+from planning_suite.google_credentials import load_service_account_credentials
 from planning_suite.services.baseline_io import write_dp_logics_parquet_sidecar
 from planning_suite.core.dataframe import clean_sheet_df
 
@@ -53,9 +52,7 @@ class GoogleSheetsManager:
                 "https://spreadsheets.google.com/feeds",
                 "https://www.googleapis.com/auth/drive"
             ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                GOOGLE_CREDENTIALS_PATH, scope
-            )
+            creds = load_service_account_credentials(scope)
             return gspread.authorize(creds)
         except Exception as e:
             print(f"Failed to initialize Google Sheets client: {e}")

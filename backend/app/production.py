@@ -24,8 +24,12 @@ def validate_production_environment() -> list[str]:
     if not os.getenv("DATABASE_URL", "").strip():
         warnings.append("DATABASE_URL is not set — SQLite fallback is not recommended in production")
 
-    if not os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip():
-        warnings.append("GOOGLE_CREDENTIALS_PATH is not set — Google Sheets features will fail")
+    if not os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip() and not os.getenv(
+        "GOOGLE_CREDENTIALS_PATH", ""
+    ).strip():
+        warnings.append(
+            "GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH is not set — Google Sheets will fail"
+        )
 
     cookie_secure = os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
     if not cookie_secure:

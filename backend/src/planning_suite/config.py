@@ -22,7 +22,10 @@ def _env_path(name: str) -> str:
 
 # Google Sheets Configuration
 PLANNING_DRIVE_ROOT = _env_path("PLANNING_DRIVE_ROOT")
-GOOGLE_CREDENTIALS_PATH = _env_path("GOOGLE_CREDENTIALS_PATH")
+
+from planning_suite.google_credentials import get_google_credentials_path
+
+GOOGLE_CREDENTIALS_PATH = get_google_credentials_path()
 
 
 def sheet_id_from_url(url: str) -> str:

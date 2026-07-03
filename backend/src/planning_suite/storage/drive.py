@@ -8,8 +8,7 @@ from pathlib import Path
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
-from oauth2client.service_account import ServiceAccountCredentials
-
+from planning_suite.google_credentials import load_service_account_credentials
 from planning_suite.storage.artifacts import resolve_local_path
 from planning_suite.storage.base import StorageBackend, _guess_mime
 
@@ -69,10 +68,7 @@ class DriveStorageBackend(StorageBackend):
         return "drive"
 
     def _build_service(self):
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            self._credentials_path,
-            _DRIVE_SCOPES,
-        )
+        creds = load_service_account_credentials(_DRIVE_SCOPES)
         if self._impersonate_email:
             creds = creds.create_delegated(self._impersonate_email)
             logger.info("Drive API using delegated user: %s", self._impersonate_email)

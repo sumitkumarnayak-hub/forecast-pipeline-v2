@@ -63,6 +63,13 @@ yarn-error.log*
 *.pem
 *.tsbuildinfo
 
+# Google service account keys (never commit)
+causal-flame-452312-q9-1b4341ee87db.json
+causal-flame*.json
+*-1b4341ee87db.json
+google-credentials.json
+google-service-account.json
+
 # Local runtime artifacts (caches, parquet, exports — never commit)
 backend/outputs/
 outputs/

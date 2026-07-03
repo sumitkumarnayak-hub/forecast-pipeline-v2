@@ -20,6 +20,11 @@ if str(SRC_DIR) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(BACKEND_DIR / ".env")
 
+# Resolve Google credentials from GOOGLE_CREDENTIALS_JSON before planning_suite.config loads.
+from planning_suite.google_credentials import get_google_credentials_path
+
+get_google_credentials_path()
+
 from app.logging_config import setup_logging
 
 setup_logging()
