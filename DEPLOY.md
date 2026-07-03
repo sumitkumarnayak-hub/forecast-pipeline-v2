@@ -44,13 +44,13 @@ Create your first admin user via SQL or temporarily run locally against prod DB,
 | `STORAGE_BACKEND` | `drive` |
 | `PIPELINE_DRIVE_FOLDER_URL` | Shared Drive folder URL (e.g. `https://drive.google.com/drive/folders/0AKKX6JjhUdibUk9PVA`) |
 
-**Do not** copy Windows `G:\` paths to Render. On `APP_ENV=production`, the backend maps artifacts to `/var/data/...` automatically and pulls `outputs/rds_cache.parquet` from shared Drive at startup.
+**Do not** copy Windows `G:\` paths to Render. On `APP_ENV=production`, artifacts land under `backend/data/...` (writable ephemeral disk) and are pulled from shared Drive at startup. Only use `/var/data` if you attached a Render persistent disk.
 
-| Render path (auto) | Artifact key on shared Drive |
-|--------------------|-------------------------------|
-| `/var/data/outputs/rds_cache.parquet` | `outputs/rds_cache.parquet` |
-| `/var/data/analytics/6w_v3.rds` | `analytics/6w_v3.rds` |
-| `/var/data/masters/Product_Masters.xlsx` | `masters/Product_Masters.xlsx` |
+| Local path on Render (default) | Artifact key on shared Drive |
+|--------------------------------|-------------------------------|
+| `backend/data/outputs/rds_cache.parquet` | `outputs/rds_cache.parquet` |
+| `backend/data/analytics/6w_v3.rds` | `analytics/6w_v3.rds` |
+| `backend/data/masters/Product_Masters.xlsx` | `masters/Product_Masters.xlsx` |
 
 Seed shared Drive once from your machine: `cd backend && python scripts/push_pipeline_storage.py`
 
