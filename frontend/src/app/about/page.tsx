@@ -19,9 +19,11 @@ import {
 export default function AboutPage() {
   const { role } = useAuth();
 
-  const visibleQuickLinks = QUICK_LINKS.filter(
-    link => !("roles" in link) || !link.roles || link.roles.includes(role || "viewer"),
-  );
+  const visibleQuickLinks = QUICK_LINKS.filter(link => {
+    if (!("roles" in link) || !link.roles) return true;
+    if (role !== "admin" && role !== "planner") return false;
+    return link.roles.includes(role);
+  });
 
   return (
     <AppShell
