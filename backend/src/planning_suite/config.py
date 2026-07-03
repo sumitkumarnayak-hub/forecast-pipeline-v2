@@ -20,10 +20,11 @@ def _env_path(name: str) -> str:
     return value
 
 
-# Google Sheets Configuration
-PLANNING_DRIVE_ROOT = _env_path("PLANNING_DRIVE_ROOT")
-
+from planning_suite.cloud_paths import resolve_output_path, resolve_path_env
 from planning_suite.google_credentials import get_google_credentials_path
+
+# Google Sheets Configuration — on Render/Drive storage, ignore G:\ shortcuts
+PLANNING_DRIVE_ROOT = resolve_path_env("PLANNING_DRIVE_ROOT", "planning", base_dir=BASE_DIR)
 
 GOOGLE_CREDENTIALS_PATH = get_google_credentials_path()
 
@@ -211,20 +212,22 @@ def get_database_host_label(db_url=None) -> str:
         return ""
 
 
-# File paths
-_output_env = os.getenv("OUTPUT_PATH", "").strip()
-OUTPUT_PATH = Path(_output_env) if _output_env else BASE_DIR / "outputs"
-OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+# File paths — cloud deploy uses /var/data/* instead of G:\ shortcuts
+OUTPUT_PATH = resolve_output_path(BASE_DIR)
 BASELINE_APPROVAL_JSON = OUTPUT_PATH / "baseline_approval.json"
 
-RAW_DATA_PATH = _env_path("RAW_DATA_PATH")
-RDS_6W_PATH = _env_path("RDS_6W_PATH")
-BASELINE_OUTPUTS_FOLDER = _env_path("BASELINE_OUTPUTS_FOLDER")
-FF_INPUTS_FOLDER = _env_path("FF_INPUTS_FOLDER")
-FF_INV_LOGIC_FOLDER = _env_path("FF_INV_LOGIC_FOLDER")
-FF_MASTERS_XLSX = _env_path("FF_MASTERS_XLSX")
-RAW_ACTUALS_FOLDER = _env_path("RAW_ACTUALS_FOLDER")
-DP_LOGICS_FOLDER = _env_path("DP_LOGICS_FOLDER")
+RAW_DATA_PATH = resolve_path_env("RAW_DATA_PATH", "raw/weekly_forecasts", base_dir=BASE_DIR)
+RDS_6W_PATH = resolve_path_env("RDS_6W_PATH", "analytics/6w_v3.rds", base_dir=BASE_DIR)
+BASELINE_OUTPUTS_FOLDER = resolve_path_env(
+    "BASELINE_OUTPUTS_FOLDER", "baseline_outputs", base_dir=BASE_DIR
+)
+FF_INPUTS_FOLDER = resolve_path_env("FF_INPUTS_FOLDER", "ff_inputs", base_dir=BASE_DIR)
+FF_INV_LOGIC_FOLDER = resolve_path_env("FF_INV_LOGIC_FOLDER", "inv_logic", base_dir=BASE_DIR)
+FF_MASTERS_XLSX = resolve_path_env(
+    "FF_MASTERS_XLSX", "masters/Product_Masters.xlsx", base_dir=BASE_DIR
+)
+RAW_ACTUALS_FOLDER = resolve_path_env("RAW_ACTUALS_FOLDER", "raw_actuals", base_dir=BASE_DIR)
+DP_LOGICS_FOLDER = resolve_path_env("DP_LOGICS_FOLDER", "dp_logics", base_dir=BASE_DIR)
 
 
 

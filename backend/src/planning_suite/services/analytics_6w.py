@@ -9,17 +9,31 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from planning_suite.config import PLANNING_DRIVE_ROOT, RDS_6W_PATH
+from planning_suite.config import OUTPUT_PATH, PLANNING_DRIVE_ROOT, RDS_6W_PATH, get_storage_backend_name
 
-OUTPUT_RDS_CACHE = os.path.join("outputs", "rds_cache.parquet")
+OUTPUT_RDS_CACHE = str(OUTPUT_PATH / "rds_cache.parquet")
+OUTPUT_6W_PARQUET = str(OUTPUT_PATH / "6w_v3.parquet")
+
+
+def _use_planning_drive_mount() -> bool:
+    """Local Google Drive for Desktop mount — not used on Render/shared Drive storage."""
+    if get_storage_backend_name() in {"drive", "supabase"}:
+        return False
+    root = (PLANNING_DRIVE_ROOT or "").strip()
+    if not root or root.startswith("/var/"):
+        return False
+    return os.path.isdir(root)
 
 
 def drive_csv_path() -> str:
     root = PLANNING_DRIVE_ROOT or ""
     return os.path.join(
         root,
-        "Planning Team", "25. Planning_Database",
-        "01_all_day_reporting", "04_6w_rolling_data", "6w_v3.csv",
+        "Planning Team",
+        "25. Planning_Database",
+        "01_all_day_reporting",
+        "04_6w_rolling_data",
+        "6w_v3.csv",
     )
 
 
@@ -28,6 +42,15 @@ def drive_parquet_path() -> str:
 
 
 def describe_missing_6w_sources() -> str:
+    backend = get_storage_backend_name()
+    if backend in {"drive", "supabase"}:
+        return (
+            "No 6-week data file found.\n\n"
+            f"Expected `{OUTPUT_RDS_CACHE}` (synced from shared Drive key `outputs/rds_cache.parquet`).\n"
+            "- Upload it once from your machine: `cd backend && python scripts/push_pipeline_storage.py`\n"
+            "- Ensure Render has `STORAGE_BACKEND=drive` and `PIPELINE_DRIVE_FOLDER_URL` set.\n"
+            "- Restart the service so startup pulls artifacts from shared Drive."
+        )
     rds = RDS_6W_PATH or "(not set in .env)"
     drive = drive_csv_path()
     return (
@@ -40,10 +63,10 @@ def describe_missing_6w_sources() -> str:
 
 
 def _ensure_rds_parquet_cache() -> str | None:
-    """Build `outputs/rds_cache.parquet` from RDS when missing or stale."""
+    """Build rds_cache.parquet from RDS when missing or stale."""
     if not RDS_6W_PATH or not os.path.exists(RDS_6W_PATH):
         return None
-    os.makedirs("outputs", exist_ok=True)
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
     cache = OUTPUT_RDS_CACHE
     try:
         if os.path.exists(cache) and os.path.getmtime(cache) >= os.path.getmtime(RDS_6W_PATH):
@@ -64,25 +87,26 @@ def _ensure_rds_parquet_cache() -> str | None:
 def resolve_6w_read_path(*, allow_rds_build: bool = False) -> str:
     """Pick the fastest available 6w source (parquet preferred).
 
-  ``allow_rds_build=False`` (default) avoids blocking API requests on a slow
-  pyreadr conversion — that build belongs on **Load Raw Data**, not dashboard bootstrap.
+    ``allow_rds_build=False`` (default) avoids blocking API requests on a slow
+    pyreadr conversion — that build belongs on **Load Raw Data**, not dashboard bootstrap.
     """
     candidates: list[str] = []
-    local_6w = os.path.join("outputs", "6w_v3.parquet")
-    if os.path.exists(local_6w):
-        candidates.append(local_6w)
+    if os.path.exists(OUTPUT_6W_PARQUET):
+        candidates.append(OUTPUT_6W_PARQUET)
     if os.path.exists(OUTPUT_RDS_CACHE):
         candidates.append(OUTPUT_RDS_CACHE)
-    dp = drive_parquet_path()
-    if os.path.exists(dp):
-        candidates.append(dp)
+    if _use_planning_drive_mount():
+        dp = drive_parquet_path()
+        if os.path.exists(dp):
+            candidates.append(dp)
     if allow_rds_build:
         built = _ensure_rds_parquet_cache()
         if built and built not in candidates:
             candidates.append(built)
-    dc = drive_csv_path()
-    if os.path.exists(dc):
-        candidates.append(dc)
+    if _use_planning_drive_mount():
+        dc = drive_csv_path()
+        if os.path.exists(dc):
+            candidates.append(dc)
     if candidates:
         return candidates[0]
     raise FileNotFoundError(describe_missing_6w_sources())

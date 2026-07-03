@@ -73,6 +73,21 @@ async def lifespan(app: FastAPI):
         db = get_shared_database()
         db.init_database()
         logger.info("Database initialised")
+        from planning_suite.storage.sync import pull_startup_artifacts
+        from planning_suite.storage.factory import storage_backend_name
+
+        if storage_backend_name() != "local":
+            summary = pull_startup_artifacts(skip_existing=True)
+            pulled = [k for k, v in summary.items() if v == "downloaded"]
+            if pulled:
+                logger.info("Startup artifact pull: %s", ", ".join(pulled))
+            elif summary.get("outputs/rds_cache.parquet", "").startswith("skipped"):
+                logger.info("Startup artifacts already present locally")
+            else:
+                logger.warning(
+                    "6w dashboard cache missing on disk — upload outputs/rds_cache.parquet "
+                    "to shared Drive (python scripts/push_pipeline_storage.py)"
+                )
         from planning_suite.services.cache_warmup import start_cache_warmup
 
         start_cache_warmup()

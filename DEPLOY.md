@@ -39,7 +39,20 @@ Create your first admin user via SQL or temporarily run locally against prod DB,
 | `DATABASE_URL` | PostgreSQL connection string |
 | `AUTH_COOKIE_SECURE` | `true` (HTTPS) |
 | `CORS_ORIGINS` | `https://forecast-pipeline-v2-frontend-nu.vercel.app` (plus localhost for dev) |
-| `GOOGLE_CREDENTIALS_PATH` | Path to service account JSON **or** paste JSON as env and write to file at build |
+| `GOOGLE_CREDENTIALS_JSON` | **Recommended** — paste full service account JSON (one line). Overrides `GOOGLE_CREDENTIALS_PATH`. |
+| `GOOGLE_CREDENTIALS_PATH` | Optional on Render — auto-written to `/tmp/google-credentials.json` when using JSON env |
+| `STORAGE_BACKEND` | `drive` |
+| `PIPELINE_DRIVE_FOLDER_URL` | Shared Drive folder URL (e.g. `https://drive.google.com/drive/folders/0AKKX6JjhUdibUk9PVA`) |
+
+**Do not** copy Windows `G:\` paths to Render. On `APP_ENV=production`, the backend maps artifacts to `/var/data/...` automatically and pulls `outputs/rds_cache.parquet` from shared Drive at startup.
+
+| Render path (auto) | Artifact key on shared Drive |
+|--------------------|-------------------------------|
+| `/var/data/outputs/rds_cache.parquet` | `outputs/rds_cache.parquet` |
+| `/var/data/analytics/6w_v3.rds` | `analytics/6w_v3.rds` |
+| `/var/data/masters/Product_Masters.xlsx` | `masters/Product_Masters.xlsx` |
+
+Seed shared Drive once from your machine: `cd backend && python scripts/push_pipeline_storage.py`
 
 ### File storage (critical)
 

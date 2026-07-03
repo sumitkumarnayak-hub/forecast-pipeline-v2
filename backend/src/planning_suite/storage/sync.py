@@ -8,6 +8,15 @@ from planning_suite.storage.factory import get_storage, storage_backend_name
 
 logger = logging.getLogger(__name__)
 
+# Minimum artifacts for dashboard + master-data APIs on cloud deploy
+_STARTUP_ARTIFACT_KEYS = (
+    "outputs/rds_cache.parquet",
+    "analytics/6w_v3.rds",
+    "masters/Product_Masters.xlsx",
+    "outputs/active_dataset.parquet",
+    "outputs/active_dataset_meta.json",
+)
+
 
 def push_all_artifacts(*, only_existing: bool = True) -> dict[str, str]:
     """
@@ -58,6 +67,35 @@ def pull_all_artifacts(*, skip_existing: bool = True) -> dict[str, str]:
                 results[key] = "skipped (not in remote)"
         except Exception as exc:
             logger.warning("Download failed for %s: %s", key, exc)
+            results[key] = f"failed: {exc}"
+    return results
+
+
+def pull_startup_artifacts(*, skip_existing: bool = True) -> dict[str, str]:
+    """Download critical files for dashboard and master-data APIs."""
+    from pathlib import Path
+
+    from planning_suite.storage.artifacts import resolve_local_path
+
+    backend = get_storage()
+    if backend.name == "local":
+        return {k: "skipped (local backend)" for k in _STARTUP_ARTIFACT_KEYS}
+
+    results: dict[str, str] = {}
+    for key in _STARTUP_ARTIFACT_KEYS:
+        try:
+            local = str(resolve_local_path(key))
+            local_p = Path(local)
+            local_p.parent.mkdir(parents=True, exist_ok=True)
+            if skip_existing and local_p.is_file():
+                results[key] = "skipped (local exists)"
+                continue
+            if backend.sync_remote_to_local(key, local):
+                results[key] = "downloaded"
+            else:
+                results[key] = "skipped (not in remote)"
+        except Exception as exc:
+            logger.warning("Startup download failed for %s: %s", key, exc)
             results[key] = f"failed: {exc}"
     return results
 
