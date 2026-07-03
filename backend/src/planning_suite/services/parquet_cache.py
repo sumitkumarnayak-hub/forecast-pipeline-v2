@@ -17,8 +17,9 @@ def get_parquet_cache(source_excel_path: str | Path, sheet_name: str | int = 0) 
     if not src_path.exists():
         raise FileNotFoundError(f"Source file not found: {src_path}")
 
-    # Define cache directory inside outputs/cache
-    cache_dir = Path("outputs/cache")
+    from planning_suite.config import OUTPUT_PATH
+
+    cache_dir = OUTPUT_PATH / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     clean_sheet_name = str(sheet_name).replace(" ", "_").lower()

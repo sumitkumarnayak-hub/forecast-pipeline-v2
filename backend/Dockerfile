@@ -27,7 +27,7 @@ COPY src ./src
 COPY scripts ./scripts
 
 # Writable artifact dirs (synced from Google Drive at startup when STORAGE_BACKEND=drive)
-RUN mkdir -p data/outputs data/masters data/dp_logics data/analytics data/ff_inputs data/raw_actuals
+RUN mkdir -p data/outputs/sheets_cache data/outputs/cache data/masters data/dp_logics data/analytics data/ff_inputs data/raw_actuals
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh

@@ -360,3 +360,36 @@ def reset_user_password_admin(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Pipeline storage (admin) ───────────────────────────────────────────────────
+
+@router.get("/storage/status")
+def storage_status(
+    current_user: dict = Depends(require_admin),
+):
+    """Artifact sync status for cloud deploy troubleshooting."""
+    from planning_suite.services.storage_status import get_storage_status
+
+    return get_storage_status(check_remote=True)
+
+
+@router.post("/storage/pull")
+def storage_pull(
+    current_user: dict = Depends(require_admin),
+):
+    """Re-download startup artifacts from Google Drive / Supabase without restart."""
+    from planning_suite.storage.factory import storage_backend_name
+    from planning_suite.storage.sync import pull_startup_artifacts
+
+    if storage_backend_name() == "local":
+        raise HTTPException(
+            status_code=400,
+            detail="STORAGE_BACKEND=local — nothing to pull. Set STORAGE_BACKEND=drive on cloud.",
+        )
+    try:
+        summary = pull_startup_artifacts(skip_existing=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    pulled = [k for k, v in summary.items() if v == "downloaded"]
+    return {"detail": f"Pulled {len(pulled)} file(s)", "summary": summary}

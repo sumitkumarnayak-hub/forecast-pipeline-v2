@@ -35,6 +35,23 @@ def validate_production_environment() -> list[str]:
     if not cookie_secure:
         warnings.append("AUTH_COOKIE_SECURE should be true in production (HTTPS)")
 
+    from planning_suite.cloud_paths import is_cloud_deploy
+    from planning_suite.storage.factory import storage_backend_name
+
+    if is_cloud_deploy():
+        backend = storage_backend_name()
+        if backend == "local":
+            warnings.append(
+                "STORAGE_BACKEND=local on cloud — pipeline files (rds_cache.parquet, "
+                "Product_Masters.xlsx, etc.) will NOT sync from Google Drive. "
+                "Set STORAGE_BACKEND=drive and PIPELINE_DRIVE_FOLDER_URL."
+            )
+        elif backend == "drive" and not os.getenv("PIPELINE_DRIVE_FOLDER_URL", "").strip():
+            warnings.append(
+                "STORAGE_BACKEND=drive but PIPELINE_DRIVE_FOLDER_URL is unset — "
+                "artifact sync will fail at startup"
+            )
+
     for msg in warnings:
         logger.warning("Production config: %s", msg)
 

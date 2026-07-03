@@ -73,12 +73,18 @@ async def lifespan(app: FastAPI):
         db = get_shared_database()
         db.init_database()
         logger.info("Database initialised")
+    except Exception as exc:
+        logger.warning("DB init warning: %s", exc)
+
+    try:
         from planning_suite.storage.sync import pull_startup_artifacts
         from planning_suite.storage.factory import storage_backend_name
 
         if storage_backend_name() != "local":
             summary = pull_startup_artifacts(skip_existing=True)
             pulled = [k for k, v in summary.items() if v == "downloaded"]
+            missing_remote = [k for k, v in summary.items() if v == "skipped (not in remote)"]
+            failed = [k for k, v in summary.items() if v.startswith("failed")]
             if pulled:
                 logger.info("Startup artifact pull: %s", ", ".join(pulled))
             elif summary.get("outputs/rds_cache.parquet", "").startswith("skipped"):
@@ -88,11 +94,32 @@ async def lifespan(app: FastAPI):
                     "6w dashboard cache missing on disk — upload outputs/rds_cache.parquet "
                     "to shared Drive (python scripts/push_pipeline_storage.py)"
                 )
+            if missing_remote:
+                logger.warning(
+                    "Startup artifacts not in remote storage: %s — run push_pipeline_storage.py "
+                    "from a machine with pipeline files",
+                    ", ".join(missing_remote),
+                )
+            if failed:
+                logger.error("Startup artifact pull failed: %s", ", ".join(failed))
+        elif os.getenv("SPACE_ID") or os.getenv("RENDER"):
+            logger.warning(
+                "STORAGE_BACKEND=local on cloud host — pipeline files will not sync. "
+                "Set STORAGE_BACKEND=drive and PIPELINE_DRIVE_FOLDER_URL."
+            )
+    except Exception as exc:
+        logger.error(
+            "Startup artifact sync failed: %s — check STORAGE_BACKEND, "
+            "PIPELINE_DRIVE_FOLDER_URL, and GOOGLE_CREDENTIALS_JSON",
+            exc,
+        )
+
+    try:
         from planning_suite.services.cache_warmup import start_cache_warmup
 
         start_cache_warmup()
     except Exception as exc:
-        logger.warning("DB init warning: %s", exc)
+        logger.warning("Cache warmup warning: %s", exc)
     yield
 
 
@@ -167,4 +194,14 @@ def health_ready():
         }
     except Exception as exc:
         logger.warning("Readiness check failed: %s", exc)
-        raise HTTPException(status_code=503, detail="Database not ready") from exc
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+
+@app.get("/api/health/storage")
+def health_storage():
+    """Storage diagnostics — no secrets, for post-deploy troubleshooting."""
+    from planning_suite.services.storage_status import get_storage_status
+
+    status = get_storage_status(check_remote=True)
+    ok = not status.get("missing_artifacts") and not status.get("warning")
+    return {"status": "ok" if ok else "degraded", **status}

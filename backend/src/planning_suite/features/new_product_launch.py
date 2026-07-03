@@ -30,6 +30,7 @@ from planning_suite.config import (
     CLUSTER_MASTER_SHEET_KEY,
     GOOGLE_CREDENTIALS_PATH,
     HUB_LEVEL_PLANNING_SHEET_KEY,
+    OUTPUT_PATH,
 )
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -61,7 +62,7 @@ OUTPUT_SHEET_NAME    = "Launch_Output"
 LOG_SHEET_NAME       = "Submission_Log"
 
 WEEKDAYS    = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-OUTPUTS_DIR = "outputs"
+OUTPUTS_DIR = str(OUTPUT_PATH)
 SALIENCE_SHEET_NAME = "Hub level Suggestion"
 HUB_SKU_MASTER_SHEET = "Hub Sku Master"
 

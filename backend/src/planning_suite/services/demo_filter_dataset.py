@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from planning_suite.config import OUTPUT_PATH
 from planning_suite.services.demo_filter_store import DemoFilterState, demo_filter_active
 
 
@@ -22,7 +23,7 @@ def prepare_demo_filter_dataset(
     _env = copy.copy(base_env)
     _demo_city_run = demo_city or "All Cities"
     _demo_hubs_run = demo_hubs or []
-    _base_ds = os.path.abspath(os.path.join("outputs", "active_dataset.parquet"))
+    _base_ds = str(OUTPUT_PATH / "active_dataset.parquet")
     _active_ds = _base_ds
     info: dict[str, Any] = {"active": False, "rows": None, "description": ""}
 
@@ -74,8 +75,8 @@ def prepare_demo_filter_dataset(
         _hub_part = (
             "_".join(sorted(_demo_hubs_run))[:50] if _demo_hubs_run else "AllHubs"
         )
-        _demo_ds = os.path.abspath(
-            os.path.join("outputs", f"active_dataset_demo_{_city_part}_{_hub_part}.parquet")
+        _demo_ds = str(
+            OUTPUT_PATH / f"active_dataset_demo_{_city_part}_{_hub_part}.parquet"
         )
         _filtered_df.to_parquet(_demo_ds, index=False)
         _active_ds = _demo_ds

@@ -10,7 +10,14 @@ import pandas as pd
 
 from planning_suite.core.dataframe import clean_sheet_df
 
-CACHE_DIR = Path("outputs/sheets_cache")
+
+def _cache_dir() -> Path:
+    """Writable cache dir — uses OUTPUT_PATH (/app/data/outputs on cloud)."""
+    from planning_suite.config import OUTPUT_PATH
+
+    path = OUTPUT_PATH / "sheets_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 # Seconds — override via env (e.g. SHEETS_CACHE_TTL_MASTERS=1800)
 def _ttl(name: str, default: int) -> int:
@@ -52,7 +59,7 @@ def cache_path(
     range_notation: str = "",
 ) -> Path:
     name = worksheet_name.replace(" ", "_")
-    return CACHE_DIR / f"{_slug(spreadsheet_key, worksheet_name, range_notation)}_{name}.parquet"
+    return _cache_dir() / f"{_slug(spreadsheet_key, worksheet_name, range_notation)}_{name}.parquet"
 
 
 def cache_path_for_category(
@@ -60,7 +67,7 @@ def cache_path_for_category(
     worksheet_key: str,
     range_notation: str = "",
 ) -> Path:
-    return CACHE_DIR / f"{_slug(sheet_category, worksheet_key, range_notation)}_{worksheet_key}.parquet"
+    return _cache_dir() / f"{_slug(sheet_category, worksheet_key, range_notation)}_{worksheet_key}.parquet"
 
 
 def ttl_for_worksheet(worksheet_name: str, sheet_category: str | None = None) -> int:

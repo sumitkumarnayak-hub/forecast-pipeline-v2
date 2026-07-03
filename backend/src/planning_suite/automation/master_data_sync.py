@@ -19,7 +19,7 @@ from typing import Callable
 
 import pandas as pd
 
-from planning_suite.config import FF_MASTERS_XLSX, PROJECT_ROOT
+from planning_suite.config import FF_MASTERS_XLSX, OUTPUT_PATH, PROJECT_ROOT
 from planning_suite.core.dataframe import clean_sheet_df
 from planning_suite.core.validations.master_rules import VALIDATION_VERSION
 from planning_suite.core.validations.runner import run_master_data_validations
@@ -27,7 +27,7 @@ from planning_suite.db.engine import Database, get_shared_database
 
 ProgressCallback = Callable[[str, float], None]
 
-_STATE_FILE = PROJECT_ROOT / "outputs" / "master_sync_state.json"
+_STATE_FILE = OUTPUT_PATH / "master_sync_state.json"
 
 
 def _noop_progress(_message: str, _pct: float) -> None:

@@ -48,8 +48,10 @@ def describe_missing_6w_sources() -> str:
             "No 6-week data file found.\n\n"
             f"Expected `{OUTPUT_RDS_CACHE}` (synced from shared Drive key `outputs/rds_cache.parquet`).\n"
             "- Upload it once from your machine: `cd backend && python scripts/push_pipeline_storage.py`\n"
-            "- Ensure Render has `STORAGE_BACKEND=drive` and `PIPELINE_DRIVE_FOLDER_URL` set.\n"
-            "- Restart the service so startup pulls artifacts from shared Drive."
+            "- Ensure your backend (Hugging Face Space or Render) has `STORAGE_BACKEND=drive` "
+            "and `PIPELINE_DRIVE_FOLDER_URL` set.\n"
+            "- Restart the service so startup pulls artifacts from shared Drive, or use "
+            "Settings → Sync storage (admin)."
         )
     rds = RDS_6W_PATH or "(not set in .env)"
     drive = drive_csv_path()

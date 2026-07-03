@@ -34,6 +34,8 @@ def _env_status() -> dict[str, Any]:
         "smtp_configured": cfg.is_smtp_configured(),
         "google_credentials_path": bool(cfg.GOOGLE_CREDENTIALS_PATH),
         "pipeline_params_sheet_url": bool(cfg.PIPELINE_PARAMS_SHEET_URL),
+        "storage_backend": cfg.get_storage_backend_name(),
+        "drive_folder_configured": bool(cfg.get_pipeline_drive_folder_id()),
     }
 
 
