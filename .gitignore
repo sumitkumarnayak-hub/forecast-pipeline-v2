@@ -39,6 +39,7 @@ forecasting_db.sqlite
 .env.local
 .env.*.local
 *.env
+.env.render.example
 
 # Operating System files
 .DS_Store
