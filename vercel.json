@@ -2,10 +2,7 @@
     "services": {
         "frontend": {
             "root": "frontend",
-            "framework": "nextjs",
-            "env": {
-                "BACKEND_URL": "https://forecast-pipeline-v2.onrender.com"
-            }
+            "framework": "nextjs"
         },
         "backend": {
             "root": "backend"

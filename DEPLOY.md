@@ -151,6 +151,12 @@ The frontend proxies `/api/*` to `BACKEND_URL` so httpOnly auth cookies work sam
 
 **Do not** set `BACKEND_URL` to `http://localhost:8000` on Vercel — Vercel runs in the cloud and **cannot** reach your PC's localhost (login will return **502 Bad Gateway**).
 
+Optional: set `BACKEND_URL=https://forecast-pipeline-v2.onrender.com` in Vercel → Settings → Environment Variables (the app already defaults to this on Vercel if unset).
+
+### Render keep-alive (GitHub Actions)
+
+To avoid Render free-tier cold starts, add a scheduled workflow. Copy `docs/github-workflows/render-keepalive.yml` into **GitHub → Actions → New workflow** (or push to `.github/workflows/` after running `gh auth refresh -h github.com -s workflow`).
+
 #### Vercel UI + local backend (dev only)
 
 1. Run backend locally: `python run_backend.py`
