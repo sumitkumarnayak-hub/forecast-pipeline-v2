@@ -78,26 +78,26 @@ def get_google_credentials_path() -> str:
     Return a filesystem path to service account JSON.
 
     Priority:
-      1. GOOGLE_CREDENTIALS_JSON env (Render) — materialized to a temp file
-      2. GOOGLE_CREDENTIALS_PATH env if the file exists
+      1. GOOGLE_CREDENTIALS_PATH if the file exists (local dev)
+      2. GOOGLE_CREDENTIALS_JSON env (Render) — materialized to a temp file
       3. Bundled repo file (e.g. causal-flame-452312-q9-1b4341ee87db.json)
     """
     global _cached_path
     if _cached_path and Path(_cached_path).is_file():
         return _cached_path
 
+    configured = os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
+    if configured and Path(configured).is_file():
+        _cached_path = configured
+        return configured
+
     raw_json = _valid_json_env(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
     if raw_json:
         path = _materialize_json(raw_json)
         _cached_path = path
         os.environ["GOOGLE_CREDENTIALS_PATH"] = path
-        logger.info("Google credentials loaded from GOOGLE_CREDENTIALS_JSON → %s", path)
+        logger.info("Google credentials loaded from GOOGLE_CREDENTIALS_JSON -> %s", path)
         return path
-
-    configured = os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
-    if configured and Path(configured).is_file():
-        _cached_path = configured
-        return configured
 
     if configured:
         logger.warning("GOOGLE_CREDENTIALS_PATH not found: %s", configured)
@@ -123,15 +123,9 @@ def get_google_credentials_path() -> str:
 
 
 def load_service_account_credentials(scopes: list[str]):
-    """Build oauth2client credentials from JSON env or file path."""
+    """Build oauth2client credentials from resolved credentials file."""
     from oauth2client.service_account import ServiceAccountCredentials
 
-    raw_json = _valid_json_env(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
-    if raw_json:
-        return ServiceAccountCredentials.from_json_keyfile_dict(
-            _parse_credentials_json(raw_json),
-            scopes,
-        )
     return ServiceAccountCredentials.from_json_keyfile_name(
         get_google_credentials_path(),
         scopes,

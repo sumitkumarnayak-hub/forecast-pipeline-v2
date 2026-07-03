@@ -39,7 +39,6 @@ forecasting_db.sqlite
 .env.local
 .env.*.local
 *.env
-.env.render.example
 backend/dotenv-profiles/local.env
 backend/dotenv-profiles/render.env
 backend/dotenv-profiles/.active
