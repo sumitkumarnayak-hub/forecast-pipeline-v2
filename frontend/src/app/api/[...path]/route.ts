@@ -9,6 +9,40 @@ const BACKEND =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:8000";
 
+function isLocalBackend(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function backendUnreachableDetail(): string {
+  if (process.env.VERCEL && isLocalBackend(BACKEND)) {
+    return (
+      `BACKEND_URL is "${BACKEND}" but this app runs on Vercel — it cannot reach your PC's localhost. ` +
+      "Expose your local API with ngrok/Cloudflare Tunnel and set BACKEND_URL on Vercel to that public HTTPS URL " +
+      "(e.g. https://abc123.ngrok-free.app). Or run the frontend locally: npm run dev in frontend/."
+    );
+  }
+  return `Cannot reach API server at ${BACKEND}. Is the backend running and reachable from the internet?`;
+}
+
+/** Rewrite Set-Cookie from upstream so auth works when Vercel (HTTPS) proxies a dev backend. */
+function rewriteSetCookieHeader(cookie: string, requestIsHttps: boolean): string {
+  let out = cookie.replace(/;\s*Domain=[^;]*/gi, "");
+  if (requestIsHttps && !/;\s*Secure/i.test(out)) {
+    out += "; Secure";
+  }
+  return out;
+}
+
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -30,7 +64,7 @@ function forwardRequestHeaders(request: NextRequest): Headers {
   return headers;
 }
 
-function buildResponseHeaders(upstream: Response): Headers {
+function buildResponseHeaders(upstream: Response, requestIsHttps: boolean): Headers {
   const headers = new Headers();
   upstream.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
@@ -39,11 +73,11 @@ function buildResponseHeaders(upstream: Response): Headers {
   });
   if (typeof upstream.headers.getSetCookie === "function") {
     for (const cookie of upstream.headers.getSetCookie()) {
-      headers.append("Set-Cookie", cookie);
+      headers.append("Set-Cookie", rewriteSetCookieHeader(cookie, requestIsHttps));
     }
   } else {
     const cookie = upstream.headers.get("set-cookie");
-    if (cookie) headers.append("Set-Cookie", cookie);
+    if (cookie) headers.append("Set-Cookie", rewriteSetCookieHeader(cookie, requestIsHttps));
   }
   return headers;
 }
@@ -52,6 +86,11 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
   const path = pathSegments.join("/");
   const search = request.nextUrl.search;
   const url = `${BACKEND}/api/${path}${search}`;
+  const requestIsHttps = request.nextUrl.protocol === "https:";
+
+  if (process.env.VERCEL && isLocalBackend(BACKEND)) {
+    return NextResponse.json({ detail: backendUnreachableDetail() }, { status: 502 });
+  }
 
   const headers = forwardRequestHeaders(request);
 
@@ -72,7 +111,7 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
   } catch (err) {
     const message = err instanceof Error ? err.message : "Backend unreachable";
     return NextResponse.json(
-      { detail: `Cannot reach API server (${BACKEND}). Is the backend running? ${message}` },
+      { detail: `${backendUnreachableDetail()} ${message}` },
       { status: 502 },
     );
   }
@@ -80,7 +119,7 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
   return new NextResponse(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
-    headers: buildResponseHeaders(upstream),
+    headers: buildResponseHeaders(upstream, requestIsHttps),
   });
 }
 

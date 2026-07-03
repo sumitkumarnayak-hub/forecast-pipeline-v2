@@ -78,13 +78,26 @@ Configure Render health check path: `/api/health/ready`
 | Build command | `npm run build` |
 | Output | Next.js default |
 
-### Environment variables (build time)
+### Environment variables (Vercel → Settings → Environment Variables)
 
-| Variable | Notes |
-|----------|--------|
-| `NEXT_PUBLIC_API_URL` | Internal Render backend URL for API rewrites, e.g. `https://planning-api.onrender.com` |
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `BACKEND_URL` | **Yes** | Public HTTPS URL of your FastAPI server, e.g. `https://planning-api.onrender.com` |
 
-The frontend proxies `/api/*` to the backend so httpOnly auth cookies work same-origin.
+The frontend proxies `/api/*` to `BACKEND_URL` so httpOnly auth cookies work same-origin.
+
+**Do not** set `BACKEND_URL` to `http://localhost:8000` on Vercel — Vercel runs in the cloud and **cannot** reach your PC's localhost (login will return **502 Bad Gateway**).
+
+#### Vercel UI + local backend (dev only)
+
+1. Run backend locally: `python run_backend.py`
+2. Expose port 8000 with [ngrok](https://ngrok.com/): `ngrok http 8000`
+3. Set on Vercel: `BACKEND_URL=https://YOUR-SUBDOMAIN.ngrok-free.app` (no trailing slash)
+4. **Redeploy** the frontend
+
+For daily development, run both locally (`start.ps1`) instead of mixing Vercel + localhost.
+
+Legacy alias: `NEXT_PUBLIC_API_URL` is used if `BACKEND_URL` is unset.
 
 ### Optional
 

@@ -49,7 +49,7 @@ export default function LoginPage() {
       if (detail) {
         setError(typeof detail === "string" ? detail : JSON.stringify(detail));
       } else if (!ax?.response) {
-        setError("Cannot reach the API server. Make sure the backend is running on port 8000.");
+        setError("Cannot reach the API server. Check that the backend is running and BACKEND_URL is set on Vercel.");
       } else {
         setError("Invalid username or password.");
       }
