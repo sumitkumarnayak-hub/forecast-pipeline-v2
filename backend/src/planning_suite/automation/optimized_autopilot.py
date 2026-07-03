@@ -166,6 +166,13 @@ class OptimizedAutopilotRunner:
         generator = self._generator()
         sheets = begin_pipeline_sheets_session()
 
+        from planning_suite.storage.sync import sync_before_pipeline
+
+        try:
+            sync_before_pipeline()
+        except Exception as sync_exc:
+            self.logger.warning("Pipeline storage sync before run failed: %s", sync_exc)
+
         self.db.ensure_autopilot_run(run_id, self.user_id, run_name=run_name, source=source)
         self._save_state(result, source=source)
 
@@ -292,6 +299,12 @@ class OptimizedAutopilotRunner:
             self._save_state(result, source=self._run_source)
             return result
         finally:
+            try:
+                from planning_suite.storage.sync import sync_after_pipeline
+
+                sync_after_pipeline()
+            except Exception as sync_exc:
+                self.logger.warning("Pipeline storage sync after run failed: %s", sync_exc)
             end_pipeline_sheets_session()
 
 

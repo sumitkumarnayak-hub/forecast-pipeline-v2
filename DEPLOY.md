@@ -45,11 +45,67 @@ Create your first admin user via SQL or temporarily run locally against prod DB,
 
 Auto-Pilot and baseline steps read/write local paths (`RAW_ACTUALS_FOLDER`, `DP_LOGICS_FOLDER`, `outputs/`, etc.).
 
-On Render without persistent disk, these are **lost on redeploy**. Options:
+On Render without persistent disk, these are **lost on redeploy**. Use the **storage adapter** (switch backends via env — no code changes):
+
+| `STORAGE_BACKEND` | Behavior |
+|-------------------|----------|
+| `local` (default) | Files stay on disk paths from `.env` |
+| `drive` (recommended) | Sync to a single Google Drive folder — no file size cap issues |
+| `supabase` | Pull from bucket before Auto-Pilot, push after |
+
+#### Google Drive (recommended)
+
+Uses your existing Google service account (`GOOGLE_CREDENTIALS_PATH`). One folder URL is enough for all pipeline artifacts.
+
+1. Create a folder in **Google Shared Drive** (recommended) or My Drive.
+2. **Share it** with your service account email (`client_email` in the JSON) as **Content manager** / **Editor**.
+3. In `backend/.env`:
+
+| Variable | Value |
+|----------|--------|
+| `STORAGE_BACKEND` | `drive` |
+| `PIPELINE_DRIVE_FOLDER_URL` | `https://drive.google.com/drive/folders/YOUR_FOLDER_ID` |
+| `GOOGLE_DRIVE_IMPERSONATE_EMAIL` | *(optional)* Workspace user email if the folder is **not** on a Shared Drive |
+
+**Important:** Service accounts have **no My Drive storage**. Uploads to a regular shared folder fail with `storageQuotaExceeded`. Use a [Shared Drive](https://developers.google.com/workspace/drive/api/guides/about-shareddrives) folder, or set `GOOGLE_DRIVE_IMPERSONATE_EMAIL` (requires Google Workspace admin to enable domain-wide delegation on the service account).
+
+4. **Seed Drive** from your machine:
+
+```bash
+cd backend
+python scripts/push_pipeline_storage.py
+```
+
+5. On Render, set container-local paths for `OUTPUT_PATH`, `DP_LOGICS_FOLDER`, etc. Auto-Pilot pulls from Drive at run start and pushes when finished.
+
+Large files (`rds_cache.parquet`, `6w_v3.rds`) upload via Drive resumable API — no 50 MB Supabase limit.
+
+#### Supabase Storage (optional)
+
+1. Create or use bucket: [input-output](https://supabase.com/dashboard/project/prhfevvqxmxhevweyegh/storage/files/buckets/input-output)
+2. In `backend/.env` on Render (and locally for upload):
+
+| Variable | Value |
+|----------|--------|
+| `STORAGE_BACKEND` | `supabase` |
+| `SUPABASE_URL` | `https://prhfevvqxmxhevweyegh.supabase.co` (or derive from `DATABASE_URL`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API → **service_role** (never expose to frontend) |
+| `SUPABASE_STORAGE_BUCKET` | `input-output` |
+
+3. **Seed the bucket** from your machine (where pipeline files exist):
+
+```bash
+cd backend
+# Add SUPABASE_SERVICE_ROLE_KEY to .env first
+python scripts/push_pipeline_storage.py
+```
+
+4. On Render, set path env vars to **writable paths inside the container** (e.g. `/data/outputs`, `/data/dp_logics`). Auto-Pilot will download from Supabase at run start and upload when finished.
+
+Other options:
 
 1. **Render persistent disk** mounted at your `PLANNING_DRIVE_ROOT`
 2. **Shared network drive** accessible from the container
-3. **S3-compatible storage** (requires script changes — not default today)
 
 See `DATA_SOURCES.md` for which files each step needs.
 

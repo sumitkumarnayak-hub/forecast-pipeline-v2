@@ -145,6 +145,59 @@ def get_supabase_project_ref(db_url=None) -> str:
     return ""
 
 
+def get_supabase_url(db_url=None) -> str:
+    explicit = os.getenv("SUPABASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    ref = get_supabase_project_ref(db_url)
+    return f"https://{ref}.supabase.co" if ref else ""
+
+
+def get_supabase_service_role_key() -> str:
+    return os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+
+def get_supabase_storage_bucket() -> str:
+    return os.getenv("SUPABASE_STORAGE_BUCKET", "input-output").strip() or "input-output"
+
+
+def get_storage_backend_name() -> str:
+    return os.getenv("STORAGE_BACKEND", "local").strip().lower() or "local"
+
+
+def get_pipeline_drive_folder_url() -> str:
+    return os.getenv("PIPELINE_DRIVE_FOLDER_URL", "").strip()
+
+
+def drive_folder_id_from_url(url_or_id: str) -> str:
+    """Extract a Drive folder ID from a share URL or bare ID."""
+    value = (url_or_id or "").strip()
+    if not value:
+        return ""
+    if "/folders/" in value:
+        return value.split("/folders/", 1)[1].split("?")[0].split("/")[0].strip()
+    if "id=" in value:
+        return value.split("id=", 1)[1].split("&")[0].strip()
+    return value
+
+
+def get_pipeline_drive_folder_id() -> str:
+    explicit = drive_folder_id_from_url(get_pipeline_drive_folder_url())
+    if explicit:
+        return explicit
+    # Google Drive for Desktop: G:\.shortcut-targets-by-id\<FOLDER_ID>\...
+    root = os.getenv("PLANNING_DRIVE_ROOT", "").strip().replace("/", "\\")
+    marker = ".shortcut-targets-by-id\\"
+    if marker in root:
+        return root.split(marker, 1)[1].split("\\")[0].strip()
+    return ""
+
+
+def get_google_drive_impersonate_email() -> str:
+    """Optional Workspace user for domain-wide delegation (regular My Drive uploads)."""
+    return os.getenv("GOOGLE_DRIVE_IMPERSONATE_EMAIL", "").strip()
+
+
 def get_database_host_label(db_url=None) -> str:
     url = db_url if db_url is not None else get_database_url()
     if not url:
@@ -156,8 +209,9 @@ def get_database_host_label(db_url=None) -> str:
 
 
 # File paths
-OUTPUT_PATH = BASE_DIR / "outputs"
-OUTPUT_PATH.mkdir(exist_ok=True)
+_output_env = os.getenv("OUTPUT_PATH", "").strip()
+OUTPUT_PATH = Path(_output_env) if _output_env else BASE_DIR / "outputs"
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 BASELINE_APPROVAL_JSON = OUTPUT_PATH / "baseline_approval.json"
 
 RAW_DATA_PATH = _env_path("RAW_DATA_PATH")
