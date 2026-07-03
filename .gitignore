@@ -40,6 +40,11 @@ forecasting_db.sqlite
 .env.*.local
 *.env
 .env.render.example
+backend/dotenv-profiles/local.env
+backend/dotenv-profiles/render.env
+backend/dotenv-profiles/.active
+frontend/dotenv-profiles/local.env
+frontend/dotenv-profiles/render.env
 
 # Operating System files
 .DS_Store
