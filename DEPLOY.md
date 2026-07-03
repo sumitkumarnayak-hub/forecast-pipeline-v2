@@ -38,7 +38,7 @@ Create your first admin user via SQL or temporarily run locally against prod DB,
 | `AUTH_SECRET_KEY` | 32+ byte random hex — `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `AUTH_COOKIE_SECURE` | `true` (HTTPS) |
-| `CORS_ORIGINS` | Your Vercel URL, e.g. `https://planning.yourcompany.com` |
+| `CORS_ORIGINS` | `https://forecast-pipeline-v2-frontend-nu.vercel.app` (plus localhost for dev) |
 | `GOOGLE_CREDENTIALS_PATH` | Path to service account JSON **or** paste JSON as env and write to file at build |
 
 ### File storage (critical)
@@ -138,7 +138,14 @@ Configure Render health check path: `/api/health/ready`
 
 | Variable | Required | Notes |
 |----------|----------|--------|
-| `BACKEND_URL` | **Yes** | Public HTTPS URL of your FastAPI server, e.g. `https://planning-api.onrender.com` |
+| `BACKEND_URL` | **Yes** (optional on Vercel) | Defaults to `https://forecast-pipeline-v2.onrender.com` when deployed on Vercel |
+
+**Production URLs**
+
+| Service | URL |
+|---------|-----|
+| Frontend | https://forecast-pipeline-v2-frontend-nu.vercel.app |
+| Backend | https://forecast-pipeline-v2.onrender.com |
 
 The frontend proxies `/api/*` to `BACKEND_URL` so httpOnly auth cookies work same-origin.
 

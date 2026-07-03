@@ -4,10 +4,17 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND =
-  process.env.BACKEND_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8000";
+/** Render API — used on Vercel when BACKEND_URL is not set in project env. */
+const PRODUCTION_BACKEND_URL = "https://forecast-pipeline-v2.onrender.com";
+
+function resolveBackendUrl(): string {
+  const fromEnv = process.env.BACKEND_URL?.trim() || process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (fromEnv) return fromEnv;
+  if (process.env.VERCEL) return PRODUCTION_BACKEND_URL;
+  return "http://localhost:8000";
+}
+
+const BACKEND = resolveBackendUrl();
 
 function isLocalBackend(url: string): boolean {
   try {
