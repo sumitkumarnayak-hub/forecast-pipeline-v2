@@ -60,6 +60,19 @@ def _bundled_candidates() -> list[Path]:
     return out
 
 
+def _valid_json_env(raw: str) -> str | None:
+    """Return raw JSON text if env value is parseable; None if broken/partial."""
+    text = raw.strip()
+    if not text or not text.startswith("{"):
+        return None
+    try:
+        _parse_credentials_json(text)
+        return text
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Ignoring invalid GOOGLE_CREDENTIALS_JSON: %s", exc)
+        return None
+
+
 def get_google_credentials_path() -> str:
     """
     Return a filesystem path to service account JSON.
@@ -73,7 +86,7 @@ def get_google_credentials_path() -> str:
     if _cached_path and Path(_cached_path).is_file():
         return _cached_path
 
-    raw_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    raw_json = _valid_json_env(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
     if raw_json:
         path = _materialize_json(raw_json)
         _cached_path = path
@@ -113,7 +126,7 @@ def load_service_account_credentials(scopes: list[str]):
     """Build oauth2client credentials from JSON env or file path."""
     from oauth2client.service_account import ServiceAccountCredentials
 
-    raw_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    raw_json = _valid_json_env(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
     if raw_json:
         return ServiceAccountCredentials.from_json_keyfile_dict(
             _parse_credentials_json(raw_json),

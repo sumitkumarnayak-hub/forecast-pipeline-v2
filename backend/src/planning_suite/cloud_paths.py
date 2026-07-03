@@ -58,6 +58,8 @@ def resolve_path_env(name: str, default_relative: str, *, base_dir: Path) -> str
     raw = os.getenv(name, "").strip()
     if raw and not (is_cloud_deploy() and is_legacy_windows_path(raw)):
         path = Path(raw)
+        if path.is_dir() or path.is_file():
+            return str(path)
         if _mkdir_writable(path.parent):
             return str(path)
         logger.warning("%s not writable (%s) — using data_root default", name, raw)
