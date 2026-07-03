@@ -112,10 +112,10 @@ class OptimizedAutopilotRunner:
         self.db = db or Database()
         self.logger = logger or _configure_logging()
 
-    def _generator(self):
-        from planning_suite.ui.pages.optimized_baseline import OptimizedBaselineGenerator
+    def _engine(self):
+        from planning_suite.services.baseline_engine import get_baseline_engine
 
-        return OptimizedBaselineGenerator()
+        return get_baseline_engine()
 
     def _save_state(self, result: AutopilotRunResult, *, source: str = "cli") -> None:
         save_autopilot_state(
@@ -163,8 +163,9 @@ class OptimizedAutopilotRunner:
             run_id=run_id,
             run_name=run_name,
         )
-        generator = self._generator()
+        generator = self._engine()
         sheets = begin_pipeline_sheets_session()
+        from planning_suite.automation.autopilot_steps import execute_autopilot_step
 
         from planning_suite.storage.sync import sync_before_pipeline
 
@@ -212,12 +213,14 @@ class OptimizedAutopilotRunner:
                     continue
 
                 try:
-                    step_log = generator._opt_pilot_execute_step(
+                    step_log = execute_autopilot_step(
                         step_idx,
                         self.user_id,
                         run_id=run_id,
                         run_name=run_name,
                         sheets_manager=sheets,
+                        db=self.db,
+                        engine=generator,
                     )
                     result.logs[step_idx] = step_log
                     result.completed_steps.append(step_idx)

@@ -1,4 +1,4 @@
-"""Headless manual baseline operations — same logic as optimized_baseline.py without Streamlit UI."""
+"""Headless manual baseline operations — FastAPI / Next.js (no Streamlit)."""
 from __future__ import annotations
 
 import copy
@@ -9,10 +9,8 @@ import subprocess
 import sys
 import time
 import traceback
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock
 
 import pandas as pd
 
@@ -69,27 +67,10 @@ DP_LOGICS_WORKSHEETS = [
 ACTIVE_DATASET_META = OUTPUT_PATH / "active_dataset_meta.json"
 
 
-@contextmanager
-def _silent_streamlit():
-    """Suppress st.* side effects when calling OptimizedBaselineGenerator methods."""
-    import planning_suite.ui.pages.optimized_baseline as ob
+def _engine():
+    from planning_suite.services.baseline_engine import get_baseline_engine
 
-    old_st = ob.st
-    mock = MagicMock()
-    mock.session_state = {}
-    ob.st = mock
-    try:
-        yield mock
-    finally:
-        ob.st = old_st
-
-
-def _generator():
-    from planning_suite.ui.pages.optimized_baseline import OptimizedBaselineGenerator
-
-    gen = OptimizedBaselineGenerator()
-    gen.use_pipeline_sheets(get_sheets_manager())
-    return gen
+    return get_baseline_engine(sheets=get_sheets_manager())
 
 
 def _save_active_meta(*, rows: int, weeks: list[int], source: str, columns: list[str]) -> None:
@@ -331,18 +312,19 @@ def fetch_raw_data(
 
     iso_week = int(start.isocalendar().week)
     folder = RAW_ACTUALS_FOLDER
-    gen = _generator()
+    engine = _engine()
 
-    with _silent_streamlit():
-        def _fetch():
-            return gen._fetch_raw_data_from_rds(start, end, sheets_manager=gen.sheets_manager)
-
-        df, iso_week, from_cache = resolve_raw_actuals_for_week(
-            start,
-            folder,
-            _fetch,
-            force_refresh=not use_cached_week,
+    def _fetch():
+        return engine.fetch_raw_data_from_rds(
+            start, end, sheets_manager=engine.sheets_manager
         )
+
+    df, iso_week, from_cache = resolve_raw_actuals_for_week(
+        start,
+        folder,
+        _fetch,
+        force_refresh=not use_cached_week,
+    )
 
     if df is None or df.empty:
         raise ValueError("No data found for the selected date range in the RDS file.")

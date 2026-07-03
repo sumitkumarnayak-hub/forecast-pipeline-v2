@@ -77,14 +77,13 @@ def get_bulk_week_plan() -> list[dict[str, Any]]:
 
 def run_bulk_pull(*, also_save_csv: bool = False) -> dict[str, Any]:
     """Pull past 10 weeks from RDS cache into repository parquets."""
-    from planning_suite.services.baseline_manual import _generator, _silent_streamlit
+    from planning_suite.services.baseline_engine import HUBS_TO_EXCLUDE, get_baseline_engine
 
     os.makedirs(RAW_ACTUALS_FOLDER, exist_ok=True)
-    gen = _generator()
+    engine = get_baseline_engine()
     results: list[dict[str, Any]] = []
 
-    with _silent_streamlit():
-        full_df = gen._load_rds_cached()
+    full_df = engine.load_rds_cached()
 
     plan = get_bulk_week_plan()
     for entry in plan:
@@ -98,8 +97,13 @@ def run_bulk_pull(*, also_save_csv: bool = False) -> dict[str, Any]:
             & (~full_df["hub_name"].isin(HUBS_TO_EXCLUDE))
         ].copy()
 
-        if all(c in week_df.columns for c in ["flag", "instances", "group_flag", "group_instances", "r7_inv"]):
-            week_df["plan_sum"] = week_df.groupby(["hub_name", "process_dt", "product_id"])["r7_inv"].transform("sum")
+        if all(
+            c in week_df.columns
+            for c in ["flag", "instances", "group_flag", "group_instances", "r7_inv"]
+        ):
+            week_df["plan_sum"] = week_df.groupby(["hub_name", "process_dt", "product_id"])[
+                "r7_inv"
+            ].transform("sum")
             week_df["simple_flag_when_SP_0"] = np.where(
                 week_df["plan_sum"] == 0, week_df["group_flag"], week_df["flag"]
             )
@@ -112,8 +116,7 @@ def run_bulk_pull(*, also_save_csv: bool = False) -> dict[str, Any]:
             week_df["day"] = week_df["process_dt"].dt.strftime("%a")
             week_df.drop(columns=["plan_sum"], inplace=True)
 
-        with _silent_streamlit():
-            liq_wk = gen._fetch_liquidation_data(pd.Timestamp(wk_start), pd.Timestamp(wk_end))
+        liq_wk = engine.fetch_liquidation_data(pd.Timestamp(wk_start), pd.Timestamp(wk_end))
         if not liq_wk.empty:
             week_df["product_id"] = week_df["product_id"].astype(str)
             week_df = week_df.merge(liq_wk, on=["hub_name", "product_id", "process_dt"], how="left")
@@ -153,7 +156,7 @@ def fetch_previous_baseline(
     target_year: int | None = None,
 ) -> dict[str, Any]:
     """Fetch previous baseline from RDS cache and write prev_baseline_latest.parquet."""
-    from planning_suite.services.baseline_manual import _generator, _silent_streamlit
+    from planning_suite.services.baseline_engine import get_baseline_engine
 
     gsm = get_sheets_manager()
     params = gsm.read_pipeline_params()
@@ -161,9 +164,8 @@ def fetch_previous_baseline(
     tw = int(target_week or params.get("target_week") or now.isocalendar().week)
     ty = int(target_year or params.get("target_year") or now.year)
 
-    gen = _generator()
-    with _silent_streamlit():
-        df = gen._fetch_previous_baseline(tw, ty)
+    engine = get_baseline_engine(sheets=gsm)
+    df = engine.fetch_previous_baseline(tw, ty)
 
     if df is None or df.empty:
         raise ValueError(f"No previous baseline data for week {tw}" + (f" / {ty}" if target_year else ""))
