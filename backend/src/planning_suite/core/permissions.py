@@ -10,6 +10,11 @@ VIEWER_PAGES: frozenset[str] = frozenset({
     "Settings",
 })
 
+PRODUCT_PAGES: frozenset[str] = frozenset({
+    "Product Launch",
+    "Settings",
+})
+
 PAGE_AUTO_PILOT = "Auto-Pilot"
 PAGE_LOAD_RAW_DATA = "1. Load Raw Data"
 PAGE_CONFIGURE_PARAMS = "2. Configure Parameters"
@@ -85,6 +90,8 @@ def can_manage_email_recipients(role: str) -> bool:
 
 
 def allowed_pages(role: str) -> list[str]:
+    if role == "product":
+        return [page for page in PAGE_ORDER if page in PRODUCT_PAGES]
     if role in {"admin", "planner"}:
         return list(PAGE_ORDER)
     return [page for page in PAGE_ORDER if page in VIEWER_PAGES]

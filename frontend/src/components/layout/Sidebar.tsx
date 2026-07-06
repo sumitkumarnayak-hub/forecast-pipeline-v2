@@ -14,6 +14,7 @@ const ROLE_BADGE: Record<string, string> = {
   admin: "Administrator",
   planner: "Planner",
   viewer: "Viewer",
+  product: "Product",
 };
 
 function SidebarLink({

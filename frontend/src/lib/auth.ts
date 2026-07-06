@@ -8,7 +8,7 @@ export interface User {
   username: string;
   full_name: string;
   email: string;
-  role: "admin" | "planner" | "viewer";
+  role: "admin" | "planner" | "viewer" | "product";
 }
 
 const USER_KEY = "ps_user";
@@ -107,7 +107,7 @@ export async function logout(): Promise<void> {
 }
 
 export const canWrite = (role?: string) =>
-  ["admin", "planner"].includes(role || "");
+  ["admin", "planner", "product"].includes(role || "");
 export const canApprove = (role?: string) => role === "admin";
 export const isAdmin = (role?: string) => role === "admin";
 
@@ -121,4 +121,5 @@ export const ALLOWED_PAGES: Record<string, string[]> = {
     "Final Plan", "Validation", "Analytics", "Settings",
   ],
   viewer: ["Dashboard", "Master Data", "Analytics", "Settings"],
+  product: ["Product Launch", "Settings"],
 };

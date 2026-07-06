@@ -5,7 +5,7 @@ import Sidebar from "./Sidebar";
 import { prefetchAllRoutes } from "@/lib/pagePrefetch";
 import { fetchBaselineStatus, BASELINE_APPROVED_KEY } from "@/lib/baselineStatus";
 import { cacheGet } from "@/lib/queryCache";
-import { rolesForPath } from "@/lib/navigation";
+import { rolesForPath, homePathForRole } from "@/lib/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/lib/theme";
 import { Menu, Moon, Sun, X } from "lucide-react";
@@ -119,7 +119,7 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
     if (!hydrated || !user || !role) return;
     const allowed = rolesForPath(pathname);
     if (allowed && !allowed.includes(role)) {
-      router.replace("/dashboard");
+      router.replace(homePathForRole(role));
     }
   }, [hydrated, pathname, role, user, router]);
 

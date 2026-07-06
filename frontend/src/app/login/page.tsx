@@ -5,6 +5,7 @@ import { Eye, EyeOff } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { prefetchRoute } from "@/lib/pagePrefetch";
+import { homePathForRole } from "@/lib/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,7 +19,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (hydrated && user) {
-      router.replace("/dashboard");
+      router.replace(homePathForRole(user.role));
     }
   }, [hydrated, user, router]);
 
@@ -41,8 +42,9 @@ export default function LoginPage() {
         return;
       }
       establishSession(data.user);
-      router.replace("/dashboard");
-      prefetchRoute("/dashboard");
+      const home = homePathForRole(data.user.role);
+      router.replace(home);
+      prefetchRoute(home);
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string }; status?: number }; message?: string };
       const detail = ax?.response?.data?.detail;

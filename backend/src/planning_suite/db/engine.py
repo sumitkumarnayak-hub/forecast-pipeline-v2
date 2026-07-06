@@ -130,6 +130,58 @@ class Database:
             self._migrate_users_is_active(conn)
         if not IS_PRODUCTION:
             self.create_default_users()
+        self.ensure_product_user()
+
+    def _insert_user_if_missing(
+        self,
+        conn,
+        *,
+        username: str,
+        password: str,
+        full_name: str,
+        email: str,
+        role: str,
+    ) -> None:
+        import bcrypt
+        from sqlalchemy.exc import IntegrityError
+
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE username = :username"),
+            {"username": username},
+        ).scalar()
+        if count:
+            return
+        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode(
+            "utf-8"
+        )
+        try:
+            conn.execute(
+                text("""
+                    INSERT INTO users (username, password_hash, full_name, email, role)
+                    VALUES (:username, :password_hash, :full_name, :email, :role)
+                """),
+                {
+                    "username": username,
+                    "password_hash": password_hash,
+                    "full_name": full_name,
+                    "email": email,
+                    "role": role,
+                },
+            )
+        except IntegrityError:
+            pass
+
+    def ensure_product_user(self) -> None:
+        """Idempotent — Product Launch + Settings RBAC account."""
+        with self.engine.begin() as conn:
+            self._insert_user_if_missing(
+                conn,
+                username="product",
+                password="product123",
+                full_name="Product User",
+                email="product@company.com",
+                role="product",
+            )
 
     def _migrate_auth_sessions(self, conn) -> None:
         """Add columns introduced after initial auth_sessions schema."""

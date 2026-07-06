@@ -15,7 +15,7 @@ type AdminUser = {
   last_login?: string | null;
 };
 
-const ROLES = ["admin", "planner", "viewer"] as const;
+const ROLES = ["admin", "planner", "viewer", "product"] as const;
 
 type Props = {
   onMessage: (text: string, type: "success" | "danger") => void;

@@ -36,6 +36,7 @@ forecasting_db.sqlite
 
 # Environment variables (sensitive data)
 .env
+backend/.env.render.example
 .env.local
 .env.*.local
 *.env

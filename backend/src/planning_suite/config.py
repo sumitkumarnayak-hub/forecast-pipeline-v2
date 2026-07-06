@@ -234,7 +234,8 @@ DP_LOGICS_FOLDER = resolve_path_env("DP_LOGICS_FOLDER", "dp_logics", base_dir=BA
 USER_ROLES = {
     "admin": ["read", "write", "approve", "manage_users"],
     "planner": ["read", "write"],
-    "viewer": ["read"]
+    "product": ["read", "write"],
+    "viewer": ["read"],
 }
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

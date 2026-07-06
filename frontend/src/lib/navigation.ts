@@ -124,7 +124,7 @@ export const SIDEBAR_NAV: NavEntry[] = [
     label: "Product Launch",
     href: "/new-product-launch",
     icon: Package,
-    roles: ["admin", "planner"],
+    roles: ["admin", "planner", "product"],
   },
   {
     type: "link",
@@ -157,7 +157,7 @@ export const SIDEBAR_NAV: NavEntry[] = [
     label: "Settings",
     href: "/settings",
     icon: Settings,
-    roles: ["admin", "planner", "viewer"],
+    roles: ["admin", "planner", "viewer", "product"],
   },
   {
     type: "link",
@@ -273,4 +273,10 @@ export function rolesForPath(pathname: string): string[] | null {
     return ["admin", "planner"];
   }
   return null;
+}
+
+/** Default landing route after login (first page the role can access). */
+export function homePathForRole(role: string): string {
+  if (role === "product") return "/new-product-launch";
+  return "/dashboard";
 }
