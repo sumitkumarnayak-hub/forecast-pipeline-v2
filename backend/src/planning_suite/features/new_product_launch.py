@@ -253,6 +253,123 @@ def load_salience_source() -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+
+def load_hub_sku_master() -> pd.DataFrame:
+    """Load Hub Sku Master for active hub and expansion eligibility lookups."""
+    from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
+
+    def _fetch():
+        from planning_suite.services.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(SPREADSHEET_ID, HUB_SKU_MASTER_SHEET)
+            return sheet.get_all_values()
+
+    data = read_sheet_values_cached(
+        SPREADSHEET_ID,
+        HUB_SKU_MASTER_SHEET,
+        "A:Z",
+        sheet_category="hub_sku_master",
+        fetcher=_fetch,
+    )
+    if not data or len(data) < 2:
+        return pd.DataFrame()
+    df = pd.DataFrame(data[1:], columns=data[0])
+    df = _normalize_columns(df)
+    for col in ["city_name", "hub_name", "sub_category", "Plan Flag"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+    return df
+
+
+def get_active_hubs_for_city(hub_sku_df: pd.DataFrame, city: str, category: str | None = None) -> list[str]:
+    """Return sorted active hub names for a city and optional category."""
+    if hub_sku_df is None or hub_sku_df.empty:
+        return []
+    mask = (
+        hub_sku_df["city_name"].astype(str).str.strip().str.lower() == str(city).strip().lower()
+        ) & (
+        hub_sku_df["Plan Flag"].astype(str).str.strip().str.upper() != "I"
+        )
+    if category:
+        mask &= hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == category.strip().lower()
+    return sorted(hub_sku_df.loc[mask, "hub_name"].dropna().astype(str).str.strip().unique().tolist())
+
+
+def get_expansion_hubs_for_city(
+    hub_sku_df: pd.DataFrame,
+    city: str,
+    category: str,
+    all_hubs_in_city: list[str],
+) -> list[str]:
+    """Return hubs eligible for expansion in a city+category."""
+    if hub_sku_df is None or hub_sku_df.empty:
+        return sorted(set(all_hubs_in_city))
+
+    city_lower = str(city).strip().lower()
+    cat_lower = str(category).strip().lower()
+
+    city_cat_mask = (
+        hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
+        ) & (
+        hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == cat_lower
+    )
+    city_cat_df = hub_sku_df.loc[city_cat_mask]
+
+    inactive_hubs = city_cat_df[
+        city_cat_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
+    ]["hub_name"].dropna().astype(str).str.strip().unique().tolist()
+
+    present_hubs = {
+        str(h).strip().lower()
+        for h in city_cat_df["hub_name"].dropna().astype(str).tolist()
+    }
+    not_present_hubs = [
+        hub for hub in all_hubs_in_city
+        if str(hub).strip().lower() not in present_hubs
+    ]
+
+    return sorted(set(inactive_hubs + not_present_hubs))
+
+
+def get_expansion_cities(hub_sku_df: pd.DataFrame, category: str, all_cities: list[str]) -> list[str]:
+    """Return cities that have at least one expansion-eligible hub for the category."""
+    if hub_sku_df is None or hub_sku_df.empty:
+        return []
+    result = []
+    cat_lower = str(category).strip().lower()
+
+    for city in all_cities:
+        city_lower = str(city).strip().lower()
+        city_cat_mask = (
+            hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
+            ) & (
+            hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == cat_lower
+        )
+        city_cat_df = hub_sku_df.loc[city_cat_mask]
+
+        has_inactive = (
+            city_cat_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
+        ).any()
+        if has_inactive:
+            result.append(city)
+            continue
+
+        present_hubs = {
+            str(h).strip().lower()
+            for h in city_cat_df["hub_name"].dropna().astype(str).tolist()
+        }
+        all_city_mask = hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
+        all_hubs_city = {
+            str(h).strip().lower()
+            for h in hub_sku_df.loc[all_city_mask, "hub_name"].dropna().astype(str).tolist()
+        }
+        if all_hubs_city - present_hubs:
+            result.append(city)
+
+    return sorted(result)
+
+
 def compute_salience_category(df: pd.DataFrame) -> pd.DataFrame:
     """Salience at city × hub × category (Product newlaunchv2_full.compute_salience_category)."""
     if df is None or df.empty:
@@ -354,6 +471,14 @@ def _require_salience(sal_df: pd.DataFrame) -> bool:
 def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> list:
     if sal_df is None or sal_df.empty:
         return []
+
+    # Prefer active hubs from Hub Sku Master when available for the city/category.
+    hub_sku_df = load_hub_sku_master()
+    if category and not hub_sku_df.empty:
+        active_hubs = get_active_hubs_for_city(hub_sku_df, city, category)
+        if active_hubs:
+            return active_hubs
+
     city_col = _resolve_col(sal_df, "city_name", "City Name", "city")
     hub_col = _resolve_col(sal_df, "hub_name", "Hub Name", "hub")
     if not city_col or not hub_col:
@@ -820,65 +945,7 @@ def get_earliest_monday(min_days: int = 4) -> date:
 # ──────────────────────────────────────────────────────────────────
 # EMAIL  PLACEHOLDER
 # ──────────────────────────────────────────────────────────────────
-def show_email_placeholder(sub_id: str, sub_type: str, product_name: str,
-                            hub_df: pd.DataFrame, *, user_id: int | None = None):
-    """Send launch notification emails and show delivery status."""
-    dates = []
-    if "Launch Date" in hub_df.columns:
-        dates = sorted(hub_df["Launch Date"].dropna().astype(str).unique().tolist())
-    elif "Start Date" in hub_df.columns:
-        dates = sorted(hub_df["Start Date"].dropna().astype(str).unique().tolist())
-    launch_str = ", ".join(dates) if dates else "—"
-
-    if user_id is None:
-        user_id = os.environ.get("user", {}).get("id")
-
-    from planning_suite.services.workflow_notifications import notify_launch_submission
-
-    results = notify_launch_submission(
-        sub_id=sub_id,
-        sub_type=sub_type,
-        product_name=product_name,
-        launch_dates=dates,
-        user_id=user_id,
-    )
-
-    if results.get("skipped"):
-        if True:
-            print(results.get("reason", "Email notifications were not sent."))
-        return
-
-    if True:
-        col1, col2 = st.columns(2)
-        with col1:
-            print(f"""
-**To: Planners**
-> Subject: New {sub_type} — {product_name}
->
-> Launch date(s): **{launch_str}**
-> Submission ID: `{sub_id}`
-""")
-            _show_send_result(results.get("planner", {}))
-        with col2:
-            print(f"""
-**To: Admin**
-> Subject: Approval required — {sub_type}: {product_name}
->
-> Submission ID: `{sub_id}`
-> Launch date(s): **{launch_str}**
-""")
-            _show_send_result(results.get("admin", {}))
-
-
-def _show_send_result(result: dict) -> None:
-    status = result.get("status", "skipped")
-    recipients = result.get("recipients") or []
-    if status == "sent":
-        st.success(f"Sent to: {', '.join(recipients)}")
-    elif status == "failed":
-        print(f"Failed: {result.get('error', 'Unknown error')}")
-    else:
-        print(result.get("error") or "Not sent — check SMTP and recipient list in Settings.")
+# Streamlit UI code removed. This module now provides only backend helpers for FastAPI and Next.js.
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -897,7 +964,7 @@ def wide_to_long(df: pd.DataFrame) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────
 # SHARED:  SUBMIT  HUB-LEVEL  DATA  TO  SHEETS
 # ──────────────────────────────────────────────────────────────────
-def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str) -> str:
+def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> str:
     """
     Normalise, attach metadata, write to Submission_Log + Launch_Output.
     Launch Date is read per-row from the 'Launch Date' column in hub_df.
@@ -928,14 +995,14 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str) -> str:
             df[day] = 0
     df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
 
-    user   = os.environ.get("user", {})
+    submitted_by = username or ""
     sub_id = gen_sub_id(sub_type)
     df["Timestamp"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df["Submission_ID"]    = sub_id
     df["Submission_Type"]  = sub_type
     df["Status"]           = "Pending"
     df["Rejection_Reason"] = ""
-    df["Submitted_By"]     = user.get("username", "")
+    df["Submitted_By"]     = submitted_by
 
     log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
                 "Product ID", "Product Name", "Category",
@@ -980,1071 +1047,12 @@ def _show_zero_sal_warning(zero_sal_info: dict):
         )
 
 
-def _show_diff(existing: pd.DataFrame, new_df: pd.DataFrame, label_existing: str = "Existing"):
-    print(f"#### Duplicate detected — comparing **{label_existing}** vs **Your Upload**")
-    c1, c2 = st.columns(2)
-    show = ["City", "Hub"] + WEEKDAYS
-    with c1:
-        st.caption(label_existing)
-        st.dataframe(existing[[c for c in show if c in existing.columns]],
-                     use_container_width=True, hide_index=True)
-    with c2:
-        st.caption("Your Upload")
-        rename_new = new_df.rename(columns={"city_name": "City", "hub_name": "Hub"})
-        st.dataframe(rename_new[[c for c in show if c in rename_new.columns]],
-                     use_container_width=True, hide_index=True)
-
-
-# ──────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────
-# PAGE  TYPE 1  —  NEW  PRODUCT  LAUNCH
-# ─────────────────────────────────────────
-# ──────────────────────────────────────────────────────────────────
-_T1_STAGES = ["1 · Upload", "2 · Hub Split", "3 · Launch Date", "4 · Confirm & Submit"]
-_T1_KEY    = "t1"   # session-state prefix
-
-
-def _t1_key(k): return f"{_T1_KEY}_{k}"
-
-
-def _t1_reset():
-    for k in [k for k in os.environ if k.startswith(f"{_T1_KEY}_")]:
-        del os.environ[k]
-
-
-def _t1_init():
-    defs = {
-        "stage": "upload",
-        "plan_level": "city",
-        "product_id": "", "product_name": "", "category": "",
-        "selected_cities": [], "selected_hubs": {},
-        "upload_city_df": pd.DataFrame(),
-        "hub_split_df": pd.DataFrame(),
-        "zero_sal_info": {},
-        "dup_existing": pd.DataFrame(),
-        "launch_date": None,
-        "is_edit": False,
-        "edit_sub_id": "",
-        "upload_ts": "",
-    }
-    for k, v in defs.items():
-        if _t1_key(k) not in os.environ:
-            os.environ[_t1_key(k)] = v
-
-
-def page_type1():
-    print(
-        '<div class="page-header">'
-        '<div class="page-title">New Product Launch</div>'
-        '<div class="page-desc">Completely new product ID entering the system</div>'
-        '</div>', unsafe_allow_html=True
-    )
-    _t1_init()
-
-    sal_df    = load_hub_salience()
-    df_master = load_product_master()
-    all_cats  = get_categories(df_master)
-    all_cities = get_cities_from_salience(sal_df)
-    if not _require_salience(sal_df):
-        return
-
-    stage = os.environ[_t1_key("stage")]
-    _stage_bar(stage.replace("upload", "1 · Upload")
-                     .replace("split_review", "2 · Hub Split")
-                     .replace("set_date", "3 · Launch Date")
-                     .replace("confirm", "4 · Confirm & Submit"),
-               _T1_STAGES)
-
-    # ── STAGE: upload ────────────────────────────────────────────
-    if stage == "upload":
-        _t1_stage_upload(df_master, all_cats, all_cities, sal_df)
-
-    # ── STAGE: split_review ─────────────────────────────────────
-    elif stage == "split_review":
-        _t1_stage_split()
-
-    # ── STAGE: set_date ─────────────────────────────────────────
-    elif stage == "set_date":
-        _t1_stage_date()
-
-    # ── STAGE: confirm ──────────────────────────────────────────
-    elif stage == "confirm":
-        _t1_stage_confirm()
-
-    # Reset button
-    print("---")
-    if st.button("↺ Start new submission", key="t1_reset_btn"):
-        _t1_reset()
-        st.rerun()
-
-
-def _t1_stage_upload(df_master, all_cats, all_cities, sal_df):
-    # ── Sub-Category only ────────────────────────────────────────
-    cat = st.selectbox("Sub-Category", all_cats, key="t1_cat_sel",
-                       index=all_cats.index(os.environ[_t1_key("category")])
-                       if os.environ[_t1_key("category")] in all_cats else 0)
-    os.environ[_t1_key("category")] = cat
-
-    print("---")
-
-    # ── Plan level + cities/hubs ─────────────────────────────────
-    plan_level = st.radio("Plan Level", ["City Level", "Hub Level"],
-                          horizontal=True, key="t1_plan_level_sel")
-    os.environ[_t1_key("plan_level")] = plan_level
-
-    sel_cities = st.multiselect("Select Cities", all_cities,
-                                 default=os.environ[_t1_key("selected_cities")],
-                                 key="t1_cities_sel")
-    os.environ[_t1_key("selected_cities")] = sel_cities
-
-    sel_hubs = {}
-    if plan_level == "Hub Level" and sel_cities:
-        st.caption("Select hubs per city (these will be pre-filled in the Hub-Level template):")
-        for city in sel_cities:
-            # No category filter — show all hubs available for the city
-            city_hubs = get_hubs_for_city(sal_df, city)
-            chosen = st.multiselect(
-                f"{city} — hubs",
-                city_hubs,
-                default=[h for h in os.environ[_t1_key("selected_hubs")].get(city, [])
-                         if h in city_hubs],
-                key=f"t1_hubs_{city}",
-            )
-            sel_hubs[city] = chosen
-    os.environ[_t1_key("selected_hubs")] = sel_hubs
-
-    print("---")
-
-    # ── Template download (show only the relevant template) ──────
-    if sel_cities:
-        print("#### Download Template")
-        if plan_level == "City Level":
-            city_bytes = build_city_template(sel_cities, cat)
-            st.download_button(
-                "⬇ City-Level Template",
-                data=city_bytes,
-                file_name=f"city_template_{cat}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="t1_dl_city", use_container_width=True,
-            )
-            st.caption("Pre-filled: city_name · category   |   Fill in: product_id · product_name · MRP · Mon–Sun")
-        else:
-            hubs_for_tmpl = sel_hubs if any(sel_hubs.values()) \
-                else {c: get_hubs_for_city(sal_df, c) for c in sel_cities}
-            hub_bytes = build_hub_template(hubs_for_tmpl, cat)
-            st.download_button(
-                "⬇ Hub-Level Template",
-                data=hub_bytes,
-                file_name=f"hub_template_{cat}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="t1_dl_hub", use_container_width=True,
-            )
-            st.caption("Pre-filled: city_name · hub_name · category   |   Fill in: product_id · product_name · MRP · Mon–Sun")
-
-    # ── Upload ───────────────────────────────────────────────────
-    print("#### Upload Filled Template")
-    uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"],
-                                 key="t1_uploader", label_visibility="collapsed")
-
-    if uploaded and sel_cities:
-        # Auto-detect type from plan level selection; no manual radio needed
-        up_type = "City-Level" if plan_level == "City Level" else "Hub-Level"
-
-        if st.button("Process Upload →", type="primary", key="t1_process_btn"):
-            if up_type == "City-Level":
-                df_up, errs = parse_city_upload(uploaded)
-            else:
-                df_up, errs = parse_hub_upload(uploaded)
-
-            if errs:
-                for e in errs:
-                    print(e)
-                return
-            if df_up.empty:
-                print("No valid rows parsed from the file.")
-                return
-
-            # ── Show upload timestamp ────────────────────────────
-            import datetime as _dt
-            os.environ[_t1_key("upload_ts")] = _dt.datetime.now().strftime("%d %b %Y  %H:%M:%S")
-
-            # ── Duplicate check (use product_id from uploaded file) ──
-            pid_from_file = df_up["product_id"].iloc[0] if "product_id" in df_up.columns else ""
-            df_log = load_log()
-            if up_type == "City-Level":
-                cities_in_file = df_up["city_name"].unique().tolist()
-                dup = check_duplicates_city(df_log, "New Launch", pid_from_file, cities_in_file)
-            else:
-                dup = check_duplicates_hub(df_log, "New Launch", df_up)
-
-            if not dup.empty:
-                _show_diff(dup, df_up, "Existing Submission")
-                print("⚠️ A previous submission exists for this product + city/hub combination. "
-                           "The table below shows the existing data. Edit and re-submit to overwrite.")
-                os.environ[_t1_key("dup_existing")]  = dup
-                os.environ[_t1_key("is_edit")]       = True
-                os.environ[_t1_key("edit_sub_id")]   = dup["Submission_ID"].iloc[0]
-
-            if up_type == "City-Level":
-                hub_df, zero_info = split_city_to_hubs(df_up, sal_df, forced_hubs=None)
-                if hub_df.empty:
-                    print("Could not generate hub split. Check salience data for selected category.")
-                    return
-                os.environ[_t1_key("upload_city_df")] = df_up
-                os.environ[_t1_key("hub_split_df")]   = hub_df
-                os.environ[_t1_key("zero_sal_info")]  = zero_info
-                os.environ[_t1_key("stage")]          = "split_review"
-            else:
-                os.environ[_t1_key("hub_split_df")]  = df_up
-                os.environ[_t1_key("zero_sal_info")] = {}
-                os.environ[_t1_key("stage")]         = "set_date"
-            st.rerun()
-
-    # ── Show upload timestamp if available ───────────────────────
-    if os.environ.get(_t1_key("upload_ts")):
-        st.caption(f"Last uploaded: {os.environ[_t1_key('upload_ts')]}")
-
-
-def _t1_stage_split():
-    st.subheader("Hub-Level Plan Split (from city upload)")
-    zero_info = os.environ[_t1_key("zero_sal_info")]
-    _show_zero_sal_warning(zero_info)
-
-    st.caption("Review the auto-generated hub split. You can edit values directly in the table.")
-    edited = st.data_editor(
-        os.environ[_t1_key("hub_split_df")],
-        num_rows="dynamic", use_container_width=True, key="t1_split_editor",
-        column_config={
-            "city_name":  st.column_config.TextColumn("City",    disabled=True),
-            "hub_name":   st.column_config.TextColumn("Hub",     disabled=True),
-            "product_id": st.column_config.TextColumn("Prod ID", disabled=True),
-        }
-    )
-    os.environ[_t1_key("hub_split_df")] = edited
-
-    col_back, col_sync, col_next = st.columns([1, 2, 4])
-    with col_back:
-        if st.button("← Back", key="t1_split_back"):
-            os.environ[_t1_key("stage")] = "upload"
-            st.rerun()
-    with col_next:
-        if st.button("Confirm Split & Set Launch Date →", type="primary", key="t1_split_next"):
-            os.environ[_t1_key("stage")] = "set_date"
-            st.rerun()
-
-
-def _t1_stage_date():
-    st.subheader("Set Launch Dates")
-    min_date = date.today() + timedelta(days=4)
-    print(
-        f"Minimum launch date: **{min_date.strftime('%d %b %Y')}** (today + 4 days). "
-        "Each row can have a different launch date — edit the **Launch Date** column directly."
-    )
-
-    hub_df = os.environ[_t1_key("hub_split_df")].copy()
-    if "Launch Date" not in hub_df.columns:
-        hub_df["Launch Date"] = min_date
-
-    display_cols = ["city_name", "hub_name", "product_id"] + WEEKDAYS + ["Launch Date"]
-    display_cols = [c for c in display_cols if c in hub_df.columns]
-
-    edited = st.data_editor(
-        hub_df[display_cols],
-        num_rows="fixed",
-        use_container_width=True,
-        key="t1_date_editor",
-        column_config={
-            "city_name":    st.column_config.TextColumn("City",       disabled=True),
-            "hub_name":     st.column_config.TextColumn("Hub",        disabled=True),
-            "product_id":   st.column_config.TextColumn("Product ID", disabled=True),
-            **{d: st.column_config.NumberColumn(d, disabled=True) for d in WEEKDAYS if d in hub_df.columns},
-            "Launch Date":  st.column_config.DateColumn(
-                "Launch Date",
-                min_value=min_date,
-                format="DD-MMM-YYYY",
-            ),
-        },
-    )
-
-    errors = []
-    for _, row in edited.iterrows():
-        d = row.get("Launch Date")
-        if d is None:
-            errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: Launch Date is missing.")
-        else:
-            d_obj = d if isinstance(d, date) else pd.to_datetime(d).date()
-            if d_obj < min_date:
-                errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: {d_obj} must be ≥ {min_date} (T+4).")
-    for e in errors:
-        print(e)
-
-    col_back, col_next = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t1_date_back"):
-            os.environ[_t1_key("stage")] = (
-                "split_review"
-                if not os.environ[_t1_key("upload_city_df")].empty
-                else "upload"
-            )
-            st.rerun()
-    with col_next:
-        if st.button("Review & Submit →", type="primary", key="t1_date_next", disabled=bool(errors)):
-            merged = hub_df.copy()
-            merged["Launch Date"] = edited["Launch Date"].values
-            os.environ[_t1_key("hub_split_df")] = merged
-            os.environ[_t1_key("stage")] = "confirm"
-            st.rerun()
-
-
-def _t1_stage_confirm():
-    st.subheader("Review & Submit")
-    hub_df  = os.environ[_t1_key("hub_split_df")]
-    is_edit = os.environ[_t1_key("is_edit")]
-    pid     = os.environ[_t1_key("product_id")]
-    pname   = os.environ[_t1_key("product_name")]
-
-    print(f"**Product:** `{pid}` — {pname}  \n**Rows:** {len(hub_df)} hub entries")
-    if is_edit:
-        print("This will **overwrite** the existing submission.")
-    st.dataframe(hub_df, use_container_width=True, hide_index=True)
-
-    col_back, col_submit = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t1_confirm_back"):
-            os.environ[_t1_key("stage")] = "set_date"
-            st.rerun()
-    with col_submit:
-        if st.button("Submit →", type="primary", key="t1_submit_btn"):
-            with st.spinner("Saving…"):
-                sub_id = _submit_hub_df(hub_df, "New Launch")
-            st.success(f"Submitted! Submission ID: **{sub_id}**")
-            show_email_placeholder(sub_id, "New Launch", pname, hub_df)
-            os.environ[_t1_key("stage")] = "upload"
-            _t1_reset()
-
-
-# ──────────────────────────────────────────────────────────────────
-# PAGE  TYPE 2  —  PRODUCT  EXPANSION
-# ──────────────────────────────────────────────────────────────────
-_T2_KEY = "t2"
-
-
-def _t2_key(k): return f"{_T2_KEY}_{k}"
-
-
-def _t2_reset():
-    for k in [k for k in os.environ if k.startswith(f"{_T2_KEY}_")]:
-        del os.environ[k]
-
-
-def _t2_init():
-    defs = {
-        "stage": "upload", "plan_level": "city",
-        "product_id": "", "product_name": "", "category": "",
-        "selected_cities": [], "selected_hubs": {},
-        "upload_city_df": pd.DataFrame(),
-        "hub_split_df": pd.DataFrame(), "zero_sal_info": {},
-        "dup_existing": pd.DataFrame(), "launch_date": None,
-        "is_edit": False, "edit_sub_id": "",
-        "upload_ts": "",
-    }
-    for k, v in defs.items():
-        if _t2_key(k) not in os.environ:
-            os.environ[_t2_key(k)] = v
-
-
-def page_type2():
-    print(
-        '<div class="page-header">'
-        '<div class="page-title">Product Expansion</div>'
-        '<div class="page-desc">Existing product ID — expanding into new cities / hubs</div>'
-        '</div>', unsafe_allow_html=True
-    )
-    _t2_init()
-    sal_df     = load_hub_salience()
-    df_master  = load_product_master()
-    all_cities = get_cities_from_salience(sal_df)
-    if not _require_salience(sal_df):
-        return
-
-    stage = os.environ[_t2_key("stage")]
-    _stage_bar(stage.replace("upload", "1 · Upload")
-                     .replace("split_review", "2 · Hub Split")
-                     .replace("set_date", "3 · Launch Date")
-                     .replace("confirm", "4 · Confirm & Submit"),
-               _T1_STAGES)
-
-    if stage == "upload":
-        _t2_stage_upload(df_master, all_cities, sal_df)
-    elif stage == "split_review":
-        _t2_stage_split()
-    elif stage == "set_date":
-        _t2_stage_date()
-    elif stage == "confirm":
-        _t2_stage_confirm()
-
-    print("---")
-    if st.button("↺ Start new submission", key="t2_reset_btn"):
-        _t2_reset()
-        st.rerun()
-
-
-def _t2_stage_upload(df_master, all_cities, sal_df):
-    pid_col   = next((c for c in ["Product id", "Product ID"] if c in df_master.columns), None)
-    all_pids  = sorted(df_master[pid_col].astype(str).unique().tolist()) if pid_col else []
-
-    c1, c2 = st.columns(2)
-    with c1:
-        sel_pid = st.selectbox("Existing Product ID", all_pids, key="t2_pid_sel",
-                               index=all_pids.index(os.environ[_t2_key("product_id")])
-                               if os.environ[_t2_key("product_id")] in all_pids else 0)
-    info  = get_product_info(df_master, sel_pid)
-    with c2:
-        st.text_input("Product Name", value=info["name"], disabled=True, key="t2_pname_disp")
-    st.caption(f"Category: **{info['category']}**")
-    os.environ[_t2_key("product_id")]   = sel_pid
-    os.environ[_t2_key("product_name")] = info["name"]
-    os.environ[_t2_key("category")]     = info["category"]
-
-    print("---")
-    plan_level = st.radio("Plan Level", ["City Level", "Hub Level"],
-                          horizontal=True, key="t2_plan_level_sel")
-    os.environ[_t2_key("plan_level")] = plan_level
-    sel_cities = st.multiselect("Select Cities (new cities for this product)", all_cities,
-                                 default=os.environ[_t2_key("selected_cities")],
-                                 key="t2_cities_sel")
-    os.environ[_t2_key("selected_cities")] = sel_cities
-
-    sel_hubs = {}
-    if plan_level == "Hub Level" and sel_cities:
-        st.caption("Select expansion hubs per city:")
-        for city in sel_cities:
-            # No category filter — show all hubs available for the city
-            city_hubs = get_hubs_for_city(sal_df, city)
-            chosen = st.multiselect(
-                f"{city} — hubs", city_hubs,
-                default=[h for h in os.environ[_t2_key("selected_hubs")].get(city, [])
-                         if h in city_hubs],
-                key=f"t2_hubs_{city}",
-            )
-            sel_hubs[city] = chosen
-    os.environ[_t2_key("selected_hubs")] = sel_hubs
-
-    print("---")
-    if sel_cities:
-        print("#### Download Template")
-        if plan_level == "City Level":
-            st.download_button(
-                "⬇ City-Level Template",
-                data=build_city_template(sel_cities, info["category"], sel_pid, info["name"]),
-                file_name=f"city_expansion_{sel_pid}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="t2_dl_city", use_container_width=True,
-            )
-            st.caption("Pre-filled: city_name · product_id · product_name · category   |   Fill in: MRP · Mon–Sun")
-        else:
-            hubs_for_tmpl = sel_hubs if any(sel_hubs.values()) \
-                else {c: get_hubs_for_city(sal_df, c) for c in sel_cities}
-            st.download_button(
-                "⬇ Hub-Level Template",
-                data=build_hub_template(hubs_for_tmpl, info["category"], sel_pid, info["name"]),
-                file_name=f"hub_expansion_{sel_pid}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="t2_dl_hub", use_container_width=True,
-            )
-            st.caption("Pre-filled: city_name · hub_name · product_id · product_name · category   |   Fill in: MRP · Mon–Sun")
-
-    print("#### Upload Filled Template")
-    uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"],
-                                 key="t2_uploader", label_visibility="collapsed")
-    if uploaded and sel_cities and sel_pid:
-        # Auto-detect type from plan level selection
-        up_type = "City-Level" if plan_level == "City Level" else "Hub-Level"
-        if st.button("Process Upload →", type="primary", key="t2_process_btn"):
-            df_up, errs = parse_city_upload(uploaded) if up_type == "City-Level" \
-                else parse_hub_upload(uploaded)
-            if errs:
-                for e in errs: print(e)
-                return
-            if df_up.empty:
-                print("No valid rows parsed.")
-                return
-
-            # ── Show upload timestamp ────────────────────────────
-            import datetime as _dt
-            os.environ[_t2_key("upload_ts")] = _dt.datetime.now().strftime("%d %b %Y  %H:%M:%S")
-
-            df_log = load_log()
-            dup = check_duplicates_city(df_log, "Expansion", sel_pid,
-                                         df_up["city_name"].unique().tolist()) \
-                  if up_type == "City-Level" \
-                  else check_duplicates_hub(df_log, "Expansion", df_up)
-            if not dup.empty:
-                _show_diff(dup, df_up)
-                print("Previous submission found — editing mode.")
-                os.environ[_t2_key("dup_existing")] = dup
-                os.environ[_t2_key("is_edit")]      = True
-            if up_type == "City-Level":
-                hub_df, zero_info = split_city_to_hubs(df_up, sal_df)
-                if hub_df.empty:
-                    print("No hub salience data. Check category.")
-                    return
-                os.environ[_t2_key("upload_city_df")] = df_up
-                os.environ[_t2_key("hub_split_df")]   = hub_df
-                os.environ[_t2_key("zero_sal_info")]  = zero_info
-                os.environ[_t2_key("stage")]          = "split_review"
-            else:
-                os.environ[_t2_key("hub_split_df")]  = df_up
-                os.environ[_t2_key("zero_sal_info")] = {}
-                os.environ[_t2_key("stage")]         = "set_date"
-            st.rerun()
-
-    # ── Show upload timestamp if available ───────────────────────
-    if os.environ.get(_t2_key("upload_ts")):
-        st.caption(f"Last uploaded: {os.environ[_t2_key('upload_ts')]}")
-
-
-def _t2_stage_split():
-    st.subheader("Hub-Level Plan Split")
-    _show_zero_sal_warning(os.environ[_t2_key("zero_sal_info")])
-    edited = st.data_editor(
-        os.environ[_t2_key("hub_split_df")],
-        num_rows="dynamic", use_container_width=True, key="t2_split_editor",
-        column_config={
-            "city_name":  st.column_config.TextColumn("City",    disabled=True),
-            "hub_name":   st.column_config.TextColumn("Hub",     disabled=True),
-            "product_id": st.column_config.TextColumn("Prod ID", disabled=True),
-        }
-    )
-    os.environ[_t2_key("hub_split_df")] = edited
-    col_back, col_next = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t2_split_back"):
-            os.environ[_t2_key("stage")] = "upload"
-            st.rerun()
-    with col_next:
-        if st.button("Set Launch Date →", type="primary", key="t2_split_next"):
-            os.environ[_t2_key("stage")] = "set_date"
-            st.rerun()
-
-
-def _t2_stage_date():
-    st.subheader("Set Launch Dates")
-    min_date = date.today() + timedelta(days=4)
-    print(
-        f"Minimum launch date: **{min_date.strftime('%d %b %Y')}** (today + 4 days). "
-        "Each row can have a different launch date — edit the **Launch Date** column directly."
-    )
-
-    hub_df = os.environ[_t2_key("hub_split_df")].copy()
-    if "Launch Date" not in hub_df.columns:
-        hub_df["Launch Date"] = min_date
-
-    display_cols = ["city_name", "hub_name", "product_id"] + WEEKDAYS + ["Launch Date"]
-    display_cols = [c for c in display_cols if c in hub_df.columns]
-
-    edited = st.data_editor(
-        hub_df[display_cols],
-        num_rows="fixed",
-        use_container_width=True,
-        key="t2_date_editor",
-        column_config={
-            "city_name":    st.column_config.TextColumn("City",       disabled=True),
-            "hub_name":     st.column_config.TextColumn("Hub",        disabled=True),
-            "product_id":   st.column_config.TextColumn("Product ID", disabled=True),
-            **{d: st.column_config.NumberColumn(d, disabled=True) for d in WEEKDAYS if d in hub_df.columns},
-            "Launch Date":  st.column_config.DateColumn(
-                "Launch Date",
-                min_value=min_date,
-                format="DD-MMM-YYYY",
-            ),
-        },
-    )
-
-    errors = []
-    for _, row in edited.iterrows():
-        d = row.get("Launch Date")
-        if d is None:
-            errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: Launch Date is missing.")
-        else:
-            d_obj = d if isinstance(d, date) else pd.to_datetime(d).date()
-            if d_obj < min_date:
-                errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: {d_obj} must be ≥ {min_date} (T+4).")
-    for e in errors:
-        print(e)
-
-    col_back, col_next = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t2_date_back"):
-            os.environ[_t2_key("stage")] = "split_review" \
-                if not os.environ[_t2_key("upload_city_df")].empty else "upload"
-            st.rerun()
-    with col_next:
-        if st.button("Review & Submit →", type="primary", key="t2_date_next", disabled=bool(errors)):
-            merged = hub_df.copy()
-            merged["Launch Date"] = edited["Launch Date"].values
-            os.environ[_t2_key("hub_split_df")] = merged
-            os.environ[_t2_key("stage")] = "confirm"
-            st.rerun()
-
-
-def _t2_stage_confirm():
-    st.subheader("Review & Submit")
-    hub_df = os.environ[_t2_key("hub_split_df")]
-    pid    = os.environ[_t2_key("product_id")]
-    pname  = os.environ[_t2_key("product_name")]
-    if os.environ[_t2_key("is_edit")]:
-        print("This will **overwrite** the existing submission.")
-    print(f"**Product:** `{pid}` — {pname}  \n**Rows:** {len(hub_df)} hub entries")
-    st.dataframe(hub_df, use_container_width=True, hide_index=True)
-    col_back, col_submit = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t2_confirm_back"):
-            os.environ[_t2_key("stage")] = "set_date"
-            st.rerun()
-    with col_submit:
-        if st.button("Submit →", type="primary", key="t2_submit_btn"):
-            with st.spinner("Saving…"):
-                sub_id = _submit_hub_df(hub_df, "Expansion")
-            st.success(f"Expansion submitted! ID: **{sub_id}**")
-            show_email_placeholder(sub_id, "Expansion", pname, hub_df)
-            _t2_reset()
-
-
-# ──────────────────────────────────────────────────────────────────
-# PAGE  TYPE 3  —  PRODUCT  REPLACEMENT
-# ──────────────────────────────────────────────────────────────────
-_T3_KEY = "t3"
-
-
-def _t3_key(k): return f"{_T3_KEY}_{k}"
-
-
-def _t3_reset():
-    for k in [k for k in os.environ if k.startswith(f"{_T3_KEY}_")]:
-        del os.environ[k]
-
-
-def _t3_init():
-    defs = {
-        "stage": "setup",
-        "old_pid": "", "old_name": "",
-        "new_pid": "", "new_name": "", "category": "",
-        "split_pct": 100,
-        "selected_cities": [],
-        "hub_split_df": pd.DataFrame(),
-        "upload_city_df": pd.DataFrame(),
-        "zero_sal_info": {},
-        "launch_date": None,
-    }
-    for k, v in defs.items():
-        if _t3_key(k) not in os.environ:
-            os.environ[_t3_key(k)] = v
-
-
-def page_type3():
-    print(
-        '<div class="page-header">'
-        '<div class="page-title">Product Replacement</div>'
-        '<div class="page-desc">Replace an existing product with a new SKU</div>'
-        '</div>', unsafe_allow_html=True
-    )
-    _t3_init()
-    sal_df    = load_hub_salience()
-    df_master = load_product_master()
-    all_cats  = get_categories(df_master)
-    all_cities = get_cities_from_salience(sal_df)
-    if not _require_salience(sal_df):
-        return
-    stage = os.environ[_t3_key("stage")]
-
-    stages_rep = ["1 · Old & New SKU", "2 · Plan Upload", "3 · Hub Split",
-                  "4 · Launch Date", "5 · Confirm"]
-    _stage_bar(stage.replace("setup", "1 · Old & New SKU")
-                     .replace("upload", "2 · Plan Upload")
-                     .replace("split_review", "3 · Hub Split")
-                     .replace("set_date", "4 · Launch Date")
-                     .replace("confirm", "5 · Confirm"),
-               stages_rep)
-
-    if stage == "setup":
-        _t3_stage_setup(df_master, all_cats, all_cities)
-    elif stage == "upload":
-        _t3_stage_upload(sal_df)
-    elif stage == "split_review":
-        _t3_stage_split()
-    elif stage == "set_date":
-        _t3_stage_date()
-    elif stage == "confirm":
-        _t3_stage_confirm()
-
-    print("---")
-    if st.button("↺ Start new submission", key="t3_reset_btn"):
-        _t3_reset()
-        st.rerun()
-
-
-def _t3_stage_setup(df_master, all_cats, all_cities):
-    st.subheader("Step 1 — Old SKU & New SKU")
-    c1, c2 = st.columns(2)
-    with c1:
-        print("**Old SKU (being replaced)**")
-        old_cat  = st.selectbox("Old Category", all_cats, key="t3_old_cat")
-        old_prods = get_products_by_category(df_master, old_cat)
-        old_name  = st.selectbox("Old Product Name", old_prods, key="t3_old_name")
-        old_pid   = get_product_id(df_master, old_name)
-        st.text_input("Old Product ID", old_pid, disabled=True, key="t3_old_pid_disp")
-    with c2:
-        print("**New SKU (replacement)**")
-        new_cat  = st.selectbox("New Category", all_cats, key="t3_new_cat")
-        new_prods = get_products_by_category(df_master, new_cat)
-        new_name  = st.selectbox("New Product Name", new_prods, key="t3_new_name")
-        new_pid   = get_product_id(df_master, new_name)
-        st.text_input("New Product ID", new_pid, disabled=True, key="t3_new_pid_disp")
-
-    print("---")
-    split_pct = st.slider("% Plan going to **New SKU**", 0, 100, 100, key="t3_split_pct")
-    st.caption(f"New SKU: **{split_pct}%** · Old SKU: **{100 - split_pct}%**")
-
-    sel_cities = st.multiselect("Select Cities", all_cities,
-                                 default=os.environ[_t3_key("selected_cities")],
-                                 key="t3_cities_sel")
-
-    if st.button("Next: Upload Plan →", type="primary", key="t3_setup_next"):
-        if not old_pid or not new_pid:
-            print("Select both old and new products.")
-        elif not sel_cities:
-            print("Select at least one city.")
-        else:
-            os.environ[_t3_key("old_pid")]         = old_pid
-            os.environ[_t3_key("old_name")]        = old_name
-            os.environ[_t3_key("new_pid")]         = new_pid
-            os.environ[_t3_key("new_name")]        = new_name
-            os.environ[_t3_key("category")]        = new_cat
-            os.environ[_t3_key("split_pct")]       = split_pct
-            os.environ[_t3_key("selected_cities")] = sel_cities
-            os.environ[_t3_key("stage")]           = "upload"
-            st.rerun()
-
-
-def _t3_stage_upload(sal_df):
-    st.subheader("Step 2 — Upload Plan for New SKU")
-    pid    = os.environ[_t3_key("new_pid")]
-    pname  = os.environ[_t3_key("new_name")]
-    cat    = os.environ[_t3_key("category")]
-    cities = os.environ[_t3_key("selected_cities")]
-    pct    = os.environ[_t3_key("split_pct")]
-
-    print(f"Replacing **{os.environ[_t3_key('old_name')]}** "
-            f"→ **{pname}** ({pct}% of plan goes to new SKU)")
-
-    dc1, dc2 = st.columns(2)
-    with dc1:
-        st.download_button(
-            "⬇ City-Level Template (New SKU)",
-            data=build_city_template(cities, cat, pid, pname),
-            file_name=f"replacement_city_{pid}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="t3_dl_city", use_container_width=True,
-        )
-    with dc2:
-        all_hubs = {c: get_hubs_for_city(sal_df, c) for c in cities}
-        st.download_button(
-            "⬇ Hub-Level Template (New SKU)",
-            data=build_hub_template(all_hubs, cat, pid, pname),
-            file_name=f"replacement_hub_{pid}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="t3_dl_hub", use_container_width=True,
-        )
-
-    uploaded = st.file_uploader("Upload filled template (.xlsx)", type=["xlsx"],
-                                 key="t3_uploader", label_visibility="collapsed")
-    if uploaded:
-        up_type = st.radio("Template type", ["City-Level", "Hub-Level"],
-                           horizontal=True, key="t3_up_type")
-        col_back, col_proc = st.columns([1, 6])
-        with col_back:
-            if st.button("← Back", key="t3_upload_back"):
-                os.environ[_t3_key("stage")] = "setup"
-                st.rerun()
-        with col_proc:
-            if st.button("Process →", type="primary", key="t3_proc_btn"):
-                df_up, errs = parse_city_upload(uploaded) if up_type == "City-Level" \
-                    else parse_hub_upload(uploaded)
-                if errs:
-                    for e in errs: print(e)
-                    return
-                # Apply split %
-                for day in WEEKDAYS:
-                    df_up[day] = (df_up[day] * pct / 100).round().astype(int)
-
-                if up_type == "City-Level":
-                    hub_df, zero_info = split_city_to_hubs(df_up, sal_df)
-                    if hub_df.empty:
-                        print("Could not generate hub split.")
-                        return
-                    os.environ[_t3_key("upload_city_df")] = df_up
-                    os.environ[_t3_key("hub_split_df")]   = hub_df
-                    os.environ[_t3_key("zero_sal_info")]  = zero_info
-                    os.environ[_t3_key("stage")]          = "split_review"
-                else:
-                    os.environ[_t3_key("hub_split_df")]  = df_up
-                    os.environ[_t3_key("zero_sal_info")] = {}
-                    os.environ[_t3_key("stage")]         = "set_date"
-                st.rerun()
-    else:
-        if st.button("← Back", key="t3_upload_back_nofile"):
-            os.environ[_t3_key("stage")] = "setup"
-            st.rerun()
-
-
-def _t3_stage_split():
-    st.subheader("Hub Split — New SKU")
-    _show_zero_sal_warning(os.environ[_t3_key("zero_sal_info")])
-    edited = st.data_editor(
-        os.environ[_t3_key("hub_split_df")],
-        num_rows="dynamic", use_container_width=True, key="t3_split_editor",
-        column_config={
-            "city_name":  st.column_config.TextColumn("City",    disabled=True),
-            "hub_name":   st.column_config.TextColumn("Hub",     disabled=True),
-            "product_id": st.column_config.TextColumn("Prod ID", disabled=True),
-        }
-    )
-    os.environ[_t3_key("hub_split_df")] = edited
-    col_back, col_next = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t3_split_back"):
-            os.environ[_t3_key("stage")] = "upload"
-            st.rerun()
-    with col_next:
-        if st.button("Set Launch Date →", type="primary", key="t3_split_next"):
-            os.environ[_t3_key("stage")] = "set_date"
-            st.rerun()
-
-
-def _t3_stage_date():
-    st.subheader("Set Launch Dates")
-    min_date = date.today() + timedelta(days=4)
-    print(
-        f"Minimum launch date: **{min_date.strftime('%d %b %Y')}** (today + 4 days). "
-        "Each row can have a different launch date — edit the **Launch Date** column directly."
-    )
-
-    hub_df = os.environ[_t3_key("hub_split_df")].copy()
-    if "Launch Date" not in hub_df.columns:
-        hub_df["Launch Date"] = min_date
-
-    display_cols = ["city_name", "hub_name", "product_id"] + WEEKDAYS + ["Launch Date"]
-    display_cols = [c for c in display_cols if c in hub_df.columns]
-
-    edited = st.data_editor(
-        hub_df[display_cols],
-        num_rows="fixed",
-        use_container_width=True,
-        key="t3_date_editor",
-        column_config={
-            "city_name":    st.column_config.TextColumn("City",       disabled=True),
-            "hub_name":     st.column_config.TextColumn("Hub",        disabled=True),
-            "product_id":   st.column_config.TextColumn("Product ID", disabled=True),
-            **{d: st.column_config.NumberColumn(d, disabled=True) for d in WEEKDAYS if d in hub_df.columns},
-            "Launch Date":  st.column_config.DateColumn(
-                "Launch Date",
-                min_value=min_date,
-                format="DD-MMM-YYYY",
-            ),
-        },
-    )
-
-    errors = []
-    for _, row in edited.iterrows():
-        d = row.get("Launch Date")
-        if d is None:
-            errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: Launch Date is missing.")
-        else:
-            d_obj = d if isinstance(d, date) else pd.to_datetime(d).date()
-            if d_obj < min_date:
-                errors.append(f"{row.get('city_name','')}/{row.get('hub_name','')}: {d_obj} must be ≥ {min_date} (T+4).")
-    for e in errors:
-        print(e)
-
-    col_back, col_next = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t3_date_back"):
-            os.environ[_t3_key("stage")] = "split_review" \
-                if not os.environ[_t3_key("upload_city_df")].empty else "upload"
-            st.rerun()
-    with col_next:
-        if st.button("Review & Submit →", type="primary", key="t3_date_next", disabled=bool(errors)):
-            merged = hub_df.copy()
-            merged["Launch Date"] = edited["Launch Date"].values
-            os.environ[_t3_key("hub_split_df")] = merged
-            os.environ[_t3_key("stage")] = "confirm"
-            st.rerun()
-
-
-def _t3_stage_confirm():
-    st.subheader("Review & Submit Replacement")
-    hub_df   = os.environ[_t3_key("hub_split_df")]
-    pct      = os.environ[_t3_key("split_pct")]
-    new_pid  = os.environ[_t3_key("new_pid")]
-    new_name = os.environ[_t3_key("new_name")]
-    old_name = os.environ[_t3_key("old_name")]
-    print(
-        f"**Replacing:** {old_name}  \n"
-        f"**With:** `{new_pid}` — {new_name} ({pct}% of plan)  \n"
-        f"**Rows:** {len(hub_df)} hub entries"
-    )
-    st.dataframe(hub_df, use_container_width=True, hide_index=True)
-    col_back, col_submit = st.columns([1, 6])
-    with col_back:
-        if st.button("← Back", key="t3_confirm_back"):
-            os.environ[_t3_key("stage")] = "set_date"
-            st.rerun()
-    with col_submit:
-        if st.button("Submit Replacement →", type="primary", key="t3_submit_btn"):
-            with st.spinner("Saving…"):
-                sub_id = _submit_hub_df(hub_df, "Replacement")
-            st.success(f"Replacement submitted! ID: **{sub_id}**")
-            show_email_placeholder(sub_id, "Replacement", new_name, hub_df)
-            _t3_reset()
-
-
-# ──────────────────────────────────────────────────────────────────
-# PAGE:  SUBMISSION  HISTORY
-# ──────────────────────────────────────────────────────────────────
-def page_history():
-    print(
-        '<div class="page-header">'
-        '<div class="page-title">Submission History</div>'
-        '<div class="page-desc">Track, approve, reject, or withdraw submissions</div>'
-        '</div>', unsafe_allow_html=True
-    )
-    df_log = load_log()
-    if df_log.empty:
-        print("No submissions yet.")
-        return
-
-    user     = os.environ.get("user", {})
-    is_admin = user.get("role", "") == "admin"
-
-    # ── Filters ──────────────────────────────────────────────────
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        types = st.multiselect("Type", ["New Launch", "Expansion", "Replacement"],
-                               default=["New Launch", "Expansion", "Replacement"])
-    with c2:
-        statuses = sorted(df_log["Status"].dropna().unique().tolist()) \
-                   if "Status" in df_log.columns else []
-        sel_status = st.multiselect("Status", statuses, default=statuses)
-    with c3:
-        pids = sorted(df_log["Product ID"].dropna().unique().tolist())
-        sel_pid = st.multiselect("Product ID", pids, default=pids)
-
-    mask = df_log["Submission_Type"].isin(types) & df_log["Product ID"].isin(sel_pid)
-    if sel_status and "Status" in df_log.columns:
-        mask &= df_log["Status"].isin(sel_status)
-    df_f = df_log[mask].copy()
-
-    # SLA flags
-    now = datetime.now()
-    if "Timestamp" in df_f.columns and "Start Date" in df_f.columns:
-        df_f["SLA"] = ""
-        for idx, row in df_f[df_f.get("Status", pd.Series()) == "Pending"].iterrows():
-            try:
-                ts     = pd.to_datetime(row["Timestamp"])
-                launch = pd.to_datetime(row["Start Date"]).date()
-                if launch < now.date():
-                    df_f.at[idx, "Status"] = "Expired"
-                    df_f.at[idx, "SLA"]    = "🔴 EXPIRED"
-                elif (now - ts).total_seconds() / 3600 > 48:
-                    df_f.at[idx, "SLA"] = "⚠️ OVERDUE"
-            except Exception:
-                pass
-
-    disp_cols = [c for c in ["Submission_ID", "Submission_Type", "Product ID",
-                              "Product Name", "City", "Hub", "Start Date",
-                              "Status", "SLA", "Rejection_Reason", "Submitted_By"]
-                 if c in df_f.columns]
-    st.dataframe(df_f[disp_cols], use_container_width=True, hide_index=True)
-    st.caption(f"{len(df_f)} rows")
-
-    print("---")
-    sub_ids = sorted(df_f["Submission_ID"].dropna().unique().tolist())
-    if not sub_ids:
-        return
-    sel_id   = st.selectbox("Select Submission ID", sub_ids, key="hist_sel_id")
-    sel_rows = df_log[df_log["Submission_ID"] == sel_id]
-    sel_stat = sel_rows["Status"].iloc[0] if "Status" in sel_rows.columns and not sel_rows.empty else "Pending"
-    sel_reason = sel_rows["Rejection_Reason"].iloc[0] if "Rejection_Reason" in sel_rows.columns and not sel_rows.empty else ""
-
-    if sel_reason:
-        print(f"Rejection reason: **{sel_reason}**")
-
-    ca, cb, cc, cd = st.columns(4)
-    with ca:
-        if st.button("🚫 Withdraw", disabled=(sel_stat != "Pending"), key="hist_withdraw"):
-            update_submission_status(sel_id, "Withdrawn")
-            st.cache_data.clear()
-            st.success("Withdrawn.")
-            st.rerun()
-    with cb:
-        if st.button("✅ Approve", disabled=(not is_admin or sel_stat != "Pending"), key="hist_approve"):
-            update_submission_status(sel_id, "Approved")
-            st.cache_data.clear()
-            st.success("Approved. Product will be added to Baseline on launch date.")
-            st.rerun()
-    with cc:
-        if is_admin and sel_stat == "Pending":
-            if True:
-                reason = st.text_area("Rejection Reason", key="hist_reason")
-                if st.button("Confirm Reject", key="hist_reject_confirm"):
-                    if not reason.strip():
-                        print("Enter a reason.")
-                    else:
-                        update_submission_status(sel_id, "Rejected", reason.strip())
-                        st.cache_data.clear()
-                        print("Rejected.")
-                        st.rerun()
-    with cd:
-        if st.button("🔴 Void", disabled=(not is_admin or sel_stat != "Approved"), key="hist_void"):
-            update_submission_status(sel_id, "Voided")
-            st.cache_data.clear()
-            print("Voided.")
-            st.rerun()
-
-
-# ──────────────────────────────────────────────────────────────────
-# SESSION  STATE  INIT  (called on every rerun from app.py)
-# ──────────────────────────────────────────────────────────────────
-for _k, _v in {
-    "submission_type": None, "submission_id": None,
-    "split_ready": False,    "hub_split_df": pd.DataFrame(),
-    "split_ready2": False,   "hub_split_df2": pd.DataFrame(),
-    "replace_ready": False,  "replace_df": pd.DataFrame(),
-}.items():
-    if _v is not None and _k not in os.environ:
-        os.environ[_k] = _v if isinstance(_v, str) else str(_v)
-
-# ──────────────────────────────────────────────────────────────────
-# STANDALONE  (guarded — not executed when imported from app.py)
-# ──────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    _page = st.sidebar.radio(
-        "Navigate",
-        ["New Product Launch", "Product Expansion", "Product Replacement", "Submission History"],
-        key="sidebar_nav",
-    )
-    if _page == "New Product Launch":
-        page_type1()
-    elif _page == "Product Expansion":
-        page_type2()
-    elif _page == "Product Replacement":
-        page_type3()
-    else:
-        page_history()
+# Streamlit UI handlers were removed from this module.
+# This file now provides backend-only helpers for FastAPI/Next.js services.
 
 
 def validate_npl_upload(df: pd.DataFrame) -> dict:
+
     """Validate an uploaded NPL workbook (city-level or hub-level schema)."""
     work = df.copy()
     work.columns = [str(c).strip() for c in work.columns]
