@@ -62,6 +62,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [expansionName, setExpansionName] = useState("");
   const [expansionCategory, setExpansionCategory] = useState("");
 
+  const [newLaunchPid, setNewLaunchPid] = useState("");
+  const [newLaunchName, setNewLaunchName] = useState("");
+
   const [oldCategory, setOldCategory] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [oldProducts, setOldProducts] = useState<string[]>([]);
@@ -117,8 +120,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     });
   }, [selectedCities, category, expansionCategory]);
 
-  const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : "";
-  const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : "";
+  const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : newLaunchPid;
+  const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : newLaunchName;
 
   const downloadTemplate = async () => {
     if (!selectedCities.length) {
@@ -431,6 +434,30 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                   {expansionName} · {expansionCategory}
                 </p>
               )}
+            </div>
+          )}
+          {!isExpansion && (
+            <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
+              <div className="form-group">
+                <label className="form-label">Product ID</label>
+                <input
+                  className="form-input text-sm"
+                  value={newLaunchPid}
+                  onChange={e => setNewLaunchPid(e.target.value)}
+                  disabled={readOnly}
+                  placeholder="e.g. PRD-001"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Product Name</label>
+                <input
+                  className="form-input text-sm"
+                  value={newLaunchName}
+                  onChange={e => setNewLaunchName(e.target.value)}
+                  disabled={readOnly}
+                  placeholder="e.g. New Launch Item"
+                />
+              </div>
             </div>
           )}
           <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
