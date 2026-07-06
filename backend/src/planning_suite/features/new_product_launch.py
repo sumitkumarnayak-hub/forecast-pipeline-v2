@@ -82,15 +82,18 @@ def _canon(s: str) -> str:
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # Drop duplicate columns first (e.g. from Google Sheets blank columns)
+    df = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
+    
     rename = {}
     for col in df.columns:
-        k = _canon(col)
+        k = _canon(str(col))
         if k == "subcategory":   rename[col] = "sub_category"
         elif k == "baseplan":    rename[col] = "Base_plan"
         elif k == "planflag":    rename[col] = "Plan Flag"
         elif k == "productid":   rename[col] = "Product id"
-        elif k == "cityname":   rename[col] = "city_name"
-        elif k == "hubname":    rename[col] = "hub_name"
+        elif k == "cityname":    rename[col] = "city_name"
+        elif k == "hubname":     rename[col] = "hub_name"
     if rename:
         df = df.rename(columns=rename)
     for c in df.select_dtypes(include="object").columns:
@@ -970,6 +973,9 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     Launch Date is read per-row from the 'Launch Date' column in hub_df.
     Returns the generated Submission_ID.
     """
+    if hub_df is None or hub_df.empty:
+        raise ValueError("Cannot submit an empty hub plan.")
+        
     df = hub_df.copy()
 
     # Rename to sheet canonical column names
