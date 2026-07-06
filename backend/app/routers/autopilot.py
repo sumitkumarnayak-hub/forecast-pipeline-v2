@@ -1,6 +1,5 @@
 """
 Auto-Pilot router — 6-step pipeline with DB-backed state and SSE progress.
-Mirrors Streamlit autopilot_runner.py + optimized_autopilot CLI runner.
 """
 from __future__ import annotations
 

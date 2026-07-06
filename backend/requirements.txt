@@ -33,7 +33,6 @@ redmail>=0.6.0
 pandera>=0.22.1
 pydantic>=2.10.0
 polars>=1.15.0
-# streamlit removed — legacy Streamlit UI is optional; install separately if needed.
 
 # ── FastAPI / API layer ────────────────────────────────────────────────────────
 fastapi>=0.115.0

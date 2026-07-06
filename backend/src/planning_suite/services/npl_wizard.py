@@ -163,15 +163,7 @@ def submit_hub_rows(
     hub_df = pd.DataFrame(hub_rows)
     if "Launch Date" not in hub_df.columns:
         hub_df = pd.DataFrame(apply_launch_dates(hub_rows))
-    prev_user = os.environ.get("user")
-    os.environ["user"] = {"username": username, "id": user_id}
-    try:
-        sub_id = _submit_hub_df(hub_df, sub_type)
-    finally:
-        if prev_user is None:
-            os.environ.pop("user", None)
-        else:
-            os.environ["user"] = prev_user
+    sub_id = _submit_hub_df(hub_df, sub_type, username=username)
 
     payload: dict[str, Any] = {
         "submission_id": sub_id,
