@@ -216,6 +216,9 @@ def send_to_addresses(
         }
 
     cfg = get_smtp_config()
+    import socket
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(4.0)
     try:
         sender = _get_sender()
         sender.send(
@@ -224,6 +227,30 @@ def send_to_addresses(
             receivers=clean,
             html=html_body,
         )
+    except Exception as exc:
+        socket.setdefaulttimeout(old_timeout)
+        log_id = _log_email_attempt(
+            db,
+            email_type=email_type,
+            subject=subject,
+            recipients=clean,
+            status="failed",
+            error_message=str(exc),
+            body_preview=plain_preview,
+            triggered_by_user_id=triggered_by_user_id,
+            metadata=metadata,
+        )
+        return {
+            "ok": False,
+            "status": "failed",
+            "recipients": clean,
+            "log_id": log_id,
+            "error": str(exc),
+        }
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
+    try:
         log_id = _log_email_attempt(
             db,
             email_type=email_type,

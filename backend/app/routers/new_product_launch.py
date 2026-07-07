@@ -6,7 +6,7 @@ import logging
 import time
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
 from pydantic import BaseModel
 
 from app.deps import get_current_user, require_write, get_db
@@ -15,6 +15,7 @@ from planning_suite.db.engine import Database
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
 
 
 @router.post("/upload")
@@ -426,6 +427,7 @@ def wizard_check_dupes(
 @router.post("/wizard/submit")
 def wizard_submit(
     body: SubmitBody,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(require_write),
     db: Database = Depends(get_db),
 ):
@@ -491,10 +493,11 @@ def wizard_submit(
             history_error = str(history_exc)
             logger.exception("[NPL] failed to persist submission %s to DB", sub_id)
 
-        # Send success + approval emails
+        # Send success + approval emails in the background to prevent blocking/timeouts
         if body.send_email:
             from planning_suite.services.workflow_notifications import notify_npl_submitted
-            email_result = notify_npl_submitted(
+            background_tasks.add_task(
+                notify_npl_submitted,
                 sub_id=sub_id,
                 sub_type=body.sub_type,
                 product_name=product_name,
@@ -506,8 +509,9 @@ def wizard_submit(
                 user_id=user_id,
                 db=db,
             )
+            email_result = {"status": "queued", "detail": "Email queued in background."}
         else:
-            email_result = {"skipped": True, "reason": "send_email=false"}
+            email_result = {"status": "skipped", "detail": "send_email=false"}
 
         result["email"] = email_result
         result["history"] = {"saved": history_saved, "status": "Submitted" if history_saved else "Pending", "error": history_error}
