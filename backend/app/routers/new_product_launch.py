@@ -546,8 +546,8 @@ def submissions_log(
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
 
-    # Fast DB path (default)
-    if source == "db":
+    # Fast DB path (default) - ONLY for summary view
+    if source == "db" and view == "summary":
         try:
             df = db.get_npl_submissions(
                 types=t, statuses=s, product_ids=p, submission_id=submission_id

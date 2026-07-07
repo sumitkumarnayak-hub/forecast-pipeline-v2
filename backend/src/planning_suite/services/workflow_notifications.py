@@ -717,7 +717,7 @@ def notify_npl_submitted(
     )
     success_result = _safe_operational_send(
         event="npl_submitted",
-        category="general",
+        category="launch_planner",
         subject=f"[Planning Suite] Launch submitted — {product_name} ({sub_type})",
         html_body=success_html,
         triggered_by_user_id=user_id,
@@ -739,7 +739,7 @@ def notify_npl_submitted(
     )
     approval_result = _safe_operational_send(
         event="npl_approval_needed",
-        category="approval",
+        category="launch_admin",
         subject=f"[Planning Suite] Launch approval needed — {product_name} ({sub_type})",
         html_body=approval_html,
         triggered_by_user_id=user_id,
