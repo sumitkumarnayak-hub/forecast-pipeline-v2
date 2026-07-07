@@ -592,6 +592,9 @@ def patch_submission_status(
         # Update Supabase
         db.update_npl_submission_status(submission_id, body.status, body.reason)
 
+        if body.status == "Approved":
+            _append_approved_to_new_product_launch(submission_id)
+
         from planning_suite.services.api_cache import CacheNS, cache_invalidate
         cache_invalidate(CacheNS.NPL_WIZARD)
         logger.info("[NPL] submission %s → %s by user %s", submission_id, body.status, current_user.get("username"))
@@ -683,6 +686,85 @@ def _format_db_submissions(df, *, view: str) -> dict:
         "row_count": len(records),
         "source": "db",
     }
+
+
+def _append_approved_to_new_product_launch(submission_id: str) -> None:
+    """Read the submission rows from the Submission_Log, format, and append to the NEW_PRODUCT_LAUNCH sheet."""
+    from datetime import datetime
+    import pandas as pd
+    from planning_suite.config import HUB_LEVEL_PLANNING_SHEET_KEY, NEW_PRODUCT_LAUNCH_SHEET_KEY
+    from planning_suite.features.new_product_launch import _open_sheet
+
+    try:
+        # Open Submission_Log worksheet
+        log_sheet = _open_sheet(HUB_LEVEL_PLANNING_SHEET_KEY, "Submission_Log")
+        all_data = log_sheet.get_all_records()
+        if not all_data:
+            logger.warning("[NPL] No records found in Submission_Log to copy for approval.")
+            return
+
+        matching_rows = [r for r in all_data if str(r.get("Submission_ID")) == submission_id]
+        if not matching_rows:
+            logger.warning("[NPL] No matching rows found for submission_id %s in Submission_Log.", submission_id)
+            return
+
+        # Open Hub_Plan worksheet in NEW_PRODUCT_LAUNCH spreadsheet
+        hub_plan_sheet = _open_sheet(NEW_PRODUCT_LAUNCH_SHEET_KEY, "Hub_Plan")
+
+        rows_to_append = []
+        for r in matching_rows:
+            owner = "Demand Planning"
+            sub_type = r.get("Submission_Type", "New Launch")
+            channel = "App"
+            update_date = datetime.now().strftime("%Y-%m-%d")
+            sub_cat = r.get("Category", "")
+            pid = r.get("Product ID", "")
+            pname = r.get("Product Name", "")
+            city = r.get("City", "")
+            hub = r.get("Hub", "")
+            mrp = r.get("MRP", "")
+            change_date = r.get("Start Date", "")
+
+            row_vals = [
+                owner,
+                sub_type,
+                channel,
+                update_date,
+                sub_cat,
+                pid,
+                pname,
+                pid,  # Anchor ID (same as PRODUCT_ID)
+                "",   # PLU_CODE
+                city,
+                hub,  # hub_name
+                "",   # UOM
+                "",   # Yield
+                "",   # RM
+                "",   # Meat Ratio (for VA)
+                "",   # Total Shelf Life
+                "",   # Hub Shelf Life
+                mrp,
+                change_date,
+                r.get("Mon", 0),
+                r.get("Tue", 0),
+                r.get("Wed", 0),
+                r.get("Thu", 0),
+                r.get("Fri", 0),
+                r.get("Sat", 0),
+                r.get("Sun", 0),
+                "Confirmed",  # Planning Confirmation
+                "",           # Production PC
+                "",           # Empty column
+                r.get("Submitted_By", ""),
+            ]
+            rows_to_append.append(row_vals)
+
+        if rows_to_append:
+            hub_plan_sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+            logger.info("[NPL] Successfully appended %d rows for submission_id %s to NEW_PRODUCT_LAUNCH sheet.", len(rows_to_append), submission_id)
+    except Exception:
+        logger.exception("[NPL] Failed to append approved launch data for submission %s to NEW_PRODUCT_LAUNCH sheet.", submission_id)
+
 
 
 
