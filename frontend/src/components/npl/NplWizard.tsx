@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useNplBootstrap } from "@/context/NplContext";
@@ -25,6 +25,26 @@ interface EmailResult {
   error?: string;
   skipped?: boolean;
   reason?: string;
+}
+
+/**
+ * Structured error logger. Keeps a consistent, greppable shape
+ * (`[NplWizard:<scope>]`) so failures are easy to trace in aggregated
+ * logs (e.g. Sentry / Datadog / browser console) instead of being
+ * swallowed silently.
+ */
+function logError(scope: string, error: unknown, context?: Record<string, unknown>) {
+  // eslint-disable-next-line no-console
+  console.error(`[NplWizard:${scope}]`, { error, ...context });
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const error = err as { response?: { data?: { detail?: string | string[] } }; message?: string };
+  const detail = error?.response?.data?.detail;
+  if (Array.isArray(detail)) return detail.join("; ");
+  if (typeof detail === "string" && detail) return detail;
+  if (error?.message) return error.message;
+  return fallback;
 }
 
 function stageLabels(subType: NplWizardProps["subType"]): string[] {
@@ -52,7 +72,29 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [category, setCategory] = useState("");
   const [planLevel, setPlanLevel] = useState<"city" | "hub">("city");
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
-  const [cityHubs, setCityHubs] = useState<Record<string, string[]>>({});
+
+  // --- Hub catalog vs. hub selection --------------------------------------
+  // These used to be conflated into a single `cityHubs` object, which caused
+  // the "hub disappears when clicked" bug: the button list was rendered from
+  // the same array used to test "is this hub selected", so toggling a hub
+  // filtered it out of its own render source.
+  //
+  // `availableHubs`  -> the catalog of hubs returned by the API for a city.
+  // `selectedHubs`   -> the subset of those hubs the user has chosen (this is
+  //                     what actually gets sent to the backend as forced_hubs).
+  // `hubsLoading` / `hubsError` -> per-city fetch status so the UI can show a
+  //                     spinner or a retry action instead of failing silently.
+  const [availableHubs, setAvailableHubs] = useState<Record<string, string[]>>({});
+  const [selectedHubs, setSelectedHubs] = useState<Record<string, string[]>>({});
+  const [hubsLoading, setHubsLoading] = useState<Record<string, boolean>>({});
+  const [hubsError, setHubsError] = useState<Record<string, string>>({});
+
+  // Tracks, per city, which category the currently-cached hubs belong to and
+  // the latest in-flight request id. Used to (a) invalidate the cache when
+  // the category changes and (b) discard stale responses if a fetch for the
+  // same city is superseded by a newer one (race protection).
+  const hubLoadStateRef = useRef<Record<string, { category: string; requestId: number }>>({});
+
   const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
   const [hubColumns, setHubColumns] = useState<string[]>([]);
   const [zeroSal, setZeroSal] = useState<Record<string, string[]>>({});
@@ -107,19 +149,52 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     getProductsByCategory(newCategory).then(setNewProducts);
   }, [newCategory, getProductsByCategory]);
 
+  const hubCategory = expansionCategory || category || "";
+
+  /**
+   * Fetches the hub catalog for a single city + category, guarded against
+   * stale responses via a per-city request id. Exposed (not just used
+   * inline in the effect) so the "Retry" button can call it directly.
+   */
+  const fetchHubsForCity = useCallback((city: string, cat: string) => {
+    const prevState = hubLoadStateRef.current[city];
+    const requestId = (prevState?.requestId ?? 0) + 1;
+    hubLoadStateRef.current[city] = { category: cat, requestId };
+
+    setHubsLoading(prev => ({ ...prev, [city]: true }));
+    setHubsError(prev => ({ ...prev, [city]: "" }));
+
+    api
+      .get("/api/new-product-launch/wizard/hubs", { params: { city, category: cat || undefined } })
+      .then(({ data }) => {
+        // A newer request for this city has already superseded this one
+        // (e.g. category changed again while this call was in flight) —
+        // drop the response rather than overwrite fresher data.
+        if (hubLoadStateRef.current[city]?.requestId !== requestId) return;
+        setAvailableHubs(prev => ({ ...prev, [city]: data.hubs || [] }));
+        setHubsLoading(prev => ({ ...prev, [city]: false }));
+      })
+      .catch((err: unknown) => {
+        if (hubLoadStateRef.current[city]?.requestId !== requestId) return;
+        logError("fetchHubsForCity", err, { city, category: cat });
+        setHubsError(prev => ({ ...prev, [city]: extractErrorMessage(err, "Failed to load hubs") }));
+        setHubsLoading(prev => ({ ...prev, [city]: false }));
+      });
+  }, []);
+
   useEffect(() => {
     if (!selectedCities.length) return;
     selectedCities.forEach(city => {
-      api
-        .get("/api/new-product-launch/wizard/hubs", {
-          params: { city, category: expansionCategory || category || undefined },
-        })
-        .then(({ data }) => {
-          setCityHubs(prev => (prev[city]?.length ? prev : { ...prev, [city]: data.hubs || [] }));
-        })
-        .catch(() => {});
+      const loadState = hubLoadStateRef.current[city];
+      const isCachedForCurrentCategory = loadState?.category === hubCategory && (availableHubs[city]?.length ?? 0) > 0;
+      const isAlreadyInFlight = hubsLoading[city];
+      if (isCachedForCurrentCategory || isAlreadyInFlight) return;
+      fetchHubsForCity(city, hubCategory);
     });
-  }, [selectedCities, category, expansionCategory]);
+    // availableHubs / hubsLoading are read for the cache/in-flight guard only;
+    // including them here would re-run this effect on every fetch completion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCities, hubCategory, fetchHubsForCity]);
 
   const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : newLaunchPid;
   const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : newLaunchName;
@@ -136,7 +211,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           ? "/api/new-product-launch/wizard/template/city"
           : "/api/new-product-launch/wizard/template/hub";
       const forcedHubs = Object.fromEntries(
-        Object.entries(cityHubs).filter(([, hubs]) => hubs.length > 0),
+        Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
       );
       const body =
         planLevel === "city"
@@ -147,7 +222,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               product_name: templateProductName,
             }
           : {
-              cities_hubs: Object.keys(forcedHubs).length ? forcedHubs : cityHubs,
+              cities_hubs: forcedHubs,
               category: expansionCategory || category,
               product_id: templateProductId,
               product_name: templateProductName,
@@ -159,8 +234,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       a.download = `${planLevel}_template_${expansionCategory || category}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setMsg({ text: "Template download failed", type: "danger" });
+    } catch (err) {
+      logError("downloadTemplate", err, { planLevel, category: expansionCategory || category, selectedCities });
+      setMsg({ text: extractErrorMessage(err, "Template download failed"), type: "danger" });
     }
     setBusy("");
   };
@@ -180,15 +256,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           : "/api/new-product-launch/wizard/parse-hub";
       const { data } = await api.post(path, form, { headers: { "Content-Type": "multipart/form-data" } });
 
-      const forced = Object.fromEntries(
-        Object.entries(cityHubs).filter(([, hubs]) => hubs.length > 0),
+      const forcedHubs = Object.fromEntries(
+        Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
       );
 
       if (planLevel === "city") {
         setStepState({ step: "split", status: "loading", message: "Calculating hub split from salience data..." });
         const split = await api.post("/api/new-product-launch/wizard/split-city", {
           city_rows: data.rows,
-          forced_hubs: Object.keys(forced).length ? forced : null,
+          forced_hubs: Object.keys(forcedHubs).length ? forcedHubs : null,
         });
         setHubRows(split.data.hub_rows || []);
         setHubColumns(split.data.columns || []);
@@ -200,9 +276,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string | string[] } } };
-      const d = error?.response?.data?.detail;
-      const errorMsg = Array.isArray(d) ? d.join("; ") : String(d || "Upload failed");
+      const errorMsg = extractErrorMessage(err, "Upload failed");
+      logError("handleUpload", err, { planLevel, fileName: file.name });
       setStepState({ step: "upload", status: "error", message: errorMsg });
       setMsg({ text: errorMsg, type: "danger" });
     }
@@ -218,8 +293,11 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     });
   };
 
-  const toggleCityHub = (city: string, hub: string) => {
-    setCityHubs(prev => {
+  /** Toggles a hub in/out of the user's *selection* for a city. Never
+   * touches `availableHubs`, which always remains the full catalog fetched
+   * from the API — this is the fix for the "hub vanishes on click" bug. */
+  const toggleSelectedHub = (city: string, hub: string) => {
+    setSelectedHubs(prev => {
       const current = prev[city] || [];
       const next = current.includes(hub) ? current.filter(h => h !== hub) : [...current, hub];
       return { ...prev, [city]: next };
@@ -244,8 +322,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         setMsg({ text: "No duplicates in submission log", type: "success" });
         setStepState({ step: "dupes", status: "success", message: "No duplicates found" });
       }
-    } catch {
-      setMsg({ text: "Duplicate check failed", type: "danger" });
+    } catch (err) {
+      logError("checkDuplicates", err, { subType, planLevel });
+      setMsg({ text: extractErrorMessage(err, "Duplicate check failed"), type: "danger" });
       setStepState({ step: "dupes", status: "error", message: "Duplicate check failed" });
     }
     setBusy("");
@@ -268,8 +347,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setHubRows([]);
       setDupes(null);
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } } };
-      const errDetail = error?.response?.data?.detail || "Submit failed";
+      const errDetail = extractErrorMessage(err, "Submit failed");
+      logError("submit", err, { subType, launchDate });
       setMsg({ text: errDetail, type: "danger" });
       setStepState({ step: "submit", status: "error", message: errDetail });
     }
@@ -277,7 +356,21 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const toggleCity = (c: string) => {
-    setSelectedCities(prev => (prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]));
+    setSelectedCities(prev => {
+      const isCurrentlySelected = prev.includes(c);
+      if (isCurrentlySelected) {
+        // Clean up hub selections for a city removed from the plan so a
+        // stale selection can't leak into forced_hubs / cities_hubs later.
+        setSelectedHubs(prevHubs => {
+          if (!(c in prevHubs)) return prevHubs;
+          const next = { ...prevHubs };
+          delete next[c];
+          return next;
+        });
+        return prev.filter(x => x !== c);
+      }
+      return [...prev, c];
+    });
   };
 
   const onExpansionPidChange = (pid: string) => {
@@ -303,15 +396,20 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setMsg({ text: "Select old/new products and at least one city", type: "warning" });
       return;
     }
-    const oPid = allProducts.find(p => p.product_name === oldProductName && p.category === oldCategory)?.product_id
-      || await resolveProductId(oldCategory, oldProductName);
-    const nPid = allProducts.find(p => p.product_name === newProductName && p.category === newCategory)?.product_id
-      || await resolveProductId(newCategory, newProductName);
-    setOldPid(oPid);
-    setNewPid(nPid);
-    setCategory(newCategory);
-    setStage("upload");
-    setMsg({ text: "", type: "" });
+    try {
+      const oPid = allProducts.find(p => p.product_name === oldProductName && p.category === oldCategory)?.product_id
+        || await resolveProductId(oldCategory, oldProductName);
+      const nPid = allProducts.find(p => p.product_name === newProductName && p.category === newCategory)?.product_id
+        || await resolveProductId(newCategory, newProductName);
+      setOldPid(oPid);
+      setNewPid(nPid);
+      setCategory(newCategory);
+      setStage("upload");
+      setMsg({ text: "", type: "" });
+    } catch (err) {
+      logError("finishReplacementSetup", err, { oldCategory, newCategory, oldProductName, newProductName });
+      setMsg({ text: extractErrorMessage(err, "Failed to resolve product IDs"), type: "danger" });
+    }
   };
 
   const labels = stageLabels(subType);
@@ -463,7 +561,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               )}
             </div>
           )}
-          {!isExpansion && null}
           <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
             {!isExpansion && (
               <div className="form-group">
@@ -509,29 +606,70 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               )}
             </div>
           </div>
-          {selectedCities.length > 0 && (planLevel === "hub" || planLevel === "city") && (
+          {selectedCities.length > 0 && (
             <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
               <p className="text-xs font-semibold mb-2">Hub multiselect per city (optional — forces split)</p>
-              {selectedCities.map(city => (
-                <div key={city} className="mb-2">
-                  <div className="text-xs text-muted mb-1">{city}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {(cityHubs[city] || []).map(hub => (
-                      <button
-                        key={hub}
-                        type="button"
-                        className={`btn btn-sm ${(cityHubs[city] || []).includes(hub) ? "btn-primary" : "btn-secondary"}`}
-                        style={{ fontSize: "0.65rem", padding: "0.15rem 0.4rem" }}
-                        onClick={() => toggleCityHub(city, hub)}
-                        disabled={readOnly}
-                      >
-                        {hub}
-                      </button>
-                    ))}
-                    {!cityHubs[city]?.length && <span className="text-xs text-muted">Loading hubs…</span>}
+              {selectedCities.map(city => {
+                const hubs = availableHubs[city] || [];
+                const selected = selectedHubs[city] || [];
+                const loading = hubsLoading[city];
+                const error = hubsError[city];
+                return (
+                  <div key={city} className="mb-2">
+                    <div className="text-xs text-muted mb-1 flex items-center gap-2">
+                      <span>{city}</span>
+                      {selected.length > 0 && (
+                        <span className="badge badge-blue" style={{ fontSize: "0.6rem" }}>
+                          {selected.length} selected
+                        </span>
+                      )}
+                    </div>
+                    {loading && (
+                      <div className="flex items-center gap-2 text-xs text-muted">
+                        <span className="spinner" style={{ width: 12, height: 12 }} />
+                        Loading hubs…
+                      </div>
+                    )}
+                    {!loading && error && (
+                      <div className="flex items-center gap-2 text-xs" style={{ color: "var(--danger, #c0392b)" }}>
+                        <span>{error}</span>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          style={{ fontSize: "0.65rem", padding: "0.1rem 0.4rem" }}
+                          onClick={() => fetchHubsForCity(city, hubCategory)}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    {!loading && !error && (
+                      <div className="flex flex-wrap gap-1">
+                        {hubs.length ? (
+                          hubs.map(hub => {
+                            const isSelected = selected.includes(hub);
+                            return (
+                              <button
+                                key={hub}
+                                type="button"
+                                className={`btn btn-sm ${isSelected ? "btn-primary" : "btn-secondary"}`}
+                                style={{ fontSize: "0.65rem", padding: "0.15rem 0.4rem" }}
+                                onClick={() => toggleSelectedHub(city, hub)}
+                                disabled={readOnly}
+                                aria-pressed={isSelected}
+                              >
+                                {isSelected ? "✓ " : ""}{hub}
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <span className="text-xs text-muted">No hubs found for this city/category</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
           <div className="flex gap-2 mb-4">
