@@ -186,6 +186,66 @@ def submit_hub_rows(
     return payload
 
 
+def preview_hub_rows(
+    hub_rows: list[dict],
+    *,
+    sub_type: str,
+    username: str,
+    launch_date: str | None = None,
+) -> list[dict]:
+    """Preview the exact columns and rows that would be appended to Submission_Log."""
+    import uuid
+    from datetime import datetime
+    from planning_suite.features.new_product_launch import WEEKDAYS, gen_sub_id, _sanitize
+
+    hub_df = pd.DataFrame(hub_rows)
+    if "Launch Date" not in hub_df.columns:
+        hub_df = pd.DataFrame(apply_launch_dates(hub_rows, launch_date))
+    
+    df = hub_df.copy()
+
+    # Rename to sheet canonical column names
+    df = df.rename(columns={
+        "city_name":    "City",
+        "hub_name":     "Hub",
+        "product_id":   "Product ID",
+        "product_name": "Product Name",
+        "category":     "Category",
+        "Launch Date":  "Start Date",
+    })
+
+    # Convert Start Date to string
+    if "Start Date" in df.columns:
+        df["Start Date"] = df["Start Date"].apply(
+            lambda x: x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)
+        )
+    else:
+        df["Start Date"] = ""
+
+    for day in WEEKDAYS:
+        if day not in df.columns:
+            df[day] = 0
+    df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
+
+    submitted_by = username or ""
+    sub_id = gen_sub_id(sub_type)
+    df["Timestamp"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df["Submission_ID"]    = sub_id
+    df["Submission_Type"]  = sub_type
+    df["Status"]           = "Pending"
+    df["Rejection_Reason"] = ""
+    df["Submitted_By"]     = submitted_by
+
+    log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
+                "Product ID", "Product Name", "Category",
+                "City", "Hub", "MRP", "Start Date",
+                "Status", "Rejection_Reason", "Submitted_By"] + WEEKDAYS
+    
+    log_df = df[[c for c in log_cols if c in df.columns]]
+    return df_to_records(_sanitize(log_df))
+
+
+
 def list_all_product_ids() -> list[dict[str, str]]:
     """All P Master rows for Expansion product picker."""
     master = load_product_master()

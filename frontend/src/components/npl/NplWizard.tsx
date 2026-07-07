@@ -119,6 +119,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [splitPct, setSplitPct] = useState(100);
 
   const [dupes, setDupes] = useState<Record<string, unknown>[] | null>(null);
+  const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
+  const [previewCols, setPreviewCols] = useState<string[]>([]);
   const [emailResult, setEmailResult] = useState<{
     planner?: EmailResult;
     admin?: EmailResult;
@@ -330,9 +332,32 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setBusy("");
   };
 
+  const previewSync = async () => {
+    setBusy("preview");
+    setStepState({ step: "preview", status: "loading", message: "Generating sync preview..." });
+    setPreviewRows(null);
+    try {
+      const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
+      const { data } = await api.post("/api/new-product-launch/wizard/preview-sync", {
+        hub_rows: dated,
+        sub_type: subType,
+        launch_date: launchDate,
+      });
+      setPreviewRows(data.rows || []);
+      setPreviewCols(data.columns || []);
+      setMsg({ text: `Sync preview generated successfully (${data.rows?.length || 0} rows)`, type: "success" });
+      setStepState({ step: "preview", status: "success", message: "Preview loaded" });
+    } catch (err: unknown) {
+      logError("previewSync", err, { subType, launchDate });
+      setMsg({ text: extractErrorMessage(err, "Preview sync failed"), type: "danger" });
+      setStepState({ step: "preview", status: "error", message: "Preview sync failed" });
+    }
+    setBusy("");
+  };
+
   const submit = async () => {
     setBusy("submit");
-    setStepState({ step: "submit", status: "loading", message: "Submitting to DB and Google Sheets..." });
+    setStepState({ step: "submit", status: "loading", message: "Syncing data to Google Sheets & database..." });
     try {
       const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
@@ -341,13 +366,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         launch_date: launchDate,
       });
       setEmailResult(data.email || null);
-      setMsg({ text: `Submitted — ID ${data.submission_id}`, type: "success" });
-      setStepState({ step: "submit", status: "success", message: "Successfully submitted" });
+      setMsg({ text: `Synced successfully! Submission ID: ${data.submission_id}`, type: "success" });
+      setStepState({ step: "submit", status: "success", message: "Successfully synced" });
       setStage(isReplacement ? "setup" : "upload");
       setHubRows([]);
       setDupes(null);
+      setPreviewRows(null);
+      setPreviewCols([]);
     } catch (err: unknown) {
-      const errDetail = extractErrorMessage(err, "Submit failed");
+      const errDetail = extractErrorMessage(err, "Sync failed");
       logError("submit", err, { subType, launchDate });
       setMsg({ text: errDetail, type: "danger" });
       setStepState({ step: "submit", status: "error", message: errDetail });
@@ -753,13 +780,43 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             )}
           </p>
           <div className="flex flex-wrap gap-2 mb-3">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={previewSync} disabled={readOnly || busy === "preview"}>
+              {busy === "preview" ? "Loading Preview…" : "Preview Sync"}
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={checkDuplicates} disabled={readOnly || busy === "dupes"}>
               Check duplicates
             </button>
-            <button type="button" className="btn btn-success" onClick={submit} disabled={readOnly || busy === "submit"}>
-              {busy === "submit" ? "Submitting…" : "Confirm & Submit"}
+            <button type="button" className="btn btn-success btn-sm" onClick={submit} disabled={readOnly || busy === "submit"}>
+              {busy === "submit" ? "Syncing…" : "Sync Now"}
             </button>
           </div>
+          {previewRows && (
+            <div className="mb-4">
+              <h5 className="text-xs font-semibold mb-2 text-muted uppercase tracking-wider">Log Preview (Will be written to Google Sheets)</h5>
+              <div className="table-wrap border rounded" style={{ maxHeight: 280, overflow: "auto" }}>
+                <table className="table-sm">
+                  <thead>
+                    <tr style={{ background: "rgba(255, 255, 255, 0.05)" }}>
+                      {previewCols.map(c => (
+                        <th key={c} style={{ fontSize: "0.7rem", padding: "0.4rem" }}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row, i) => (
+                      <tr key={i}>
+                        {previewCols.map(c => (
+                          <td key={c} style={{ fontSize: "0.68rem", padding: "0.3rem 0.4rem", whiteSpace: "nowrap" }}>
+                            {String(row[c] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           {dupes && dupes.length > 0 && (
             <div className="alert alert-warning text-xs mb-3">
               <strong>Existing log entries:</strong>

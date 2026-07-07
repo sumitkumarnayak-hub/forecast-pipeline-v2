@@ -424,6 +424,32 @@ def wizard_check_dupes(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/wizard/preview-sync")
+def wizard_preview_sync(
+    body: SubmitBody,
+    current_user: dict = Depends(require_write),
+):
+    from planning_suite.services import npl_wizard as wiz
+
+    t0 = time.perf_counter()
+    username = current_user.get("username", "")
+    try:
+        preview_records = wiz.preview_hub_rows(
+            body.hub_rows,
+            sub_type=body.sub_type,
+            username=username,
+            launch_date=body.launch_date,
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[NPL] preview-sync OK — %d rows in %dms", len(preview_records), elapsed)
+        columns = list(preview_records[0].keys()) if preview_records else []
+        return {"rows": preview_records, "columns": columns, "preview_ms": elapsed}
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] preview-sync crashed in %dms", elapsed)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/wizard/submit")
 def wizard_submit(
     body: SubmitBody,
@@ -432,7 +458,9 @@ def wizard_submit(
     db: Database = Depends(get_db),
 ):
     from planning_suite.services import npl_wizard as wiz
+    from datetime import datetime
 
+    sync_started = datetime.now().isoformat()
     t0 = time.perf_counter()
     username = current_user.get("username", "")
     user_id = int(current_user["sub"])
@@ -450,6 +478,7 @@ def wizard_submit(
             send_email=False,  # We send our own richer email below
         )
         elapsed = round((time.perf_counter() - t0) * 1000)
+        sync_completed = datetime.now().isoformat()
         sub_id = result.get("submission_id", "")
         product_name = result.get("product_name", "")
         hub_count = result.get("rows", 0)
@@ -483,6 +512,9 @@ def wizard_submit(
                 user_id=user_id,
                 step_log={
                     "submit_ms": elapsed,
+                    "sync_started_at": sync_started,
+                    "sync_completed_at": sync_completed,
+                    "sync_duration_ms": elapsed,
                     "status": "submitted",
                     "email_requested": body.send_email,
                 },
@@ -595,19 +627,46 @@ def patch_submission_status(
         wiz.set_submission_status(submission_id, body.status, body.reason)
         # Update Supabase
         db.update_npl_submission_status(submission_id, body.status, body.reason)
-
-        if body.status == "Approved":
-            _append_approved_to_new_product_launch(submission_id)
-
         from planning_suite.services.api_cache import CacheNS, cache_invalidate
         cache_invalidate(CacheNS.NPL_WIZARD)
-        logger.info("[NPL] submission %s → %s by user %s", submission_id, body.status, current_user.get("username"))
-        return {"detail": f"Submission {submission_id} → {body.status}"}
+        logger.info("[NPL] submission %s -> %s by user %s", submission_id, body.status, current_user.get("username"))
+        return {
+            "detail": f"Submission {submission_id} -> {body.status}",
+            "status": body.status,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+@router.get("/submissions/{submission_id}/sync-preview")
+def preview_submission_sync(
+    submission_id: str,
+    current_user: dict = Depends(require_write),
+):
+    from planning_suite.core.permissions import can_approve
+
+    if not can_approve(current_user.get("role", "")):
+        raise HTTPException(status_code=403, detail="Admin approval required")
+    try:
+        return _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/submissions/{submission_id}/sync")
+def sync_submission_to_new_product_launch(
+    submission_id: str,
+    current_user: dict = Depends(require_write),
+):
+    from planning_suite.core.permissions import can_approve
+
+    if not can_approve(current_user.get("role", "")):
+        raise HTTPException(status_code=403, detail="Admin approval required")
+    try:
+        return _append_approved_to_new_product_launch(submission_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 def _fire_step_fail(step_name: str, error: str, current_user: dict, sub_type: str = "New Launch") -> None:
     """Fire a step-failure email in the background (best-effort, never raises)."""
@@ -692,83 +751,190 @@ def _format_db_submissions(df, *, view: str) -> dict:
     }
 
 
-def _append_approved_to_new_product_launch(submission_id: str) -> None:
-    """Read the submission rows from the Submission_Log, format, and append to the NEW_PRODUCT_LAUNCH sheet."""
+HUB_PLAN_COLUMNS = [
+    "Owner",
+    "Type",
+    "Channel",
+    "Update Date",
+    "Sub Category",
+    "PRODUCT_ID",
+    "PRODUCT_NAME",
+    "Anchor ID",
+    "PLU_CODE",
+    "city_name",
+    "hub_name",
+    "UOM",
+    "Yield",
+    "RM",
+    "Meat Ratio (for VA)",
+    "Total Shelf Life",
+    "Hub Shelf Life",
+    "MRP",
+    "Change Date",
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun",
+    "Planning Confirmation",
+    "Production PC",
+    "",
+    "Submitted_By",
+]
+
+
+def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_check: bool) -> dict:
+    """Build the exact Hub_Plan rows for preview or sync."""
     from datetime import datetime
-    import pandas as pd
-    from planning_suite.config import HUB_LEVEL_PLANNING_SHEET_KEY, NEW_PRODUCT_LAUNCH_SHEET_KEY
+
+    from planning_suite import config as cfg
     from planning_suite.features.new_product_launch import _open_sheet
 
-    try:
-        # Open Submission_Log worksheet
-        log_sheet = _open_sheet(HUB_LEVEL_PLANNING_SHEET_KEY, "Submission_Log")
-        all_data = log_sheet.get_all_records()
-        if not all_data:
-            logger.warning("[NPL] No records found in Submission_Log to copy for approval.")
-            return
+    if not cfg.NEW_PRODUCT_LAUNCH_SHEET_URL:
+        raise RuntimeError("NEW_PRODUCT_LAUNCH_SHEET_URL must be set in .env to append approved NPL rows.")
+    if not cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY:
+        raise RuntimeError("NEW_PRODUCT_LAUNCH_SHEET_URL does not contain a valid Google Sheet ID.")
 
-        matching_rows = [r for r in all_data if str(r.get("Submission_ID")) == submission_id]
-        if not matching_rows:
-            logger.warning("[NPL] No matching rows found for submission_id %s in Submission_Log.", submission_id)
-            return
+    log_sheet = _open_sheet(cfg.HUB_LEVEL_PLANNING_SHEET_KEY, "Submission_Log")
+    all_data = log_sheet.get_all_records()
+    if not all_data:
+        raise RuntimeError("No rows found in Submission_Log.")
 
-        # Open Hub_Plan worksheet in NEW_PRODUCT_LAUNCH spreadsheet
-        hub_plan_sheet = _open_sheet(NEW_PRODUCT_LAUNCH_SHEET_KEY, "Hub_Plan")
+    matching_rows = [r for r in all_data if str(r.get("Submission_ID", "")).strip() == str(submission_id)]
+    if not matching_rows:
+        raise RuntimeError(f"No Submission_Log rows found for {submission_id}.")
 
-        rows_to_append = []
-        for r in matching_rows:
-            owner = "Demand Planning"
-            sub_type = r.get("Submission_Type", "New Launch")
-            channel = "App"
-            update_date = datetime.now().strftime("%Y-%m-%d")
-            sub_cat = r.get("Category", "")
-            pid = r.get("Product ID", "")
-            pname = r.get("Product Name", "")
-            city = r.get("City", "")
-            hub = r.get("Hub", "")
-            mrp = r.get("MRP", "")
-            change_date = r.get("Start Date", "")
+    statuses = {str(r.get("Status", "")).strip().lower() for r in matching_rows}
+    if statuses != {"approved"}:
+        raise RuntimeError("Approve this submission before previewing or syncing it.")
 
-            row_vals = [
-                owner,
-                sub_type,
-                channel,
-                update_date,
-                sub_cat,
-                pid,
-                pname,
-                pid,  # Anchor ID (same as PRODUCT_ID)
-                "",   # PLU_CODE
-                city,
-                hub,  # hub_name
-                "",   # UOM
-                "",   # Yield
-                "",   # RM
-                "",   # Meat Ratio (for VA)
-                "",   # Total Shelf Life
-                "",   # Hub Shelf Life
-                mrp,
-                change_date,
-                r.get("Mon", 0),
-                r.get("Tue", 0),
-                r.get("Wed", 0),
-                r.get("Thu", 0),
-                r.get("Fri", 0),
-                r.get("Sat", 0),
-                r.get("Sun", 0),
-                "Confirmed",  # Planning Confirmation
-                "",           # Production PC
-                "",           # Empty column
-                r.get("Submitted_By", ""),
-            ]
-            rows_to_append.append(row_vals)
+    hub_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "Hub_Plan")
+    sheet_headers = hub_plan_sheet.row_values(1)
+    columns = _normalize_hub_plan_headers(sheet_headers)
 
-        if rows_to_append:
-            hub_plan_sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
-            logger.info("[NPL] Successfully appended %d rows for submission_id %s to NEW_PRODUCT_LAUNCH sheet.", len(rows_to_append), submission_id)
-    except Exception:
-        logger.exception("[NPL] Failed to append approved launch data for submission %s to NEW_PRODUCT_LAUNCH sheet.", submission_id)
+    existing_keys = set()
+    if include_existing_check:
+        existing_key_rows = hub_plan_sheet.get("B:S") or []
+        existing_keys = {
+            _npl_hub_plan_key_from_b_to_s(row)
+            for row in existing_key_rows[1:]
+            if _npl_hub_plan_key_from_b_to_s(row)
+        }
+
+    values = []
+    rows = []
+    skipped = 0
+    update_date = datetime.now().strftime("%Y-%m-%d")
+    for source in matching_rows:
+        row_vals = _build_hub_plan_row(source, update_date=update_date)
+        key = _npl_hub_plan_key(row_vals)
+        if key and key in existing_keys:
+            skipped += 1
+            continue
+        values.append(row_vals)
+        rows.append(dict(zip(columns, row_vals)))
+        if key:
+            existing_keys.add(key)
+
+    return {
+        "status": "ready",
+        "spreadsheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
+        "worksheet": "Hub_Plan",
+        "columns": columns,
+        "rows": rows,
+        "values": values,
+        "rows_to_append": len(values),
+        "rows_skipped": skipped,
+        "matched_rows": len(matching_rows),
+    }
 
 
+def _append_approved_to_new_product_launch(submission_id: str) -> dict:
+    """Append approved Submission_Log rows to the env-configured NPL Hub_Plan sheet."""
+    from planning_suite import config as cfg
+    from planning_suite.features.new_product_launch import _open_sheet
+
+    prepared = _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
+    values = prepared.pop("values", [])
+    if values:
+        hub_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "Hub_Plan")
+        hub_plan_sheet.append_rows(values, value_input_option="USER_ENTERED")
+
+    logger.info(
+        "[NPL] approval sync complete for %s: appended=%d skipped=%d target=%s!Hub_Plan",
+        submission_id,
+        len(values),
+        prepared["rows_skipped"],
+        cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
+    )
+    return {
+        "status": "success",
+        "worksheet": "Hub_Plan",
+        "rows_appended": len(values),
+        "rows_skipped": prepared["rows_skipped"],
+        "matched_rows": prepared["matched_rows"],
+    }
 
 
+def _build_hub_plan_row(source: dict, *, update_date: str) -> list:
+    pid = str(source.get("Product ID", "")).strip()
+    return [
+        "Demand Planning",
+        source.get("Submission_Type", "New Launch"),
+        "App",
+        update_date,
+        source.get("Category", ""),
+        pid,
+        source.get("Product Name", ""),
+        pid,
+        "",
+        source.get("City", ""),
+        source.get("Hub", ""),
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        source.get("MRP", ""),
+        source.get("Start Date", ""),
+        source.get("Mon", 0),
+        source.get("Tue", 0),
+        source.get("Wed", 0),
+        source.get("Thu", 0),
+        source.get("Fri", 0),
+        source.get("Sat", 0),
+        source.get("Sun", 0),
+        "Confirmed",
+        "",
+        "",
+        source.get("Submitted_By", ""),
+    ]
+
+
+def _normalize_hub_plan_headers(headers: list[str]) -> list[str]:
+    columns = [str(h) for h in (headers or [])]
+    if len(columns) < len(HUB_PLAN_COLUMNS):
+        columns = columns + HUB_PLAN_COLUMNS[len(columns):]
+    if len(columns) > len(HUB_PLAN_COLUMNS):
+        return columns[:len(HUB_PLAN_COLUMNS)]
+    return columns or HUB_PLAN_COLUMNS
+
+
+def _npl_hub_plan_key(row: list) -> tuple[str, str, str, str, str] | None:
+    """Natural duplicate key for Hub_Plan rows based on the current sheet layout."""
+    if len(row) <= 18:
+        return None
+    values = [row[1], row[5], row[9], row[10], row[18]]
+    key = tuple(str(v).strip().lower() for v in values)
+    return key if all(key) else None
+
+
+def _npl_hub_plan_key_from_b_to_s(row: list) -> tuple[str, str, str, str, str] | None:
+    if len(row) <= 17:
+        return None
+    values = [row[0], row[4], row[8], row[9], row[17]]
+    key = tuple(str(v).strip().lower() for v in values)
+    return key if all(key) else None
