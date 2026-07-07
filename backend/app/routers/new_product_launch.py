@@ -465,9 +465,15 @@ def wizard_submit(
     username = current_user.get("username", "")
     user_id = int(current_user["sub"])
     sub_id = ""
-    history_saved = False
-    history_error = ""
 
+    steps_status = {
+        "sheets": {"status": "idle", "duration_ms": 0},
+        "db": {"status": "idle", "duration_ms": 0},
+        "email": {"status": "idle", "detail": ""}
+    }
+
+    # Step 1: Sync to Google Sheets
+    t_sheets = time.perf_counter()
     try:
         rows = wiz.apply_launch_dates(body.hub_rows, body.launch_date)
         result = wiz.submit_hub_rows(
@@ -475,15 +481,30 @@ def wizard_submit(
             sub_type=body.sub_type,
             username=username,
             user_id=user_id,
-            send_email=False,  # We send our own richer email below
+            send_email=False,
         )
-        elapsed = round((time.perf_counter() - t0) * 1000)
-        sync_completed = datetime.now().isoformat()
         sub_id = result.get("submission_id", "")
         product_name = result.get("product_name", "")
         hub_count = result.get("rows", 0)
+        steps_status["sheets"] = {
+            "status": "success",
+            "duration_ms": round((time.perf_counter() - t_sheets) * 1000)
+        }
+    except Exception as exc:
+        steps_status["sheets"] = {
+            "status": "error",
+            "duration_ms": round((time.perf_counter() - t_sheets) * 1000),
+            "error": str(exc)
+        }
+        _fire_step_fail("Submit to Google Sheets", str(exc), current_user, sub_type=body.sub_type)
+        raise HTTPException(status_code=500, detail={
+            "message": f"Google Sheets Sync failed: {str(exc)}",
+            "steps": steps_status
+        })
 
-        # Collect metadata from submitted rows for DB/email
+    # Step 2: Persist to Supabase Database
+    t_db = time.perf_counter()
+    try:
         import pandas as pd
         hub_df = pd.DataFrame(rows)
         cities = sorted(hub_df["city_name"].dropna().astype(str).unique().tolist()) if "city_name" in hub_df.columns else []
@@ -492,41 +513,46 @@ def wizard_submit(
         launch_dates = sorted(hub_df["Launch Date"].dropna().astype(str).unique().tolist()) if "Launch Date" in hub_df.columns else []
         start_date = launch_dates[0] if launch_dates else ""
 
-        logger.info(
-            "[NPL] submit OK — sub_id=%s sub_type=%s product=%s %d hubs %d cities in %dms",
-            sub_id, body.sub_type, product_name, hub_count, len(cities), elapsed,
+        db.save_npl_submission(
+            submission_id=sub_id,
+            sub_type=body.sub_type,
+            product_id=product_id,
+            product_name=product_name,
+            category=category,
+            cities=cities,
+            hub_count=hub_count,
+            start_date=start_date,
+            submitted_by=username,
+            user_id=user_id,
+            step_log={
+                "submit_ms": round((time.perf_counter() - t0) * 1000),
+                "sync_started_at": sync_started,
+                "sync_completed_at": datetime.now().isoformat(),
+                "sync_duration_ms": round((time.perf_counter() - t0) * 1000),
+                "status": "submitted",
+                "email_requested": body.send_email,
+            },
         )
+        db.update_npl_submission_status(sub_id, "Submitted")
+        steps_status["db"] = {
+            "status": "success",
+            "duration_ms": round((time.perf_counter() - t_db) * 1000)
+        }
+    except Exception as exc:
+        steps_status["db"] = {
+            "status": "error",
+            "duration_ms": round((time.perf_counter() - t_db) * 1000),
+            "error": str(exc)
+        }
+        raise HTTPException(status_code=500, detail={
+            "message": f"Database Register failed: {str(exc)}",
+            "steps": steps_status
+        })
 
-        # Persist to Supabase (best-effort, never blocks the response)
+    # Step 3: Trigger Email Notifications
+    t_email = time.perf_counter()
+    if body.send_email:
         try:
-            db.save_npl_submission(
-                submission_id=sub_id,
-                sub_type=body.sub_type,
-                product_id=product_id,
-                product_name=product_name,
-                category=category,
-                cities=cities,
-                hub_count=hub_count,
-                start_date=start_date,
-                submitted_by=username,
-                user_id=user_id,
-                step_log={
-                    "submit_ms": elapsed,
-                    "sync_started_at": sync_started,
-                    "sync_completed_at": sync_completed,
-                    "sync_duration_ms": elapsed,
-                    "status": "submitted",
-                    "email_requested": body.send_email,
-                },
-            )
-            db.update_npl_submission_status(sub_id, "Submitted")
-            history_saved = True
-        except Exception as history_exc:
-            history_error = str(history_exc)
-            logger.exception("[NPL] failed to persist submission %s to DB", sub_id)
-
-        # Send success + approval emails in the background to prevent blocking/timeouts
-        if body.send_email:
             from planning_suite.services.workflow_notifications import notify_npl_submitted
             background_tasks.add_task(
                 notify_npl_submitted,
@@ -541,26 +567,31 @@ def wizard_submit(
                 user_id=user_id,
                 db=db,
             )
-            email_result = {"status": "queued", "detail": "Email queued in background."}
-        else:
-            email_result = {"status": "skipped", "detail": "send_email=false"}
+            steps_status["email"] = {
+                "status": "success",
+                "detail": "queued",
+                "duration_ms": round((time.perf_counter() - t_email) * 1000)
+            }
+        except Exception as exc:
+            steps_status["email"] = {
+                "status": "error",
+                "error": str(exc),
+                "duration_ms": round((time.perf_counter() - t_email) * 1000)
+            }
+    else:
+        steps_status["email"] = {
+            "status": "success",
+            "detail": "skipped",
+            "duration_ms": 0
+        }
 
-        result["email"] = email_result
-        result["history"] = {"saved": history_saved, "status": "Submitted" if history_saved else "Pending", "error": history_error}
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        elapsed = round((time.perf_counter() - t0) * 1000)
-        logger.exception("[NPL] submit crashed in %dms", elapsed)
-        if sub_id:
-            try:
-                db.update_npl_submission_status(sub_id, "Failed", str(exc))
-            except Exception:
-                logger.debug("[NPL] status update on submit failure suppressed", exc_info=True)
-        _fire_step_fail("Submit to Google Sheets", str(exc), current_user, sub_type=body.sub_type)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "submission_id": sub_id,
+        "steps": steps_status,
+        "rows": hub_count,
+        "product_name": product_name,
+        "email": {"status": "queued"} if body.send_email else {"status": "skipped"}
+    }
 
 
 @router.get("/submissions/log")

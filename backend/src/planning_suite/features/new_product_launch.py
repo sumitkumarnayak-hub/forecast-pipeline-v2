@@ -1010,6 +1010,15 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     df["Rejection_Reason"] = ""
     df["Submitted_By"]     = submitted_by
 
+    # Launch_Output: long format (Primary write)
+    out_wide = df[["Product ID", "Product Name", "Category",
+                   "City", "Hub", "Start Date"] + WEEKDAYS]
+    out_long = wide_to_long(out_wide)
+    _overwrite_rows(SPREADSHEET_ID, "Launch_Output",
+                    _sanitize(out_long),
+                    key_cols=["Product ID", "City", "Hub", "Day"])
+
+    # Submission_Log: logging write (Saves submission history only if primary write succeeds)
     log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
                 "Product ID", "Product Name", "Category",
                 "City", "Hub", "MRP", "Start Date",
@@ -1017,13 +1026,6 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     log_df = df[[c for c in log_cols if c in df.columns]]
     save_to_log(_sanitize(log_df))
 
-    # Launch_Output: long format
-    out_wide = df[["Product ID", "Product Name", "Category",
-                   "City", "Hub", "Start Date"] + WEEKDAYS]
-    out_long = wide_to_long(out_wide)
-    _overwrite_rows(SPREADSHEET_ID, "Launch_Output",
-                    _sanitize(out_long),
-                    key_cols=["Product ID", "City", "Hub", "Day"])
     return sub_id
 
 

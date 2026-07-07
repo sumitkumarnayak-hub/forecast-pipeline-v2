@@ -54,6 +54,13 @@ function stageLabels(subType: NplWizardProps["subType"]): string[] {
   return ["1 · Upload", "2 · Hub Split", "3 · Launch Date", "4 · Confirm"];
 }
 
+interface SyncStep {
+  id: "sheets" | "db" | "email";
+  label: string;
+  status: "idle" | "loading" | "success" | "error";
+  message?: string;
+}
+
 export default function NplWizard({ subType, title, description }: NplWizardProps) {
   const { readOnly } = useAuth();
   const { context, products: allProducts, loading: nplLoading, error: nplError, getProductsByCategory } =
@@ -127,6 +134,33 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     skipped?: boolean;
     reason?: string;
   } | null>(null);
+
+  const SYNC_STEPS_DEFAULT: SyncStep[] = [
+    { id: "sheets", label: "Sync to Google Sheets (Launch_Output & Submission_Log)", status: "idle" },
+    { id: "db", label: "Save submission record to Database", status: "idle" },
+    { id: "email", label: "Trigger email notification workflow", status: "idle" },
+  ];
+
+  const [syncSteps, setSyncSteps] = useState<SyncStep[]>(SYNC_STEPS_DEFAULT);
+  const [showSyncSteps, setShowSyncSteps] = useState(false);
+
+  // Use a ref so the stage-change effect captures the latest function references
+  const confirmActionsRef = useRef<{ checkDuplicates: () => void; previewSync: () => void } | null>(null);
+
+  useEffect(() => {
+    if (stage === "confirm") {
+      // Small defer so the functions are defined and ref is updated
+      const timer = setTimeout(() => {
+        confirmActionsRef.current?.checkDuplicates();
+        confirmActionsRef.current?.previewSync();
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      setShowSyncSteps(false);
+      setSyncSteps(SYNC_STEPS_DEFAULT);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage]);
 
   useEffect(() => {
     if (!context) return;
@@ -307,6 +341,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const checkDuplicates = async () => {
+    if (busy) return;
     setBusy("dupes");
     setStepState({ step: "dupes", status: "loading", message: "Checking for existing submissions..." });
     setDupes(null);
@@ -333,6 +368,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const previewSync = async () => {
+    if (busy) return;
     setBusy("preview");
     setStepState({ step: "preview", status: "loading", message: "Generating sync preview..." });
     setPreviewRows(null);
@@ -355,9 +391,20 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setBusy("");
   };
 
+  // Keep ref in sync so stage-change useEffect can call these safely
+  confirmActionsRef.current = { checkDuplicates, previewSync };
+
   const submit = async () => {
+    if (busy) return;
     setBusy("submit");
+    setShowSyncSteps(true);
+    setSyncSteps([
+      { id: "sheets", label: "Sync to Google Sheets (Launch_Output & Submission_Log)", status: "loading" },
+      { id: "db", label: "Save submission record to Database", status: "idle" },
+      { id: "email", label: "Trigger email notification workflow", status: "idle" },
+    ]);
     setStepState({ step: "submit", status: "loading", message: "Syncing data to Google Sheets & database..." });
+
     try {
       const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
@@ -365,19 +412,63 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         sub_type: subType,
         launch_date: launchDate,
       });
+
+      // Update steps to success
+      setSyncSteps([
+        { id: "sheets", label: "Sync to Google Sheets (Launch_Output & Submission_Log)", status: "success", message: `${data.steps?.sheets?.duration_ms || 0}ms` },
+        { id: "db", label: "Save submission record to Database", status: "success", message: `${data.steps?.db?.duration_ms || 0}ms` },
+        { id: "email", label: "Trigger email notification workflow", status: data.email?.status === "skipped" ? "idle" : "success", message: data.email?.status === "skipped" ? "Skipped" : "Queued" },
+      ]);
+
       setEmailResult(data.email || null);
       setMsg({ text: `Synced successfully! Submission ID: ${data.submission_id}`, type: "success" });
       setStepState({ step: "submit", status: "success", message: "Successfully synced" });
-      setStage(isReplacement ? "setup" : "upload");
-      setHubRows([]);
-      setDupes(null);
-      setPreviewRows(null);
-      setPreviewCols([]);
-    } catch (err: unknown) {
-      const errDetail = extractErrorMessage(err, "Sync failed");
+
+      // Reset the wizard after a short delay (e.g. 2.5 seconds) so user can see step-wise green checkmarks
+      setTimeout(() => {
+        setStage(isReplacement ? "setup" : "upload");
+        setHubRows([]);
+        setDupes(null);
+        setPreviewRows(null);
+        setPreviewCols([]);
+        setShowSyncSteps(false);
+      }, 2500);
+
+    } catch (err: any) {
       logError("submit", err, { subType, launchDate });
+      const errDetail = extractErrorMessage(err, "Sync failed");
       setMsg({ text: errDetail, type: "danger" });
       setStepState({ step: "submit", status: "error", message: errDetail });
+
+      // Handle step-wise error mapping from backend HTTPException
+      const backendSteps = err.response?.data?.detail?.steps;
+      if (backendSteps) {
+        setSyncSteps([
+          {
+            id: "sheets",
+            label: "Sync to Google Sheets (Launch_Output & Submission_Log)",
+            status: backendSteps.sheets?.status || "error",
+            message: backendSteps.sheets?.error || (backendSteps.sheets?.status === "success" ? "Success" : undefined)
+          },
+          {
+            id: "db",
+            label: "Save submission record to Database",
+            status: backendSteps.db?.status || "idle",
+            message: backendSteps.db?.error || (backendSteps.db?.status === "success" ? "Success" : undefined)
+          },
+          {
+            id: "email",
+            label: "Trigger email notification workflow",
+            status: backendSteps.email?.status || "idle",
+            message: backendSteps.email?.error || (backendSteps.email?.status === "success" ? "Success" : undefined)
+          },
+        ]);
+      } else {
+        // Fallback: mark current/active step as error
+        setSyncSteps(prev =>
+          prev.map(step => (step.status === "loading" || step.status === "idle" ? { ...step, status: "error", message: errDetail } : step))
+        );
+      }
     }
     setBusy("");
   };
@@ -773,32 +864,99 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
       {stage === "confirm" && (
         <>
-          <p className="text-sm mb-3">
-            Submit <strong>{hubRows.length}</strong> hub rows as <strong>{subType}</strong> · launch {launchDate}
+          <p className="text-sm mb-2">
+            Sync <strong>{hubRows.length}</strong> hub rows as <strong>{subType}</strong> · launch {launchDate}
             {isReplacement && oldPid && newPid && (
               <> · replace {oldPid} → {newPid} ({splitPct}% to new)</>
             )}
           </p>
+
+          {/* Duplicate check status banner */}
+          {busy === "dupes" && (
+            <div className="alert alert-info text-xs mb-3 flex items-center gap-2">
+              <span className="spinner" style={{ width: 12, height: 12 }} />
+              Checking for duplicate submissions in log…
+            </div>
+          )}
+          {dupes && dupes.length > 0 && (
+            <div className="alert alert-warning text-xs mb-3">
+              <strong>⚠ Duplicate submissions detected ({dupes.length}):</strong>
+              <ul className="mt-1 pl-4">
+                {dupes.slice(0, 5).map((d, i) => (
+                  <li key={i} style={{ fontFamily: "monospace" }}>{JSON.stringify(d)}</li>
+                ))}
+              </ul>
+              <p className="mt-1">Review the existing entries before syncing.</p>
+            </div>
+          )}
+          {!busy && dupes !== null && dupes.length === 0 && (
+            <div className="alert alert-success text-xs mb-3">✓ No duplicate submissions found</div>
+          )}
+
+          {/* Preview loading status */}
+          {busy === "preview" && (
+            <div className="alert alert-info text-xs mb-3 flex items-center gap-2">
+              <span className="spinner" style={{ width: 12, height: 12 }} />
+              Generating sync preview…
+            </div>
+          )}
+
+          {/* Step-wise sync progress tracker */}
+          {showSyncSteps && (
+            <div className="mb-4 p-3 border rounded" style={{ background: "rgba(0,0,0,0.1)" }}>
+              <p className="text-xs font-semibold mb-2 uppercase tracking-wider text-muted">Sync Progress</p>
+              <div className="flex flex-col gap-2">
+                {syncSteps.map((step) => {
+                  const icon =
+                    step.status === "loading" ? <span className="spinner" style={{ width: 12, height: 12, display: "inline-block" }} /> :
+                    step.status === "success" ? <span style={{ color: "var(--color-success, #22c55e)", fontWeight: 700 }}>✓</span> :
+                    step.status === "error" ? <span style={{ color: "var(--color-danger, #ef4444)", fontWeight: 700 }}>✗</span> :
+                    <span style={{ opacity: 0.35 }}>○</span>;
+                  return (
+                    <div key={step.id} className="flex items-start gap-2 text-xs">
+                      <span style={{ minWidth: 16, marginTop: 1 }}>{icon}</span>
+                      <div>
+                        <span className={step.status === "error" ? "text-danger font-semibold" : step.status === "success" ? "font-semibold" : "text-muted"}>
+                          {step.label}
+                        </span>
+                        {step.message && (
+                          <span className="text-muted ml-1">
+                            — {step.message}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons */}
           <div className="flex flex-wrap gap-2 mb-3">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={previewSync} disabled={readOnly || busy === "preview"}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={previewSync} disabled={readOnly || !!busy}>
               {busy === "preview" ? "Loading Preview…" : "Preview Sync"}
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={checkDuplicates} disabled={readOnly || busy === "dupes"}>
-              Check duplicates
+            <button type="button" className="btn btn-secondary btn-sm" onClick={checkDuplicates} disabled={readOnly || !!busy}>
+              {busy === "dupes" ? "Checking…" : "Re-check Duplicates"}
             </button>
-            <button type="button" className="btn btn-success btn-sm" onClick={submit} disabled={readOnly || busy === "submit"}>
+            <button type="button" className="btn btn-success btn-sm" onClick={submit} disabled={readOnly || !!busy}>
               {busy === "submit" ? "Syncing…" : "Sync Now"}
             </button>
           </div>
-          {previewRows && (
+
+          {/* Sheet log preview table */}
+          {previewRows && previewRows.length > 0 && (
             <div className="mb-4">
-              <h5 className="text-xs font-semibold mb-2 text-muted uppercase tracking-wider">Log Preview (Will be written to Google Sheets)</h5>
+              <h5 className="text-xs font-semibold mb-2 text-muted uppercase tracking-wider">
+                Log Preview — Exact columns to be written to Google Sheets
+              </h5>
               <div className="table-wrap border rounded" style={{ maxHeight: 280, overflow: "auto" }}>
                 <table className="table-sm">
                   <thead>
                     <tr style={{ background: "rgba(255, 255, 255, 0.05)" }}>
                       {previewCols.map(c => (
-                        <th key={c} style={{ fontSize: "0.7rem", padding: "0.4rem" }}>{c}</th>
+                        <th key={c} style={{ fontSize: "0.68rem", padding: "0.35rem 0.4rem", whiteSpace: "nowrap" }}>{c}</th>
                       ))}
                     </tr>
                   </thead>
@@ -806,7 +964,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                     {previewRows.map((row, i) => (
                       <tr key={i}>
                         {previewCols.map(c => (
-                          <td key={c} style={{ fontSize: "0.68rem", padding: "0.3rem 0.4rem", whiteSpace: "nowrap" }}>
+                          <td key={c} style={{ fontSize: "0.65rem", padding: "0.25rem 0.4rem", whiteSpace: "nowrap" }}>
                             {String(row[c] ?? "")}
                           </td>
                         ))}
@@ -815,41 +973,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
-          {dupes && dupes.length > 0 && (
-            <div className="alert alert-warning text-xs mb-3">
-              <strong>Existing log entries:</strong>
-              <ul className="mt-1 pl-4">
-                {dupes.slice(0, 5).map((d, i) => (
-                  <li key={i}>{JSON.stringify(d)}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {emailResult && (
-            <div className="alert alert-info text-xs">
-              <div className="flex items-center gap-1 font-semibold mb-1">
-                <Mail size={13} /> Email notification
-              </div>
-              {emailResult.skipped ? (
-                <p>{emailResult.reason || "Emails skipped — configure SMTP in Settings."}</p>
-              ) : (
-                <div className="grid-2 gap-2">
-                  <div>
-                    <strong>Planners:</strong>{" "}
-                    {emailResult.planner?.status === "sent"
-                      ? `Sent to ${(emailResult.planner.recipients || []).join(", ")}`
-                      : emailResult.planner?.error || "Not sent"}
-                  </div>
-                  <div>
-                    <strong>Admin:</strong>{" "}
-                    {emailResult.admin?.status === "sent"
-                      ? `Sent to ${(emailResult.admin.recipients || []).join(", ")}`
-                      : emailResult.admin?.error || "Not sent"}
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </>
