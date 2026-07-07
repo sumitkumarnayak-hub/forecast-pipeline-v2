@@ -128,6 +128,7 @@ class Database:
             self._migrate_session_id_columns(conn)
             self._migrate_pipeline_run_log_lines(conn)
             self._migrate_users_is_active(conn)
+            self._migrate_npl_submissions(conn)
         if not IS_PRODUCTION:
             self.create_default_users()
         self.ensure_product_user()
@@ -1540,6 +1541,180 @@ class Database:
                 """),
                 conn,
                 params={"limit": limit},
+            )
+
+    # ── NPL Submissions (Supabase mirror of Google Sheets Submission_Log) ──────
+
+    def _migrate_npl_submissions(self, conn) -> None:
+        """Ensure npl_submissions table exists (auto-migration on startup)."""
+        if self.backend == "postgresql":
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS npl_submissions (
+                    id BIGSERIAL PRIMARY KEY,
+                    submission_id TEXT UNIQUE NOT NULL,
+                    sub_type TEXT,
+                    product_id TEXT,
+                    product_name TEXT,
+                    category TEXT,
+                    cities TEXT,
+                    hub_count INTEGER DEFAULT 0,
+                    city_count INTEGER DEFAULT 0,
+                    start_date TEXT,
+                    status TEXT DEFAULT 'Pending',
+                    rejection_reason TEXT,
+                    submitted_by TEXT,
+                    user_id BIGINT REFERENCES users(id),
+                    step_log TEXT,
+                    timestamp TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            return
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS npl_submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                submission_id TEXT UNIQUE NOT NULL,
+                sub_type TEXT,
+                product_id TEXT,
+                product_name TEXT,
+                category TEXT,
+                cities TEXT,
+                hub_count INTEGER DEFAULT 0,
+                city_count INTEGER DEFAULT 0,
+                start_date TEXT,
+                status TEXT DEFAULT 'Pending',
+                rejection_reason TEXT,
+                submitted_by TEXT,
+                user_id INTEGER,
+                step_log TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+
+    def save_npl_submission(
+        self,
+        *,
+        submission_id: str,
+        sub_type: str,
+        product_id: str = "",
+        product_name: str = "",
+        category: str = "",
+        cities: list[str] | None = None,
+        hub_count: int = 0,
+        start_date: str = "",
+        submitted_by: str = "",
+        user_id: int | None = None,
+        step_log: dict | None = None,
+    ) -> None:
+        """Insert a new NPL submission row into Supabase."""
+        try:
+            city_list = cities or []
+            with self.engine.begin() as conn:
+                if self.backend == "postgresql":
+                    conn.execute(text("""
+                        INSERT INTO npl_submissions
+                            (submission_id, sub_type, product_id, product_name, category,
+                             cities, hub_count, city_count, start_date, submitted_by, user_id, step_log)
+                        VALUES
+                            (:submission_id, :sub_type, :product_id, :product_name, :category,
+                             :cities, :hub_count, :city_count, :start_date, :submitted_by, :user_id, :step_log)
+                        ON CONFLICT (submission_id) DO NOTHING
+                    """), {
+                        "submission_id": submission_id,
+                        "sub_type": sub_type,
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "category": category,
+                        "cities": ", ".join(city_list),
+                        "hub_count": hub_count,
+                        "city_count": len(city_list),
+                        "start_date": start_date,
+                        "submitted_by": submitted_by,
+                        "user_id": user_id,
+                        "step_log": json.dumps(step_log or {}),
+                    })
+                else:
+                    conn.execute(text("""
+                        INSERT OR IGNORE INTO npl_submissions
+                            (submission_id, sub_type, product_id, product_name, category,
+                             cities, hub_count, city_count, start_date, submitted_by, user_id, step_log)
+                        VALUES
+                            (:submission_id, :sub_type, :product_id, :product_name, :category,
+                             :cities, :hub_count, :city_count, :start_date, :submitted_by, :user_id, :step_log)
+                    """), {
+                        "submission_id": submission_id,
+                        "sub_type": sub_type,
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "category": category,
+                        "cities": ", ".join(city_list),
+                        "hub_count": hub_count,
+                        "city_count": len(city_list),
+                        "start_date": start_date,
+                        "submitted_by": submitted_by,
+                        "user_id": user_id,
+                        "step_log": json.dumps(step_log or {}),
+                    })
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to save NPL submission %s to DB", submission_id)
+
+    def update_npl_submission_status(
+        self, submission_id: str, status: str, reason: str = ""
+    ) -> None:
+        """Update status (Approved/Rejected/Voided/Withdrawn) of a submission."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE npl_submissions
+                    SET status = :status, rejection_reason = :reason
+                    WHERE submission_id = :submission_id
+                """), {"status": status, "reason": reason, "submission_id": submission_id})
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to update NPL submission status %s", submission_id)
+
+    def get_npl_submissions(
+        self,
+        *,
+        types: list[str] | None = None,
+        statuses: list[str] | None = None,
+        product_ids: list[str] | None = None,
+        submission_id: str | None = None,
+        limit: int = 500,
+    ) -> pd.DataFrame:
+        """Query npl_submissions from DB with optional filters."""
+        order_clause = _order_by_desc_nulls_last("timestamp", self.backend)
+        wheres = ["1=1"]
+        params: dict = {"limit": limit}
+        if types:
+            ph = ", ".join(f":t{i}" for i in range(len(types)))
+            params.update({f"t{i}": v for i, v in enumerate(types)})
+            wheres.append(f"sub_type IN ({ph})")
+        if statuses:
+            ph = ", ".join(f":s{i}" for i in range(len(statuses)))
+            params.update({f"s{i}": v for i, v in enumerate(statuses)})
+            wheres.append(f"status IN ({ph})")
+        if product_ids:
+            ph = ", ".join(f":p{i}" for i in range(len(product_ids)))
+            params.update({f"p{i}": v for i, v in enumerate(product_ids)})
+            wheres.append(f"product_id IN ({ph})")
+        if submission_id:
+            wheres.append("submission_id = :submission_id")
+            params["submission_id"] = submission_id
+        where_sql = " AND ".join(wheres)
+        with self.engine.connect() as conn:
+            return pd.read_sql_query(
+                text(f"""
+                    SELECT submission_id, sub_type, product_id, product_name, category,
+                           cities, hub_count, city_count, start_date, status,
+                           rejection_reason, submitted_by, timestamp
+                    FROM npl_submissions
+                    WHERE {where_sql}
+                    ORDER BY {order_clause}
+                    LIMIT :limit
+                """),
+                conn,
+                params=params,
             )
 
     def ping(self) -> bool:

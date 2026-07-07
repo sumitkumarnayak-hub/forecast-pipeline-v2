@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import logging
+import time
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -12,6 +14,7 @@ from planning_suite.core.dataframe import df_to_records
 from planning_suite.db.engine import Database
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/upload")
@@ -333,11 +336,25 @@ async def wizard_parse_city(
 ):
     from planning_suite.services import npl_wizard as wiz
 
+    t0 = time.perf_counter()
     content = await file.read()
-    result = wiz.parse_city_file(content)
-    if not result.get("ok"):
-        raise HTTPException(status_code=422, detail=result.get("errors", ["Parse failed"]))
-    return result
+    try:
+        result = wiz.parse_city_file(content)
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        if not result.get("ok"):
+            errors = result.get("errors", ["Parse failed"])
+            err_str = "; ".join(errors) if isinstance(errors, list) else str(errors)
+            logger.warning("[NPL] parse-city failed in %dms: %s", elapsed, err_str)
+            raise HTTPException(status_code=422, detail=errors)
+        logger.info("[NPL] parse-city OK — %d rows in %dms", result.get("row_count", 0), elapsed)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] parse-city crashed in %dms", elapsed)
+        _fire_step_fail("Parse City File", str(exc), current_user)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/wizard/parse-hub")
@@ -347,18 +364,42 @@ async def wizard_parse_hub(
 ):
     from planning_suite.services import npl_wizard as wiz
 
+    t0 = time.perf_counter()
     content = await file.read()
-    result = wiz.parse_hub_file(content)
-    if not result.get("ok"):
-        raise HTTPException(status_code=422, detail=result.get("errors", ["Parse failed"]))
-    return result
+    try:
+        result = wiz.parse_hub_file(content)
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        if not result.get("ok"):
+            errors = result.get("errors", ["Parse failed"])
+            err_str = "; ".join(errors) if isinstance(errors, list) else str(errors)
+            logger.warning("[NPL] parse-hub failed in %dms: %s", elapsed, err_str)
+            raise HTTPException(status_code=422, detail=errors)
+        logger.info("[NPL] parse-hub OK — %d rows in %dms", result.get("row_count", 0), elapsed)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] parse-hub crashed in %dms", elapsed)
+        _fire_step_fail("Parse Hub File", str(exc), current_user)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/wizard/split-city")
 def wizard_split_city(body: SplitCityBody, current_user: dict = Depends(require_write)):
     from planning_suite.services import npl_wizard as wiz
 
-    return wiz.split_city_rows(body.city_rows, forced_hubs=body.forced_hubs)
+    t0 = time.perf_counter()
+    try:
+        result = wiz.split_city_rows(body.city_rows, forced_hubs=body.forced_hubs)
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[NPL] split-city OK — %d hub rows in %dms", result.get("row_count", 0), elapsed)
+        return result
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] split-city crashed in %dms", elapsed)
+        _fire_step_fail("City → Hub Split", str(exc), current_user)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/wizard/check-duplicates")
@@ -370,23 +411,120 @@ def wizard_check_dupes(
 ):
     from planning_suite.services import npl_wizard as wiz
 
-    return wiz.check_duplicates(body.hub_rows, sub_type=sub_type, plan_level=plan_level)
+    t0 = time.perf_counter()
+    try:
+        result = wiz.check_duplicates(body.hub_rows, sub_type=sub_type, plan_level=plan_level)
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[NPL] check-duplicates OK — has_dupes=%s in %dms", result.get("has_duplicates"), elapsed)
+        return result
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] check-duplicates crashed in %dms", elapsed)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/wizard/submit")
-def wizard_submit(body: SubmitBody, current_user: dict = Depends(require_write)):
+def wizard_submit(
+    body: SubmitBody,
+    current_user: dict = Depends(require_write),
+    db: Database = Depends(get_db),
+):
     from planning_suite.services import npl_wizard as wiz
 
-    rows = wiz.apply_launch_dates(body.hub_rows, body.launch_date)
+    t0 = time.perf_counter()
     username = current_user.get("username", "")
     user_id = int(current_user["sub"])
-    return wiz.submit_hub_rows(
-        rows,
-        sub_type=body.sub_type,
-        username=username,
-        user_id=user_id,
-        send_email=body.send_email,
-    )
+    sub_id = ""
+    history_saved = False
+    history_error = ""
+
+    try:
+        rows = wiz.apply_launch_dates(body.hub_rows, body.launch_date)
+        result = wiz.submit_hub_rows(
+            rows,
+            sub_type=body.sub_type,
+            username=username,
+            user_id=user_id,
+            send_email=False,  # We send our own richer email below
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        sub_id = result.get("submission_id", "")
+        product_name = result.get("product_name", "")
+        hub_count = result.get("rows", 0)
+
+        # Collect metadata from submitted rows for DB/email
+        import pandas as pd
+        hub_df = pd.DataFrame(rows)
+        cities = sorted(hub_df["city_name"].dropna().astype(str).unique().tolist()) if "city_name" in hub_df.columns else []
+        product_id = str(hub_df["product_id"].iloc[0]) if "product_id" in hub_df.columns and len(hub_df) else ""
+        category = str(hub_df["category"].iloc[0]) if "category" in hub_df.columns and len(hub_df) else ""
+        launch_dates = sorted(hub_df["Launch Date"].dropna().astype(str).unique().tolist()) if "Launch Date" in hub_df.columns else []
+        start_date = launch_dates[0] if launch_dates else ""
+
+        logger.info(
+            "[NPL] submit OK — sub_id=%s sub_type=%s product=%s %d hubs %d cities in %dms",
+            sub_id, body.sub_type, product_name, hub_count, len(cities), elapsed,
+        )
+
+        # Persist to Supabase (best-effort, never blocks the response)
+        try:
+            db.save_npl_submission(
+                submission_id=sub_id,
+                sub_type=body.sub_type,
+                product_id=product_id,
+                product_name=product_name,
+                category=category,
+                cities=cities,
+                hub_count=hub_count,
+                start_date=start_date,
+                submitted_by=username,
+                user_id=user_id,
+                step_log={
+                    "submit_ms": elapsed,
+                    "status": "submitted",
+                    "email_requested": body.send_email,
+                },
+            )
+            db.update_npl_submission_status(sub_id, "Submitted")
+            history_saved = True
+        except Exception as history_exc:
+            history_error = str(history_exc)
+            logger.exception("[NPL] failed to persist submission %s to DB", sub_id)
+
+        # Send success + approval emails
+        if body.send_email:
+            from planning_suite.services.workflow_notifications import notify_npl_submitted
+            email_result = notify_npl_submitted(
+                sub_id=sub_id,
+                sub_type=body.sub_type,
+                product_name=product_name,
+                product_id=product_id,
+                launch_dates=launch_dates,
+                cities=cities,
+                hub_count=hub_count,
+                submitted_by=username,
+                user_id=user_id,
+                db=db,
+            )
+        else:
+            email_result = {"skipped": True, "reason": "send_email=false"}
+
+        result["email"] = email_result
+        result["history"] = {"saved": history_saved, "status": "Submitted" if history_saved else "Pending", "error": history_error}
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[NPL] submit crashed in %dms", elapsed)
+        if sub_id:
+            try:
+                db.update_npl_submission_status(sub_id, "Failed", str(exc))
+            except Exception:
+                logger.debug("[NPL] status update on submit failure suppressed", exc_info=True)
+        _fire_step_fail("Submit to Google Sheets", str(exc), current_user, sub_type=body.sub_type)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/submissions/log")
@@ -396,23 +534,40 @@ def submissions_log(
     product_ids: str | None = None,
     submission_id: str | None = None,
     view: str = Query("summary", pattern="^(summary|detail)$"),
+    source: str = Query("db", pattern="^(db|sheets)$"),
     current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ):
-    from planning_suite.services import npl_wizard as wiz
-    from planning_suite.services.api_cache import CacheNS, cache_invalidate, cached
-
+    """
+    Get submission log. source=db (default) reads from Supabase npl_submissions (fast).
+    source=sheets reads from Google Sheets Submission_Log (legacy/fallback).
+    """
     t = [x.strip() for x in types.split(",") if x.strip()] if types else None
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
+
+    # Fast DB path (default)
+    if source == "db":
+        try:
+            df = db.get_npl_submissions(
+                types=t, statuses=s, product_ids=p, submission_id=submission_id
+            )
+            if not df.empty:
+                return _format_db_submissions(df, view=view)
+            # Fall through to Sheets if DB is empty (first-time / not yet migrated)
+        except Exception:
+            logger.warning("[NPL] DB submissions query failed, falling back to Sheets", exc_info=True)
+
+    # Sheets fallback
+    from planning_suite.services.api_cache import CacheNS, cache_invalidate, cached
+    from planning_suite.services import npl_wizard as wiz
+
     cache_key = f"log:{view}:{submission_id or ''}:{types or ''}:{statuses or ''}:{product_ids or ''}"
 
     def _log():
         return wiz.get_submission_log(
-            types=t,
-            statuses=s,
-            product_ids=p,
-            submission_id=submission_id,
-            view=view,
+            types=t, statuses=s, product_ids=p,
+            submission_id=submission_id, view=view,
         )
 
     return cached(CacheNS.NPL_WIZARD, cache_key, _log, ttl=_NPL_LOG_CACHE_TTL)
@@ -423,6 +578,7 @@ def patch_submission_status(
     submission_id: str,
     body: StatusBody,
     current_user: dict = Depends(require_write),
+    db: Database = Depends(get_db),
 ):
     from planning_suite.core.permissions import can_approve
     from planning_suite.services import npl_wizard as wiz
@@ -431,10 +587,102 @@ def patch_submission_status(
     if body.status in admin_actions and not can_approve(current_user.get("role", "")):
         raise HTTPException(status_code=403, detail="Admin approval required")
     try:
+        # Update Google Sheets
         wiz.set_submission_status(submission_id, body.status, body.reason)
-        from planning_suite.services.api_cache import CacheNS, cache_invalidate
+        # Update Supabase
+        db.update_npl_submission_status(submission_id, body.status, body.reason)
 
+        from planning_suite.services.api_cache import CacheNS, cache_invalidate
         cache_invalidate(CacheNS.NPL_WIZARD)
+        logger.info("[NPL] submission %s → %s by user %s", submission_id, body.status, current_user.get("username"))
         return {"detail": f"Submission {submission_id} → {body.status}"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _fire_step_fail(step_name: str, error: str, current_user: dict, sub_type: str = "New Launch") -> None:
+    """Fire a step-failure email in the background (best-effort, never raises)."""
+    try:
+        from planning_suite.services.workflow_notifications import notify_npl_step_failed
+        user_id = int(current_user.get("sub", 0) or 0) or None
+        notify_npl_step_failed(
+            step_name=step_name,
+            error=error,
+            sub_type=sub_type,
+            user_id=user_id,
+        )
+    except Exception:
+        logger.debug("[NPL] Step-fail email suppressed", exc_info=True)
+
+
+def _format_db_submissions(df, *, view: str) -> dict:
+    """Convert npl_submissions DB rows into the same shape as npl_wizard.get_submission_log()."""
+    import json
+    from datetime import datetime
+
+    records = []
+    for _, row in df.iterrows():
+        ts_raw = row.get("timestamp")
+        ts_str = ts_raw.isoformat() if hasattr(ts_raw, "isoformat") else str(ts_raw or "")
+        city_str = str(row.get("cities") or "")
+        city_list = [c.strip() for c in city_str.split(",") if c.strip()]
+
+        # SLA flag
+        sla = ""
+        status = str(row.get("status") or "")
+        if status == "Pending":
+            try:
+                start = row.get("start_date")
+                if start and str(start).strip():
+                    if datetime.strptime(str(start).strip()[:10], "%Y-%m-%d").date() < datetime.now().date():
+                        sla = "EXPIRED"
+            except Exception:
+                pass
+
+        records.append({
+            "Submission_ID": str(row.get("submission_id") or ""),
+            "Submission_Type": str(row.get("sub_type") or ""),
+            "Product ID": str(row.get("product_id") or ""),
+            "Product Name": str(row.get("product_name") or ""),
+            "Category": str(row.get("category") or ""),
+            "Cities": ", ".join(city_list[:6]) + (f", …" if len(city_list) > 6 else ""),
+            "Hub_Count": int(row.get("hub_count") or 0),
+            "City_Count": int(row.get("city_count") or 0),
+            "Start Date": str(row.get("start_date") or ""),
+            "Status": status,
+            "SLA": sla,
+            "Rejection_Reason": str(row.get("rejection_reason") or ""),
+            "Submitted_By": str(row.get("submitted_by") or ""),
+            "Timestamp": ts_str,
+        })
+
+    summary_cols = [
+        "Submission_ID", "Submission_Type", "Product Name", "Start Date",
+        "Status", "SLA", "Hub_Count", "City_Count", "Cities", "Submitted_By", "Timestamp",
+    ]
+    detail_cols = [
+        "Submission_ID", "Submission_Type", "Product ID", "Product Name",
+        "Category", "City_Count", "Cities", "Hub_Count", "Start Date",
+        "Status", "SLA", "Rejection_Reason", "Submitted_By", "Timestamp",
+    ]
+
+    cols = summary_cols if view == "summary" else detail_cols
+
+    # Build filter metadata from all rows
+    all_types = sorted({r["Submission_Type"] for r in records if r["Submission_Type"]})
+    all_statuses = sorted({r["Status"] for r in records if r["Status"]})
+    all_pids = sorted({r["Product ID"] for r in records if r["Product ID"]})
+
+    return {
+        "rows": records,
+        "columns": cols,
+        "filters": {"types": all_types, "statuses": all_statuses, "product_ids": all_pids},
+        "view": view,
+        "row_count": len(records),
+        "source": "db",
+    }
+
+
+

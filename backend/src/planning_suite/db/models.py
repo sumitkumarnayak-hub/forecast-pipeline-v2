@@ -206,3 +206,25 @@ class WriteQueue(Base):
     status = Column(String(16), default="pending")
     created_at = Column(DateTime(timezone=True))
     flushed_at = Column(DateTime(timezone=True))
+
+
+class NplSubmission(Base):
+    """Mirror of Google Sheets Submission_Log for fast DB-side queries."""
+    __tablename__ = "npl_submissions"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    submission_id    = Column(String, unique=True, nullable=False, index=True)
+    sub_type         = Column(String)          # New Launch | Expansion | Replacement
+    product_id       = Column(String)
+    product_name     = Column(String)
+    category         = Column(String)
+    cities           = Column(String)          # comma-separated city list
+    hub_count        = Column(Integer, default=0)
+    city_count       = Column(Integer, default=0)
+    start_date       = Column(String)
+    status           = Column(String, default="Pending")
+    rejection_reason = Column(String)
+    submitted_by     = Column(String)
+    user_id          = Column(Integer, ForeignKey("users.id"), nullable=True)
+    step_log         = Column(Text)            # JSON — per-wizard-step timing/errors
+    timestamp        = Column(DateTime(timezone=True), server_default=func.now())

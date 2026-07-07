@@ -47,6 +47,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [stage, setStage] = useState<WizardStage>(isReplacement ? "setup" : "upload");
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
+  const [stepState, setStepState] = useState<{ step: string; status: "idle" | "loading" | "success" | "error"; message: string }>({ step: "", status: "idle", message: "" });
 
   const [category, setCategory] = useState("");
   const [planLevel, setPlanLevel] = useState<"city" | "hub">("city");
@@ -168,6 +169,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     const file = e.target.files?.[0];
     if (!file) return;
     setBusy("upload");
+    setStepState({ step: "upload", status: "loading", message: "Parsing your file..." });
     setMsg({ text: "", type: "" });
     try {
       const form = new FormData();
@@ -183,6 +185,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       );
 
       if (planLevel === "city") {
+        setStepState({ step: "split", status: "loading", message: "Calculating hub split from salience data..." });
         const split = await api.post("/api/new-product-launch/wizard/split-city", {
           city_rows: data.rows,
           forced_hubs: Object.keys(forced).length ? forced : null,
@@ -195,10 +198,13 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         setHubColumns(data.columns || []);
       }
       setStage("split");
+      setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
       const error = err as { response?: { data?: { detail?: string | string[] } } };
       const d = error?.response?.data?.detail;
-      setMsg({ text: Array.isArray(d) ? d.join("; ") : String(d || "Upload failed"), type: "danger" });
+      const errorMsg = Array.isArray(d) ? d.join("; ") : String(d || "Upload failed");
+      setStepState({ step: "upload", status: "error", message: errorMsg });
+      setMsg({ text: errorMsg, type: "danger" });
     }
     setBusy("");
     e.target.value = "";
@@ -222,6 +228,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   const checkDuplicates = async () => {
     setBusy("dupes");
+    setStepState({ step: "dupes", status: "loading", message: "Checking for existing submissions..." });
     setDupes(null);
     try {
       const { data } = await api.post(
@@ -232,17 +239,21 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       if (data.has_duplicates) {
         setDupes(data.existing_rows || []);
         setMsg({ text: "Duplicate submission(s) found in log — review before submitting", type: "warning" });
+        setStepState({ step: "dupes", status: "success", message: "Duplicates found" });
       } else {
         setMsg({ text: "No duplicates in submission log", type: "success" });
+        setStepState({ step: "dupes", status: "success", message: "No duplicates found" });
       }
     } catch {
       setMsg({ text: "Duplicate check failed", type: "danger" });
+      setStepState({ step: "dupes", status: "error", message: "Duplicate check failed" });
     }
     setBusy("");
   };
 
   const submit = async () => {
     setBusy("submit");
+    setStepState({ step: "submit", status: "loading", message: "Submitting to DB and Google Sheets..." });
     try {
       const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
@@ -252,12 +263,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       });
       setEmailResult(data.email || null);
       setMsg({ text: `Submitted — ID ${data.submission_id}`, type: "success" });
+      setStepState({ step: "submit", status: "success", message: "Successfully submitted" });
       setStage(isReplacement ? "setup" : "upload");
       setHubRows([]);
       setDupes(null);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { detail?: string } } };
-      setMsg({ text: error?.response?.data?.detail || "Submit failed", type: "danger" });
+      const errDetail = error?.response?.data?.detail || "Submit failed";
+      setMsg({ text: errDetail, type: "danger" });
+      setStepState({ step: "submit", status: "error", message: errDetail });
     }
     setBusy("");
   };
@@ -322,7 +336,20 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       {nplError && !context && (
         <div className="alert alert-danger mb-3 text-sm">{nplError}</div>
       )}
-      {msg.text && <div className={`alert alert-${msg.type} mb-3 text-sm`}>{msg.text}</div>}
+
+      {stepState.status === "loading" && (
+        <div className="alert alert-info mb-3 text-sm flex items-center gap-2">
+          <span className="spinner" style={{ width: 14, height: 14 }} />
+          {stepState.message}
+        </div>
+      )}
+      {stepState.status === "error" && (
+        <div className="alert alert-danger mb-3 text-sm flex justify-between items-center">
+          <span><strong>Error:</strong> {stepState.message}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => setStepState({ step: "", status: "idle", message: "" })}>Dismiss</button>
+        </div>
+      )}
+      {msg.text && stepState.status !== "error" && <div className={`alert alert-${msg.type} mb-3 text-sm`}>{msg.text}</div>}
 
       <div className="flex flex-wrap gap-2 mb-4 text-xs">
         {labels.map((label, i) => {

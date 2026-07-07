@@ -617,3 +617,144 @@ def notify_master_sync_result(
         db=db,
     )
 
+
+def notify_npl_step_failed(
+    *,
+    step_name: str,
+    error: str,
+    sub_type: str = "New Launch",
+    product_name: str = "",
+    user_id: int | None = None,
+    db: Database | None = None,
+) -> NotifyResult:
+    """Send a failure alert when any NPL wizard step crashes."""
+    db = db or Database()
+    meta = {"step_name": step_name, "sub_type": sub_type, "error": error[:500]}
+    html_body = build_email_html(
+        headline=f"NPL step failed — {step_name}",
+        intro=(
+            f"A <strong>{_esc(sub_type)}</strong> launch wizard step failed "
+            "and could not complete. A planner may need to retry."
+        ),
+        fields={
+            "Step": _esc(step_name),
+            "Launch type": _esc(sub_type),
+            "Product": _esc(product_name) if product_name else "—",
+        },
+        error_block=error[:2000],
+        action=(
+            "Open Planning Suite → <strong>Product Launch</strong> and retry "
+            "the failed step. If the error persists, check the backend logs."
+        ),
+    )
+    return _safe_operational_send(
+        event="npl_step_failed",
+        category="pipeline",
+        subject=f"[Planning Suite] NPL step FAILED — {step_name} ({sub_type})",
+        html_body=html_body,
+        triggered_by_user_id=user_id,
+        metadata=meta,
+        db=db,
+    )
+
+
+def notify_npl_submitted(
+    *,
+    sub_id: str,
+    sub_type: str,
+    product_name: str,
+    product_id: str = "",
+    launch_dates: list[str],
+    cities: list[str] | None = None,
+    hub_count: int = 0,
+    submitted_by: str = "",
+    user_id: int | None = None,
+    db: Database | None = None,
+) -> dict:
+    """
+    Two emails after a successful NPL submit:
+      1. Success  → 'general' category  (submission confirmed)
+      2. Approval → 'approval' category (admin action needed)
+    Returns a combined dict with both statuses.
+    """
+    db = db or Database()
+
+    if user_id and not user_wants_notifications(user_id, db):
+        return {
+            "ok": False, "skipped": True,
+            "reason": "User disabled email notifications.",
+            "success": {"status": "skipped"}, "approval": {"status": "skipped"},
+        }
+    if not is_smtp_configured():
+        return {
+            "ok": False, "skipped": True,
+            "reason": "SMTP not configured.",
+            "success": {"status": "skipped"}, "approval": {"status": "skipped"},
+        }
+
+    city_list = cities or []
+    date_label = ", ".join(launch_dates) if launch_dates else "—"
+    cities_label = ", ".join(city_list[:8])
+    if len(city_list) > 8:
+        cities_label += f", … (+{len(city_list) - 8} more)"
+
+    fields = {
+        "Submission ID": f"<code>{_esc(sub_id)}</code>",
+        "Launch Type": _esc(sub_type),
+        "Product": _esc(product_name),
+        "Product ID": _esc(product_id) if product_id else "—",
+        "Cities": _esc(cities_label) if cities_label else "—",
+        "Hub rows": str(hub_count),
+        "Launch date(s)": _esc(date_label),
+        "Submitted by": _esc(submitted_by) if submitted_by else "—",
+    }
+
+    success_html = build_email_html(
+        headline="New launch plan submitted",
+        intro=f"A <strong>{_esc(sub_type)}</strong> plan was successfully submitted and written to the Google Sheet.",
+        fields=fields,
+        action="Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
+    )
+    success_result = _safe_operational_send(
+        event="npl_submitted",
+        category="general",
+        subject=f"[Planning Suite] Launch submitted — {product_name} ({sub_type})",
+        html_body=success_html,
+        triggered_by_user_id=user_id,
+        metadata={"sub_id": sub_id, "sub_type": sub_type},
+        db=db,
+    )
+
+    approval_html = build_email_html(
+        headline="Launch plan awaiting approval",
+        intro=(
+            f"A new <strong>{_esc(sub_type)}</strong> plan has been submitted "
+            "and is pending admin approval before it can proceed."
+        ),
+        fields=fields,
+        action=(
+            "Open Planning Suite → <strong>Product Launch → Submission History</strong>, "
+            "select the submission and click <strong>Approve</strong> or <strong>Reject</strong>."
+        ),
+    )
+    approval_result = _safe_operational_send(
+        event="npl_approval_needed",
+        category="approval",
+        subject=f"[Planning Suite] Launch approval needed — {product_name} ({sub_type})",
+        html_body=approval_html,
+        triggered_by_user_id=user_id,
+        metadata={"sub_id": sub_id, "sub_type": sub_type},
+        db=db,
+    )
+
+    return {
+        "ok": success_result.sent or approval_result.sent,
+        "success": {
+            "status": "sent" if success_result.sent else ("skipped" if success_result.skipped else "failed"),
+            "detail": success_result.detail,
+        },
+        "approval": {
+            "status": "sent" if approval_result.sent else ("skipped" if approval_result.skipped else "failed"),
+            "detail": approval_result.detail,
+        },
+    }
