@@ -130,7 +130,6 @@ def get_settings_bootstrap(
     bootstrap: dict[str, Any] = {
         "profile": {
             "id": user.get("id"),
-            "username": user.get("username"),
             "full_name": user.get("full_name"),
             "email": user.get("email"),
             "role": user.get("role"),
