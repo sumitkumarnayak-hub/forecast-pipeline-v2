@@ -70,7 +70,7 @@ class AuthManager:
         remember_me = bool(pending.get("remember_me", True))
 
         if not username or not password:
-            st.session_state["_login_error"] = "Please enter both your username and password."
+            st.session_state["_login_error"] = "Please enter both your email and password."
             return True
 
         user = self.db.authenticate_user(username, password)
@@ -159,7 +159,7 @@ class AuthManager:
                 st.error(login_error)
 
             with st.form("login_form"):
-                username = st.text_input("Username", placeholder="Enter your username")
+                email = st.text_input("Email", placeholder="Enter your email address")
                 password = st.text_input("Password", type="password", placeholder="Enter your password")
                 remember_me = st.checkbox(
                     "Keep me signed in",
@@ -171,7 +171,7 @@ class AuthManager:
 
                 if submit:
                     st.session_state["_pending_login"] = {
-                        "username": username,
+                        "username": email,
                         "password": password,
                         "remember_me": remember_me,
                     }
@@ -183,9 +183,7 @@ class AuthManager:
                             background: #FFFBEB; border: 1px solid #FDE68A;
                             border-radius: 8px; font-size: 0.8rem; color: #92400E;">
                     <div style="font-weight: 600; margin-bottom: 0.35rem;">Development mode</div>
-                    Default logins: <code>admin</code> / <code>admin123</code>,
-                    <code>planner</code> / <code>planner123</code>,
-                    <code>viewer</code> / <code>viewer123</code>
+                    Default admin: <code>sumitkumar.nayak@licious.com</code> / <code>admin123</code>
                 </div>
                 """, unsafe_allow_html=True)
 
