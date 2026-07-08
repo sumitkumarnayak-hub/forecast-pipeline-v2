@@ -508,3 +508,35 @@ def send_launch_notifications(
         "admin": admin_result,
         "ok": planner_result.get("status") == "sent" and admin_result.get("status") == "sent",
     }
+
+
+def send_welcome_email(
+    *,
+    email: str,
+    username: str,
+    full_name: str,
+    role: str,
+    db: Database | None = None,
+) -> dict:
+    """Send welcome email to a newly created user."""
+    safe_name = html.escape(full_name)
+    safe_username = html.escape(username)
+    safe_role = html.escape(role)
+
+    body_html = build_email_html(
+        headline="Welcome to Planning Suite",
+        intro=f"Hello <strong>{safe_name}</strong>, your account has been successfully created by the administrator.",
+        fields={
+            "Username": safe_username,
+            "Role": safe_role,
+        },
+        action="Open the <a href='https://forecast-pipeline-v2-frontend-nu.vercel.app/login' style='color:#2563EB;font-weight:600;text-decoration:none;'>Planning Suite Login Page</a> to sign in.",
+    )
+
+    return send_to_addresses(
+        recipients=[email],
+        subject=f"[Planning Suite] Account Created — Welcome {safe_name}!",
+        html_body=body_html,
+        email_type="general",
+        db=db,
+    )

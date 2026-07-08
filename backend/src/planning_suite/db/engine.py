@@ -129,8 +129,7 @@ class Database:
             self._migrate_pipeline_run_log_lines(conn)
             self._migrate_users_is_active(conn)
             self._migrate_npl_submissions(conn)
-        if not IS_PRODUCTION:
-            self.create_default_users()
+        self.create_default_users()
         self.ensure_product_user()
 
     def _insert_user_if_missing(
@@ -294,43 +293,46 @@ class Database:
             return None
 
     def create_default_users(self):
-        """Create default dev users when the database is first initialized (non-production only)."""
+        """Create default admin user and update existing admin if necessary."""
         import bcrypt
         from sqlalchemy.exc import IntegrityError
 
         with self.engine.begin() as conn:
-            defaults = [
-                ("admin", "admin123", "Administrator", "admin@company.com", "admin"),
-                ("planner", "planner123", "Planner User", "planner@company.com", "planner"),
-                ("viewer", "viewer123", "Viewer User", "viewer@company.com", "viewer"),
-            ]
-            for username, password, full_name, email, role in defaults:
-                # Check if this specific user already exists
-                count = conn.execute(
-                    text("SELECT COUNT(*) FROM users WHERE username = :username"),
-                    {"username": username}
-                ).scalar()
-                if count == 0:
-                    password_hash = bcrypt.hashpw(
-                        password.encode("utf-8"), bcrypt.gensalt()
-                    ).decode("utf-8")
-                    try:
-                        conn.execute(
-                            text("""
-                                INSERT INTO users (username, password_hash, full_name, email, role)
-                                VALUES (:username, :password_hash, :full_name, :email, :role)
-                            """),
-                            {
-                                "username": username,
-                                "password_hash": password_hash,
-                                "full_name": full_name,
-                                "email": email,
-                                "role": role,
-                            },
-                        )
-                    except IntegrityError:
-                        # Handle race condition where another thread/process inserted the user concurrently
-                        pass
+            # Idempotently migrate old 'admin' username to 'sumit' if it exists
+            try:
+                conn.execute(
+                    text("UPDATE users SET username = 'sumit', email = 'sumitkumar.nayak@licious.com', full_name = 'Sumit Nayak' WHERE username = 'admin'")
+                )
+            except Exception:
+                pass
+
+            # Check if sumit user exists
+            count = conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE username = 'sumit'"),
+            ).scalar()
+
+            if count == 0:
+                password_hash = bcrypt.hashpw(
+                    "admin123".encode("utf-8"), bcrypt.gensalt()
+                ).decode("utf-8")
+                try:
+                    conn.execute(
+                        text("""
+                            INSERT INTO users (username, password_hash, full_name, email, role)
+                            VALUES ('sumit', :password_hash, 'Sumit Nayak', 'sumitkumar.nayak@licious.com', 'admin')
+                        """),
+                        {"password_hash": password_hash},
+                    )
+                except IntegrityError:
+                    pass
+            else:
+                # Ensure correct email and role
+                try:
+                    conn.execute(
+                        text("UPDATE users SET email = 'sumitkumar.nayak@licious.com', role = 'admin' WHERE username = 'sumit'")
+                    )
+                except Exception:
+                    pass
 
 
     def authenticate_user(self, username, password):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from app.deps import get_current_user, require_admin, get_db
@@ -298,6 +298,7 @@ class UserCreate(BaseModel):
 @router.post("/users")
 def create_user_admin(
     body: UserCreate,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(require_admin),
     db: Database = Depends(get_db),
 ):
@@ -309,6 +310,19 @@ def create_user_admin(
             email=body.email,
             role=body.role,
         )
+        
+        # Dispatch welcome email as a background task if email is provided
+        if body.email and str(body.email).strip():
+            from planning_suite.services.email_service import send_welcome_email
+            background_tasks.add_task(
+                send_welcome_email,
+                email=body.email.strip(),
+                username=body.username,
+                full_name=body.full_name or body.username,
+                role=body.role,
+                db=db,
+            )
+
         return {"detail": f"User {body.username} created", "user": user}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
