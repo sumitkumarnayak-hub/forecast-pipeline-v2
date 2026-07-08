@@ -484,11 +484,14 @@ def wizard_preview_sync(
         sheet_headers = city_plan_sheet.row_values(header_row_idx)
         columns = [str(h).strip() for h in sheet_headers if str(h).strip()]
 
-        # 4. Build preview rows matching City_Plan layout
+        # 4. Fetch Product Master details map ONCE outside the loop to prevent loading ages
+        pm_details_map = _get_product_master_details_map()
+
+        # 5. Build preview rows matching City_Plan layout
         preview_records = []
         update_date = datetime.now().strftime("%Y-%m-%d")
         for source in aggregated_sources.values():
-            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date)
+            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
             record = {}
             for col_name, val in zip(sheet_headers, row_vals):
                 if str(col_name).strip():
@@ -597,10 +600,13 @@ def wizard_submit(
             if key:
                 existing_keys.add(key)
 
+        # 1.4 Fetch Product Master details map ONCE outside the loop
+        pm_details_map = _get_product_master_details_map()
+
         values_to_append = []
         update_date = datetime.now().strftime("%Y-%m-%d")
         for source in aggregated_sources.values():
-            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date)
+            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
             key = _npl_city_plan_key(row_vals, sheet_headers)
             if key and key in existing_keys:
                 continue
@@ -609,7 +615,7 @@ def wizard_submit(
         if values_to_append:
             city_plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED")
 
-        # 1.4 Mark submission status as Approved (or Synced) immediately
+        # 1.5 Mark submission status as Approved (or Synced) immediately
         update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")
 
         steps_status["sheets"] = {
@@ -967,20 +973,26 @@ def _npl_city_plan_key(row_vals: list, headers: list[str]) -> tuple[str, str, st
     return None
 
 
-def _get_product_master_details(product_id: str) -> dict:
+def _format_date_npl(date_val) -> str:
+    if not date_val:
+        return ""
+    if hasattr(date_val, "strftime"):
+        return date_val.strftime("%d-%m-%Y")
+    from datetime import datetime
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(str(date_val).strip(), fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return str(date_val)
+
+
+def _get_product_master_details_map() -> dict[str, dict]:
     from planning_suite import config as cfg
     from planning_suite.features.new_product_launch import _open_sheet
     import pandas as pd
     
-    details = {
-        "RM": "",
-        "UOM": "",
-        "Yield": "",
-        "Total Shelf Life": "",
-        "Hub Shelf Life": "",
-        "PLU_CODE": ""
-    }
-    
+    details_map = {}
     try:
         from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
         def _fetch_pm():
@@ -990,23 +1002,52 @@ def _get_product_master_details(product_id: str) -> dict:
         pm_data = read_sheet_values_cached(cfg.DEMAND_PLANNING_SHEET_ID, "P Master", "all", "demand_planning_masters", _fetch_pm)
         if len(pm_data) > 1:
             pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
-            pm_row = pm_df[pm_df["Product id"].astype(str).str.strip() == str(product_id).strip()]
-            if not pm_row.empty:
-                if "RM" in pm_row.columns:
-                    details["RM"] = str(pm_row["RM"].iloc[0]).strip()
+            for _, row in pm_df.iterrows():
+                pid = str(row.get("Product id", "")).strip()
+                if pid:
+                    details_map[pid] = {
+                        "RM": str(row.get("RM", "")).strip() if "RM" in row else "",
+                        "UOM": "",
+                        "Yield": "",
+                        "Total Shelf Life": "",
+                        "Hub Shelf Life": "",
+                        "PLU_CODE": ""
+                    }
     except Exception as e:
         logger.warning(f"Error reading P Master for details: {e}")
         
-    return details
+    return details_map
 
 
-def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: str) -> list:
+def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: str, pm_details_map: dict | None = None) -> list:
     row = []
     pid = str(source.get("Product ID", "")).strip()
     
-    # Fetch details from product master to enrich row
-    pm_details = _get_product_master_details(pid)
-    
+    # Use cached map if provided, otherwise fetch dynamically
+    if pm_details_map is not None:
+        pm_details = pm_details_map.get(pid, {})
+    else:
+        # Fallback single row fetch
+        pm_details = {
+            "RM": "", "UOM": "", "Yield": "", "Total Shelf Life": "", "Hub Shelf Life": "", "PLU_CODE": ""
+        }
+        try:
+            from planning_suite import config as cfg
+            from planning_suite.features.new_product_launch import _open_sheet
+            import pandas as pd
+            from planning_suite.services.npl_sheet_reads import read_sheet_values_cached
+            def _fetch_pm():
+                sheet = _open_sheet(cfg.DEMAND_PLANNING_SHEET_ID, "P Master")
+                return sheet.get_all_values()
+            pm_data = read_sheet_values_cached(cfg.DEMAND_PLANNING_SHEET_ID, "P Master", "all", "demand_planning_masters", _fetch_pm)
+            if len(pm_data) > 1:
+                pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
+                pm_row = pm_df[pm_df["Product id"].astype(str).str.strip() == pid]
+                if not pm_row.empty and "RM" in pm_row.columns:
+                    pm_details["RM"] = str(pm_row["RM"].iloc[0]).strip()
+        except Exception:
+            pass
+            
     for h in headers:
         h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
         if h_norm in ("owner", "owner name"):
@@ -1016,7 +1057,7 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
         elif h_norm == "channel":
             row.append("App")
         elif h_norm in ("update date", "updated date"):
-            row.append(update_date)
+            row.append(_format_date_npl(update_date))
         elif h_norm in ("sub category", "subcategory"):
             row.append(source.get("Category", ""))
         elif h_norm in ("product id", "sku"):
@@ -1030,7 +1071,7 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
         elif h_norm in ("mrp", "mrp (before kvi discount)"):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
-            row.append(source.get("Start Date", ""))
+            row.append(_format_date_npl(source.get("Start Date", "")))
         elif h_norm == "uom":
             row.append(source.get("UOM", pm_details.get("UOM", "")))
         elif h_norm == "yield":
