@@ -1656,7 +1656,7 @@ class Database:
                         el.error_message,
                         el.triggered_by_user_id,
                         el.session_id,
-                        u.username AS triggered_by
+                        u.email AS triggered_by
                     FROM email_log el
                     LEFT JOIN users u ON u.id = el.triggered_by_user_id
                     ORDER BY {order_clause}
