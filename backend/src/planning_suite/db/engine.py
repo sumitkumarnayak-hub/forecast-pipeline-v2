@@ -129,9 +129,10 @@ class Database:
             self._migrate_pipeline_run_log_lines(conn)
             self._migrate_users_is_active(conn)
             self._migrate_users_remove_username(conn)
-            self._migrate_npl_submissions(conn)
+            self._migrate_npl_submissions_table(conn)
         self.create_default_users()
         self.ensure_product_user()
+
 
 
     def _insert_user_if_missing(
@@ -363,6 +364,57 @@ class Database:
         conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ"
         ))
+
+    def _migrate_npl_submissions_table(self, conn) -> None:
+        """Idempotent — ensure npl_submissions table exists in both backends.
+
+        The table is also declared in _POSTGRES_SCHEMA / _SQLITE_SCHEMA, so this
+        is only needed for databases created before that schema entry was added.
+        """
+        if self.backend == "postgresql":
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS npl_submissions (
+                    id BIGSERIAL PRIMARY KEY,
+                    submission_id TEXT UNIQUE NOT NULL,
+                    sub_type TEXT,
+                    product_id TEXT,
+                    product_name TEXT,
+                    category TEXT,
+                    cities TEXT,
+                    hub_count INTEGER DEFAULT 0,
+                    city_count INTEGER DEFAULT 0,
+                    start_date TEXT,
+                    status TEXT DEFAULT 'Pending',
+                    rejection_reason TEXT,
+                    submitted_by TEXT,
+                    user_id BIGINT,
+                    step_log TEXT,
+                    timestamp TIMESTAMPTZ DEFAULT NOW(),
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS npl_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id TEXT UNIQUE NOT NULL,
+                    sub_type TEXT,
+                    product_id TEXT,
+                    product_name TEXT,
+                    category TEXT,
+                    cities TEXT,
+                    hub_count INTEGER DEFAULT 0,
+                    city_count INTEGER DEFAULT 0,
+                    start_date TEXT,
+                    status TEXT DEFAULT 'Pending',
+                    rejection_reason TEXT,
+                    submitted_by TEXT,
+                    user_id INTEGER,
+                    step_log TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
 
     @staticmethod
     def _resolve_session_id(explicit: str | None = None) -> str | None:
@@ -2016,6 +2068,27 @@ _SQLITE_SCHEMA = [
         flushed_at TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS npl_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        submission_id TEXT UNIQUE NOT NULL,
+        sub_type TEXT,
+        product_id TEXT,
+        product_name TEXT,
+        category TEXT,
+        cities TEXT,
+        hub_count INTEGER DEFAULT 0,
+        city_count INTEGER DEFAULT 0,
+        start_date TEXT,
+        status TEXT DEFAULT 'Pending',
+        rejection_reason TEXT,
+        submitted_by TEXT,
+        user_id INTEGER,
+        step_log TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )
+    """,
 ]
 
 _POSTGRES_SCHEMA = [
@@ -2215,6 +2288,27 @@ _POSTGRES_SCHEMA = [
         status TEXT DEFAULT 'pending',
         created_at TIMESTAMPTZ,
         flushed_at TIMESTAMPTZ
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS npl_submissions (
+        id BIGSERIAL PRIMARY KEY,
+        submission_id TEXT UNIQUE NOT NULL,
+        sub_type TEXT,
+        product_id TEXT,
+        product_name TEXT,
+        category TEXT,
+        cities TEXT,
+        hub_count INTEGER DEFAULT 0,
+        city_count INTEGER DEFAULT 0,
+        start_date TEXT,
+        status TEXT DEFAULT 'Pending',
+        rejection_reason TEXT,
+        submitted_by TEXT,
+        user_id BIGINT,
+        step_log TEXT,
+        timestamp TIMESTAMPTZ DEFAULT NOW(),
+        FOREIGN KEY (user_id) REFERENCES users (id)
     )
     """,
 ]
