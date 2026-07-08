@@ -17,6 +17,34 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+@router.get("/info")
+def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
+    """Return sheet URL and last sync timestamp for the NPL page header."""
+    from planning_suite.config import NEW_PRODUCT_LAUNCH_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL
+
+    # Fetch last sync from master_sync_log for ph_master or npl-related types
+    last_sync: str | None = None
+    try:
+        with db.engine.connect() as conn:
+            from sqlalchemy import text as _text
+            row = conn.execute(_text("""
+                SELECT sync_date FROM master_sync_log
+                WHERE master_type IN ('ph_master_sync', 'npl_auto_sync', 'new_product_launch_sync')
+                ORDER BY sync_date DESC
+                LIMIT 1
+            """)).fetchone()
+            if row and row[0]:
+                ts = row[0]
+                last_sync = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+    except Exception:
+        pass
+
+    return {
+        "npl_sheet_url": NEW_PRODUCT_LAUNCH_SHEET_URL or None,
+        "ph_master_sheet_url": DEMAND_PLANNING_MASTERS_SHEET_URL or None,
+        "last_synced": last_sync,
+    }
+
 
 @router.post("/upload")
 async def upload_npl_excel(

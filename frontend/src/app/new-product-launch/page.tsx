@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { UrlTabs } from "@/components/ui/UrlTabs";
 import { NplProvider } from "@/context/NplContext";
@@ -8,10 +8,128 @@ import NplWizard from "@/components/npl/NplWizard";
 import SubmissionHistory from "@/components/npl/SubmissionHistory";
 import SyncPhTab from "@/components/npl/SyncPhTab";
 import AutoSyncTab from "@/components/npl/AutoSyncTab";
+import api from "@/lib/api";
+import { ExternalLink, Clock } from "lucide-react";
+
+interface NplInfo {
+  npl_sheet_url: string | null;
+  ph_master_sheet_url: string | null;
+  last_synced: string | null;
+}
+
+function NplHeaderActions() {
+  const [info, setInfo] = useState<NplInfo | null>(null);
+
+  useEffect(() => {
+    api.get<NplInfo>("/api/new-product-launch/info")
+      .then(({ data }) => setInfo(data))
+      .catch(() => {});
+  }, []);
+
+  const formatLastSynced = (iso: string | null) => {
+    if (!iso) return "Never synced";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+      {/* Last synced badge */}
+      <div style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.35rem",
+        padding: "0.28rem 0.65rem",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "999px",
+        fontSize: "0.71rem",
+        color: "var(--text-muted)",
+        fontWeight: 500,
+        whiteSpace: "nowrap",
+      }}>
+        <Clock size={11} />
+        Last synced:&nbsp;
+        <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+          {info ? formatLastSynced(info.last_synced) : "—"}
+        </span>
+      </div>
+
+      {/* NPL Sheet button */}
+      {info?.npl_sheet_url && (
+        <a
+          href={info.npl_sheet_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.35rem",
+            padding: "0.28rem 0.65rem",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            fontSize: "0.71rem",
+            color: "var(--text-secondary)",
+            fontWeight: 500,
+            textDecoration: "none",
+            cursor: "pointer",
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
+        >
+          <ExternalLink size={11} />
+          Launch Output
+        </a>
+      )}
+
+      {/* P-H Master Sheet button */}
+      {info?.ph_master_sheet_url && (
+        <a
+          href={info.ph_master_sheet_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.35rem",
+            padding: "0.28rem 0.65rem",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            fontSize: "0.71rem",
+            color: "var(--text-secondary)",
+            fontWeight: 500,
+            textDecoration: "none",
+            cursor: "pointer",
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
+        >
+          <ExternalLink size={11} />
+          P-H Master Sheet
+        </a>
+      )}
+    </div>
+  );
+}
 
 function NewProductLaunchContent() {
   return (
-    <AppShell title="Product Launch" subtitle="Launch planning, P-H sync, and automated new-product integration">
+    <AppShell
+      title="Product Launch"
+      subtitle="Launch planning, P-H sync, and automated new-product integration"
+      actions={<NplHeaderActions />}
+    >
       <UrlTabs
         defaultTab="launch"
         keepMounted={false}

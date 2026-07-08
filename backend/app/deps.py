@@ -32,7 +32,6 @@ def create_access_token(user: dict, remember_me: bool = True) -> str:
     expire_days = TOKEN_EXPIRE_DAYS if remember_me else 1
     payload = {
         "sub": str(user["id"]),
-        "username": user["username"],
         "role": user["role"],
         "full_name": user.get("full_name", ""),
         "email": user.get("email", ""),
