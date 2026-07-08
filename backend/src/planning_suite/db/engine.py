@@ -128,9 +128,11 @@ class Database:
             self._migrate_session_id_columns(conn)
             self._migrate_pipeline_run_log_lines(conn)
             self._migrate_users_is_active(conn)
+            self._migrate_users_remove_username(conn)
             self._migrate_npl_submissions(conn)
         self.create_default_users()
         self.ensure_product_user()
+
 
     def _insert_user_if_missing(
         self,
@@ -277,6 +279,90 @@ class Database:
                     "ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
                 )
             )
+
+    def _migrate_users_remove_username(self, conn) -> None:
+        """
+        Idempotent migration: remove the legacy `username` column from the
+        `users` table and enforce email as the sole unique identifier.
+
+        Safe to run on every startup — every step is guarded by
+        IF EXISTS / IF NOT EXISTS / DO NOTHING clauses.
+
+        Only runs against PostgreSQL (Supabase). SQLite is unaffected.
+        """
+        if self.backend != "postgresql":
+            return
+
+        # 1. Drop the unique constraint on username if it still exists.
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE table_name = 'users'
+                      AND constraint_name = 'users_username_key'
+                ) THEN
+                    ALTER TABLE users DROP CONSTRAINT users_username_key;
+                END IF;
+            END
+            $$;
+        """))
+
+        # 2. Drop the username column itself if it still exists.
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'username'
+                ) THEN
+                    ALTER TABLE users DROP COLUMN username;
+                END IF;
+            END
+            $$;
+        """))
+
+        # 3. Make email NOT NULL if it is currently nullable.
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users'
+                      AND column_name = 'email'
+                      AND is_nullable = 'YES'
+                ) THEN
+                    -- Fill nulls with a placeholder before enforcing NOT NULL
+                    UPDATE users SET email = 'unknown_' || id::text || '@placeholder.invalid'
+                    WHERE email IS NULL;
+                    ALTER TABLE users ALTER COLUMN email SET NOT NULL;
+                END IF;
+            END
+            $$;
+        """))
+
+        # 4. Add unique constraint on email if missing.
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints tc
+                    JOIN information_schema.constraint_column_usage ccu
+                      ON tc.constraint_name = ccu.constraint_name
+                    WHERE tc.table_name = 'users'
+                      AND tc.constraint_type = 'UNIQUE'
+                      AND ccu.column_name = 'email'
+                ) THEN
+                    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
+                END IF;
+            END
+            $$;
+        """))
+
+        # 5. Ensure last_login column exists.
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ"
+        ))
 
     @staticmethod
     def _resolve_session_id(explicit: str | None = None) -> str | None:
