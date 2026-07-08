@@ -801,23 +801,20 @@ def _overwrite_rows(sheet_id: str, sheet_name: str,
     data = ws.get_all_values()
     if len(data) <= 1:
         ws.clear()
-        ws.append_row(df_new.columns.tolist())
-        ws.append_rows(df_new.values.tolist())
+        ws.update("A1", [df_new.columns.tolist()] + df_new.values.tolist(), value_input_option="USER_ENTERED")
         return
     headers = data[0]
     df_old = pd.DataFrame(data[1:], columns=headers)
     missing = [k for k in key_cols if k not in df_old.columns]
     if missing:
         ws.clear()
-        ws.append_row(df_new.columns.tolist())
-        ws.append_rows(df_new.values.tolist())
+        ws.update("A1", [df_new.columns.tolist()] + df_new.values.tolist(), value_input_option="USER_ENTERED")
         return
     merged = df_old.merge(df_new[key_cols], on=key_cols, how="left", indicator=True)
     keep = merged[merged["_merge"] == "left_only"][headers]
     final_df = pd.concat([keep, df_new], ignore_index=True)
     ws.clear()
-    ws.append_row(headers)
-    ws.append_rows(final_df.values.tolist())
+    ws.update("A1", [headers] + final_df.values.tolist(), value_input_option="USER_ENTERED")
 
 
 def save_to_log(rows_df: pd.DataFrame):
