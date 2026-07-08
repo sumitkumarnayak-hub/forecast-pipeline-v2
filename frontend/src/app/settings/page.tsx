@@ -429,7 +429,13 @@ export default function SettingsPage() {
               onClick={addRecipient}
               disabled={addingEmail || !newEmail.email}
             >
-        <div className="card" style={{ padding: "1.5rem" }}>
+              {addingEmail ? "Adding…" : <><PlusCircle size={14} /> Add recipient</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="card" style={{ padding: "1.5rem" }}>
         <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>Notification Recipients</h4>
         {recipients.length === 0 ? (
           <p className="text-sm text-muted text-center" style={{ padding: "2rem" }}>No recipients configured.</p>
