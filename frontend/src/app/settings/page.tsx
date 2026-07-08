@@ -129,17 +129,7 @@ export default function SettingsPage() {
       setBoot(cached);
       if (cached.preferences) setPrefs(cached.preferences);
       setLoading(false);
-      if (!force) {
-        try {
-          const { data } = await api.get<Bootstrap>("/api/settings/bootstrap");
-          setBoot(data);
-          if (data.preferences) setPrefs(data.preferences);
-          writeSessionBootstrap(BOOTSTRAP_KEY, data);
-        } catch {
-          /* keep cached */
-        }
-        return;
-      }
+      return;
     }
     setLoading(true);
     setMsg({ text: "", type: "" });
@@ -160,8 +150,12 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!hydrated) return;
     setClientInfo(collectClientInfo());
-    void loadBootstrap();
-  }, [hydrated, loadBootstrap]);
+    
+    // Clear page local boot state and reload to avoid showing previous user's info
+    setBoot(null);
+    setPrefs({ email_notifications: true, auto_sync_masters: false, preview_rows: 100 });
+    void loadBootstrap(true);
+  }, [hydrated, user?.id, loadBootstrap]);
 
   const savePrefs = async () => {
     setSaving(true);
@@ -435,17 +429,9 @@ export default function SettingsPage() {
               onClick={addRecipient}
               disabled={addingEmail || !newEmail.email}
             >
-              {addingEmail ? "Adding…" : <><PlusCircle size={14} /> Add recipient</>}
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="card" style={{ padding: "1.5rem" }}>
+        <div className="card" style={{ padding: "1.5rem" }}>
         <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>Notification Recipients</h4>
-        {!admin ? (
-          <p className="text-sm text-muted">Only administrators can manage email recipients.</p>
-        ) : recipients.length === 0 ? (
+        {recipients.length === 0 ? (
           <p className="text-sm text-muted text-center" style={{ padding: "2rem" }}>No recipients configured.</p>
         ) : (
           <div className="table-wrap">
@@ -456,7 +442,7 @@ export default function SettingsPage() {
                   <th>Name</th>
                   <th>Category</th>
                   <th>Enabled</th>
-                  <th style={{ width: 100 }}>Actions</th>
+                  {admin && <th style={{ width: 100 }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -487,10 +473,12 @@ export default function SettingsPage() {
                         <td style={{ fontSize: "0.78rem" }}>{r.display_name || "—"}</td>
                         <td><span className="badge badge-blue">{categories[r.category] || r.category}</span></td>
                         <td>{r.enabled ? <span className="badge badge-green">Yes</span> : <span className="badge badge-gray">No</span>}</td>
-                        <td>
-                          <button className="btn btn-secondary btn-sm" onClick={() => startEdit(r)}><Pencil size={11} /></button>
-                          <button className="btn btn-danger btn-sm ml-1" onClick={() => deleteRecipient(r.id)}><Trash2 size={11} /></button>
-                        </td>
+                        {admin && (
+                          <td>
+                            <button className="btn btn-secondary btn-sm" onClick={() => startEdit(r)}><Pencil size={11} /></button>
+                            <button className="btn btn-danger btn-sm ml-1" onClick={() => deleteRecipient(r.id)}><Trash2 size={11} /></button>
+                          </td>
+                        )}
                       </>
                     )}
                   </tr>
@@ -501,7 +489,7 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {admin && emailLog.length > 0 && (
+      {emailLog.length > 0 && (
         <div className="card" style={{ padding: "1.5rem" }}>
           <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>Email Log (recent)</h4>
           <div className="table-wrap">

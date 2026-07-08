@@ -26,6 +26,11 @@ export function saveUser(user: User) {
 
 /** Call immediately after a successful login (before /me round-trip). */
 export function establishSession(user: User) {
+  if (typeof window !== "undefined") {
+    sessionStorage.removeItem("settings:bootstrap");
+    sessionStorage.removeItem("npl:wizard-context");
+    sessionStorage.removeItem("npl:product-ids");
+  }
   saveUser(user);
   sessionGeneration += 1;
 }
@@ -34,6 +39,11 @@ export function clearAuth() {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(USER_KEY);
   sessionStorage.removeItem(VERIFIED_AT_KEY);
+  sessionStorage.removeItem("settings:bootstrap");
+  sessionStorage.removeItem("npl:wizard-context");
+  sessionStorage.removeItem("npl:product-ids");
+  sessionStorage.removeItem("ps_user");
+  sessionStorage.removeItem("ps_user_verified_at");
   sessionGeneration += 1;
 }
 

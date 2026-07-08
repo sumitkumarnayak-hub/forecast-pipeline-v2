@@ -714,7 +714,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                     type="button"
                     className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
                     onClick={() => toggleCity(c)}
-                    disabled={readOnly || (isReplacement && selectedCities.length > 0 && !selectedCities.includes(c) && stage === "upload")}
+                    disabled={readOnly}
                   >
                     {c}
                   </button>
