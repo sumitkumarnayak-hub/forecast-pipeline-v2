@@ -1,3 +1,13 @@
+---
+title: Planning Suite API
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Forecast Pipeline V2
 
 A complete, optimized migration of the original Forecast Pipeline (Streamlit) to a decoupled Next.js + FastAPI architecture.
