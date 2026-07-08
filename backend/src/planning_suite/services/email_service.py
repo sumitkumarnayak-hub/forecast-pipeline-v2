@@ -169,7 +169,7 @@ def _get_nextjs_mail_url() -> str:
         origin = origin.strip().rstrip("/")
         if "localhost" in origin or "127.0.0.1" in origin:
             return f"{origin}/api/send-email"
-    return "http://localhost:3000/api/send-email"
+    return "https://forecast-pipeline-v2-frontend-nu.vercel.app/api/send-email"
 
 
 def send_to_addresses(
