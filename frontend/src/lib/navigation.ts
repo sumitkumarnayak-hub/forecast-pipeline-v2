@@ -128,6 +128,14 @@ export const SIDEBAR_NAV: NavEntry[] = [
   },
   {
     type: "link",
+    id: "hub-launch",
+    label: "Hub Launch",
+    href: "/hub-launch",
+    icon: Zap,
+    roles: ["admin", "planner", "product"],
+  },
+  {
+    type: "link",
     id: "final-plan",
     label: "Final Plan",
     href: "/final-plan",

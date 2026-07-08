@@ -134,7 +134,7 @@ export default function Sidebar({
 
   const initials =
     user?.full_name?.charAt(0)?.toUpperCase() ||
-    user?.username?.charAt(0)?.toUpperCase() ||
+    user?.email?.charAt(0)?.toUpperCase() ||
     "?";
 
   return (
@@ -163,7 +163,7 @@ export default function Sidebar({
               {initials}
             </div>
             <div className="sidebar-user-meta">
-              <span className="sidebar-user-name truncate">{user.full_name || user.username}</span>
+              <span className="sidebar-user-name truncate">{user.full_name || user.email}</span>
               <span className="sidebar-user-role">{ROLE_BADGE[effectiveRole] || effectiveRole}</span>
             </div>
           </div>

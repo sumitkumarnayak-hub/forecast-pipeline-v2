@@ -366,7 +366,7 @@ export default function DashboardPage() {
     >
       {hydrated && user && (
         <div className="welcome-strip">
-          Welcome back, <strong>{user.full_name || user.username}</strong>.
+          Welcome back, <strong>{user.full_name || user.email}</strong>.
           You are signed in as <strong>{roleLabel}</strong>.
         </div>
       )}

@@ -39,7 +39,7 @@ const BOOTSTRAP_KEY = "settings:bootstrap";
 type Pref = { email_notifications: boolean; auto_sync_masters: boolean; preview_rows: number };
 
 type Bootstrap = {
-  profile?: { id?: number; username?: string; full_name?: string; email?: string; role?: string };
+  profile?: { id?: number; full_name?: string; email?: string; role?: string };
   preferences?: Pref;
   env?: Record<string, unknown>;
   recipient_categories?: Record<string, string>;
@@ -268,7 +268,6 @@ export default function SettingsPage() {
       <h4 style={{ margin: "0 0 1rem", fontSize: "1.05rem", fontWeight: 700 }}>Your Profile</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
         {[
-          ["Username", profile?.username],
           ["Full Name", profile?.full_name],
           ["Email Address", profile?.email],
           ["Role", profile?.role?.toUpperCase()],
