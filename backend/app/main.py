@@ -145,6 +145,22 @@ async def _request_context(request: Request, call_next):
     return await request_context_middleware(request, call_next)
 
 
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Strip raw input data from validation errors so passwords or sensitive inputs are never exposed."""
+    details = []
+    for error in exc.errors():
+        err_dict = dict(error)
+        err_dict.pop("input", None)
+        details.append(err_dict)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": details}
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Return JSON errors with CORS headers (avoids browser 'CORS' masking of 500s)."""

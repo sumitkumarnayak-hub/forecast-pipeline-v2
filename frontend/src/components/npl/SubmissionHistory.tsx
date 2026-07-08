@@ -7,6 +7,7 @@ import {
   Clock3,
   FileText,
   History,
+  Loader2,
   RefreshCw,
   Search,
   XCircle,
@@ -29,6 +30,24 @@ type LogPayload = {
   view?: string;
 };
 
+
+type ApprovalAppendResult = {
+  rows_appended?: number;
+  rows_skipped?: number;
+  matched_rows?: number;
+  worksheet?: string;
+};
+
+type StatusPatchResponse = {
+  detail?: string;
+  append?: ApprovalAppendResult | null;
+};
+
+type ActionStep = {
+  id: string;
+  label: string;
+  state: "pending" | "active" | "done" | "failed";
+};
 const COL_LABELS: Record<string, string> = {
   Submission_ID: "Submission ID",
   Submission_Type: "Type",
@@ -133,6 +152,8 @@ export default function SubmissionHistory() {
   const [selectedId, setSelectedId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [msg, setMsg] = useState("");
+  const [actionSteps, setActionSteps] = useState<ActionStep[]>([]);
+  const [actingStatus, setActingStatus] = useState("");
   const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
   const [hubLoading, setHubLoading] = useState(false);
 
@@ -206,16 +227,58 @@ export default function SubmissionHistory() {
   );
 
   const patchStatus = async (status: string, reason = "") => {
-    if (!selectedId) return;
+    if (!selectedId || actingStatus) return;
+    const isApproval = status === "Approved";
+    setActingStatus(status);
+    setMsg("");
+    if (isApproval) {
+      setActionSteps([
+        { id: "status", label: "Approve submission", state: "done" },
+        { id: "append", label: "Append to New Product Launch Google Sheet", state: "active" },
+        { id: "refresh", label: "Refresh submission history", state: "pending" },
+      ]);
+    }
+
     try {
-      await api.patch(`/api/new-product-launch/submissions/${selectedId}/status`, { status, reason });
-      setMsg(`Submission ${selectedId} updated to ${status}.`);
+      const { data: result } = await api.patch<StatusPatchResponse>(
+        `/api/new-product-launch/submissions/${selectedId}/status`,
+        { status, reason },
+      );
+      if (isApproval) {
+        setActionSteps([
+          { id: "status", label: "Approve submission", state: "done" },
+          { id: "append", label: "Append to New Product Launch Google Sheet", state: "done" },
+          { id: "refresh", label: "Refresh submission history", state: "active" },
+        ]);
+      }
       setRejectReason("");
       cacheInvalidate(logCacheKey);
       await reload(true);
+
+      if (isApproval) {
+        const append = result.append;
+        setActionSteps([
+          { id: "status", label: "Approve submission", state: "done" },
+          { id: "append", label: "Append to New Product Launch Google Sheet", state: "done" },
+          { id: "refresh", label: "Refresh submission history", state: "done" },
+        ]);
+        const appended = append?.rows_appended ?? 0;
+        const skipped = append?.rows_skipped ?? 0;
+        setMsg(`Submission ${selectedId} approved. Appended ${appended} row${appended === 1 ? "" : "s"} to ${append?.worksheet || "City_Plan"}${skipped ? `, skipped ${skipped} existing` : ""}.`);
+      } else {
+        setMsg(`Submission ${selectedId} updated to ${status}.`);
+      }
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } } };
+      if (isApproval) {
+        setActionSteps(prev => prev.map(step => (step.state === "active" ? { ...step, state: "failed" } : step)));
+      }
       setMsg(err?.response?.data?.detail || "Action failed");
+    } finally {
+      setActingStatus("");
+      if (isApproval) {
+        window.setTimeout(() => setActionSteps([]), 3000);
+      }
     }
   };
 
@@ -292,6 +355,18 @@ export default function SubmissionHistory() {
         </div>
       )}
 
+      {actionSteps.length > 0 && (
+        <div className="alert alert-info text-sm mb-3 npl-history-alert">
+          <div className="npl-history-action-steps">
+            {actionSteps.map(step => (
+              <span key={step.id} className={`npl-history-action-step npl-history-action-step-${step.state}`}>
+                {step.state === "active" ? <Loader2 size={14} className="npl-history-spin" /> : <CheckCircle2 size={14} />}
+                {step.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {showInitialSkeleton ? (
         <StatGridSkeleton />
       ) : (
@@ -510,12 +585,12 @@ export default function SubmissionHistory() {
           )}
 
           <div className="npl-history-actions-buttons">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => patchStatus("Withdrawn")}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => patchStatus("Withdrawn")} disabled={!!actingStatus}>
               Withdraw
             </button>
             {canApprove && (
               <>
-                <button type="button" className="btn btn-success btn-sm" onClick={() => patchStatus("Approved")}>
+                <button type="button" className="btn btn-success btn-sm" onClick={() => patchStatus("Approved")} disabled={!!actingStatus}>
                   <CheckCircle2 size={14} />
                   Approve
                 </button>
@@ -530,12 +605,12 @@ export default function SubmissionHistory() {
                     type="button"
                     className="btn btn-danger btn-sm"
                     onClick={() => patchStatus("Rejected", rejectReason)}
-                    disabled={!rejectReason.trim()}
+                    disabled={!rejectReason.trim() || !!actingStatus}
                   >
                     Reject
                   </button>
                 </div>
-                <button type="button" className="btn btn-danger btn-sm btn-outline" onClick={() => patchStatus("Voided")}>
+                <button type="button" className="btn btn-danger btn-sm btn-outline" onClick={() => patchStatus("Voided")} disabled={!!actingStatus}>
                   Void
                 </button>
               </>

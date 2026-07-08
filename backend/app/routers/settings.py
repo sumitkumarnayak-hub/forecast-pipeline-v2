@@ -281,18 +281,72 @@ def list_users_admin(
     current_user: dict = Depends(require_admin),
     db: Database = Depends(get_db),
 ):
+    from sqlalchemy import text
     try:
-        return {"users": db.list_users_admin()}
+        users = db.list_users_admin()
+        with db.engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT email, category, enabled FROM email_notification_recipients")
+            ).fetchall()
+        
+        subs = {}
+        for r in rows:
+            email_key = str(r[0]).strip().lower()
+            if r[2]:  # enabled
+                if email_key not in subs:
+                    subs[email_key] = []
+                subs[email_key].append(r[1])
+        
+        for u in users:
+            email_key = str(u.get("email") or "").strip().lower()
+            u["notification_categories"] = subs.get(email_key, [])
+            
+        return {"users": users}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 class UserCreate(BaseModel):
-    username: str
     password: str
     full_name: Optional[str] = None
-    email: Optional[str] = None
+    email: str
     role: str = "planner"
+    notification_categories: list[str] = Field(default_factory=list)
+
+
+def sync_user_notification_categories(db: Database, email: str, display_name: str, categories: list[str], enabled: bool = True):
+    from sqlalchemy import text
+    email_clean = email.strip().lower()
+    with db.engine.begin() as conn:
+        if categories:
+            conn.execute(
+                text("DELETE FROM email_notification_recipients WHERE LOWER(email) = :email AND category NOT IN :categories"),
+                {"email": email_clean, "categories": tuple(categories)}
+            )
+        else:
+            conn.execute(
+                text("DELETE FROM email_notification_recipients WHERE LOWER(email) = :email"),
+                {"email": email_clean}
+            )
+        
+        for cat in categories:
+            count = conn.execute(
+                text("SELECT COUNT(*) FROM email_notification_recipients WHERE LOWER(email) = :email AND category = :category"),
+                {"email": email_clean, "category": cat}
+            ).scalar()
+            if count == 0:
+                conn.execute(
+                    text("""
+                        INSERT INTO email_notification_recipients (email, display_name, category, enabled)
+                        VALUES (:email, :display_name, :category, :enabled)
+                    """),
+                    {"email": email_clean, "display_name": display_name or email_clean, "category": cat, "enabled": enabled}
+                )
+            else:
+                conn.execute(
+                    text("UPDATE email_notification_recipients SET display_name = :display_name, enabled = :enabled WHERE LOWER(email) = :email AND category = :category"),
+                    {"email": email_clean, "display_name": display_name or email_clean, "category": cat, "enabled": enabled}
+                )
 
 
 @router.post("/users")
@@ -304,26 +358,32 @@ def create_user_admin(
 ):
     try:
         user = db.create_user(
-            username=body.username,
             password=body.password,
             full_name=body.full_name,
             email=body.email,
             role=body.role,
         )
         
-        # Dispatch welcome email as a background task if email is provided
+        sync_user_notification_categories(
+            db,
+            email=body.email,
+            display_name=body.full_name or body.email,
+            categories=body.notification_categories,
+            enabled=True
+        )
+        
         if body.email and str(body.email).strip():
             from planning_suite.services.email_service import send_welcome_email
             background_tasks.add_task(
                 send_welcome_email,
                 email=body.email.strip(),
-                username=body.username,
-                full_name=body.full_name or body.username,
+                username=body.email.strip(),
+                full_name=body.full_name or body.email,
                 role=body.role,
                 db=db,
             )
 
-        return {"detail": f"User {body.username} created", "user": user}
+        return {"detail": f"User {body.email} created", "user": user}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -335,6 +395,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    notification_categories: Optional[list[str]] = None
 
 
 @router.patch("/users/{user_id}")
@@ -345,10 +406,32 @@ def update_user_admin(
     db: Database = Depends(get_db),
 ):
     updates = body.model_dump(exclude_none=True)
-    if not updates:
-        return {"detail": "No changes"}
+    notification_cats = updates.pop("notification_categories", None)
     try:
+        user_before = db.get_user_by_id(user_id)
+        if not user_before:
+            raise HTTPException(status_code=404, detail="User not found")
+        
         user = db.update_user(user_id, **updates)
+        target_email = user.get("email")
+        if target_email:
+            old_email = user_before.get("email")
+            if old_email and old_email.strip().lower() != target_email.strip().lower():
+                from sqlalchemy import text
+                with db.engine.begin() as conn:
+                    conn.execute(
+                        text("UPDATE email_notification_recipients SET email = :new_email WHERE LOWER(email) = :old_email"),
+                        {"new_email": target_email.strip().lower(), "old_email": old_email.strip().lower()}
+                    )
+            
+            if notification_cats is not None:
+                sync_user_notification_categories(
+                    db,
+                    email=target_email,
+                    display_name=user.get("full_name") or target_email,
+                    categories=notification_cats,
+                    enabled=updates.get("is_active", True)
+                )
         return {"detail": "User updated", "user": user}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

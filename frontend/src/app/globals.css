@@ -1732,6 +1732,31 @@ select.input:focus, .input:focus {
   align-items: center;
   gap: 0.5rem;
 }
+.npl-history-action-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.npl-history-action-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.npl-history-action-step-active {
+  color: var(--text-primary);
+}
+
+.npl-history-action-step-done {
+  color: var(--green);
+}
+
+.npl-history-action-step-failed {
+  color: var(--red);
+}
 
 .npl-history-stats {
   margin: 0;

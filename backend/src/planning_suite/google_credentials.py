@@ -87,9 +87,19 @@ def get_google_credentials_path() -> str:
         return _cached_path
 
     configured = os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
-    if configured and Path(configured).is_file():
-        _cached_path = configured
-        return configured
+    if configured:
+        path_obj = Path(configured)
+        if path_obj.is_file():
+            try:
+                content = path_obj.read_text(encoding="utf-8")
+                data = json.loads(content)
+                if isinstance(data, dict) and data.get("type") == "service_account" and "token_uri" in data and "private_key" in data:
+                    _cached_path = configured
+                    return configured
+                else:
+                    logger.warning("GOOGLE_CREDENTIALS_PATH file is invalid or missing key fields like token_uri. Falling back.")
+            except Exception as exc:
+                logger.warning("GOOGLE_CREDENTIALS_PATH file exists but is invalid: %s. Falling back.", exc)
 
     raw_json = _valid_json_env(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
     if raw_json:

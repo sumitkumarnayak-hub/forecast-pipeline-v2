@@ -136,7 +136,6 @@ class Database:
         self,
         conn,
         *,
-        username: str,
         password: str,
         full_name: str,
         email: str,
@@ -146,8 +145,8 @@ class Database:
         from sqlalchemy.exc import IntegrityError
 
         count = conn.execute(
-            text("SELECT COUNT(*) FROM users WHERE username = :username"),
-            {"username": username},
+            text("SELECT COUNT(*) FROM users WHERE email = :email"),
+            {"email": email},
         ).scalar()
         if count:
             return
@@ -157,11 +156,10 @@ class Database:
         try:
             conn.execute(
                 text("""
-                    INSERT INTO users (username, password_hash, full_name, email, role)
-                    VALUES (:username, :password_hash, :full_name, :email, :role)
+                    INSERT INTO users (password_hash, full_name, email, role)
+                    VALUES (:password_hash, :full_name, :email, :role)
                 """),
                 {
-                    "username": username,
                     "password_hash": password_hash,
                     "full_name": full_name,
                     "email": email,
@@ -176,7 +174,6 @@ class Database:
         with self.engine.begin() as conn:
             self._insert_user_if_missing(
                 conn,
-                username="product",
                 password="product123",
                 full_name="Product User",
                 email="product@company.com",
@@ -293,22 +290,14 @@ class Database:
             return None
 
     def create_default_users(self):
-        """Create default admin user and update existing admin if necessary."""
+        """Create default admin user if missing."""
         import bcrypt
         from sqlalchemy.exc import IntegrityError
 
         with self.engine.begin() as conn:
-            # Idempotently migrate old 'admin' username to 'sumit' if it exists
-            try:
-                conn.execute(
-                    text("UPDATE users SET username = 'sumit', email = 'sumitkumar.nayak@licious.com', full_name = 'Sumit Nayak' WHERE username = 'admin'")
-                )
-            except Exception:
-                pass
-
-            # Check if sumit user exists
+            # Check if sumitkumar.nayak@licious.com user exists
             count = conn.execute(
-                text("SELECT COUNT(*) FROM users WHERE username = 'sumit'"),
+                text("SELECT COUNT(*) FROM users WHERE email = 'sumitkumar.nayak@licious.com'"),
             ).scalar()
 
             if count == 0:
@@ -318,18 +307,18 @@ class Database:
                 try:
                     conn.execute(
                         text("""
-                            INSERT INTO users (username, password_hash, full_name, email, role)
-                            VALUES ('sumit', :password_hash, 'Sumit Nayak', 'sumitkumar.nayak@licious.com', 'admin')
+                            INSERT INTO users (password_hash, full_name, email, role)
+                            VALUES (:password_hash, 'Sumit Nayak', 'sumitkumar.nayak@licious.com', 'admin')
                         """),
                         {"password_hash": password_hash},
                     )
                 except IntegrityError:
                     pass
             else:
-                # Ensure correct email and role
+                # Ensure correct role
                 try:
                     conn.execute(
-                        text("UPDATE users SET email = 'sumitkumar.nayak@licious.com', role = 'admin' WHERE username = 'sumit'")
+                        text("UPDATE users SET role = 'admin' WHERE email = 'sumitkumar.nayak@licious.com'")
                     )
                 except Exception:
                     pass
@@ -349,22 +338,21 @@ class Database:
                 return None
             return {
                 "id": user.id,
-                "username": user.username,
                 "full_name": user.full_name,
                 "email": user.email,
                 "role": user.role,
             }
         return None
 
-    def get_user_by_username(self, username: str) -> dict | None:
-        """Fetch active user profile by username (for session restore)."""
-        if not username:
+    def get_user_by_email(self, email: str) -> dict | None:
+        """Fetch active user profile by email (for session restore)."""
+        if not email:
             return None
         from sqlalchemy.orm import Session
         from planning_suite.db.models import User
 
         with Session(self.engine) as session:
-            user = session.query(User).filter_by(username=username).first()
+            user = session.query(User).filter(User.email.ilike(email.strip())).first()
 
         if not user:
             return None
@@ -372,7 +360,6 @@ class Database:
             return None
         return {
             "id": user.id,
-            "username": user.username,
             "full_name": user.full_name,
             "email": user.email,
             "role": user.role,
@@ -399,7 +386,6 @@ class Database:
         last_login = getattr(user, "last_login", None)
         return {
             "id": user.id,
-            "username": user.username,
             "full_name": user.full_name,
             "email": user.email,
             "role": user.role,
@@ -418,10 +404,9 @@ class Database:
 
     def create_user(
         self,
-        username: str,
         password: str,
         full_name: str | None,
-        email: str | None,
+        email: str,
         role: str,
     ) -> dict:
         import bcrypt
@@ -432,9 +417,9 @@ class Database:
 
         if role not in USER_ROLES:
             raise ValueError(f"Invalid role: {role}")
-        username = username.strip()
-        if not username or not password:
-            raise ValueError("Username and password are required")
+        email = email.strip().lower()
+        if not email or not password:
+            raise ValueError("Email and password are required")
 
         password_hash = bcrypt.hashpw(
             password.encode("utf-8"), bcrypt.gensalt()
@@ -442,10 +427,9 @@ class Database:
 
         with Session(self.engine) as session:
             user = User(
-                username=username,
                 password_hash=password_hash,
                 full_name=(full_name or "").strip() or None,
-                email=(email or "").strip() or None,
+                email=email,
                 role=role,
                 is_active=True,
             )
@@ -455,7 +439,7 @@ class Database:
                 session.refresh(user)
             except IntegrityError as exc:
                 session.rollback()
-                raise ValueError("Username already exists") from exc
+                raise ValueError("Email already exists") from exc
         return self._user_admin_row(user)
 
     def update_user(
@@ -478,7 +462,7 @@ class Database:
             if full_name is not None:
                 user.full_name = full_name.strip() or None
             if email is not None:
-                user.email = email.strip() or None
+                user.email = email.strip().lower() or None
             if role is not None:
                 if role not in USER_ROLES:
                     raise ValueError(f"Invalid role: {role}")
@@ -510,10 +494,9 @@ class Database:
     def _row_to_user(row) -> dict:
         return {
             "id": row.id if hasattr(row, 'id') else row[0],
-            "username": row.username if hasattr(row, 'username') else row[1],
-            "full_name": row.full_name if hasattr(row, 'full_name') else row[2],
-            "email": row.email if hasattr(row, 'email') else row[3],
-            "role": row.role if hasattr(row, 'role') else row[4],
+            "full_name": row.full_name if hasattr(row, 'full_name') else row[1],
+            "email": row.email if hasattr(row, 'email') else row[2],
+            "role": row.role if hasattr(row, 'role') else row[3],
         }
 
     def create_auth_session(
@@ -700,7 +683,7 @@ class Database:
         with self.engine.connect() as conn:
             return pd.read_sql_query(
                 text("""
-                    SELECT br.*, u.username, u.full_name
+                    SELECT br.*, u.email, u.full_name
                     FROM baseline_runs br
                     LEFT JOIN users u ON br.user_id = u.id
                     ORDER BY br.run_date DESC
@@ -900,7 +883,7 @@ class Database:
         with self.engine.connect() as conn:
             return pd.read_sql_query(
                 text("""
-                    SELECT fp.*, u.username, u.full_name
+                    SELECT fp.*, u.email, u.full_name
                     FROM final_plan_runs fp
                     LEFT JOIN users u ON fp.user_id = u.id
                     ORDER BY fp.run_date DESC
@@ -994,7 +977,7 @@ class Database:
                 text("""
                     SELECT pr.run_id, pr.user_id, pr.status, pr.current_step,
                            pr.started_at, pr.completed_at, pr.summary_stats,
-                           pr.session_id, u.username, u.full_name
+                           pr.session_id, u.email, u.full_name
                     FROM pipeline_runs pr
                     LEFT JOIN users u ON u.id = pr.user_id
                     ORDER BY pr.started_at DESC
@@ -1018,7 +1001,7 @@ class Database:
             "completed_at": row[5],
             "summary_stats": summary,
             "session_id": row[7],
-            "username": row[8],
+            "email": row[8],
             "full_name": row[9],
         }
 
@@ -1054,7 +1037,7 @@ class Database:
             return pd.read_sql_query(
                 text("""
                     SELECT pr.run_id, pr.status, pr.current_step, pr.started_at,
-                           pr.completed_at, pr.summary_stats, pr.session_id, u.username
+                           pr.completed_at, pr.summary_stats, pr.session_id, u.email
                     FROM pipeline_runs pr
                     LEFT JOIN users u ON u.id = pr.user_id
                     ORDER BY pr.started_at DESC
@@ -1210,7 +1193,7 @@ class Database:
             "status": row[2],
             "started_at": row[4],
             "completed_at": row[5],
-            "username": row[8],
+            "email": row[8],
         }
 
     def get_latest_autopilot_run(self) -> dict | None:
@@ -1220,7 +1203,7 @@ class Database:
                 text(f"""
                     SELECT pr.run_id, pr.user_id, pr.status, pr.current_step,
                            pr.started_at, pr.completed_at, pr.summary_stats,
-                           pr.session_id, u.username
+                           pr.session_id, u.email
                     FROM pipeline_runs pr
                     LEFT JOIN users u ON u.id = pr.user_id
                     WHERE {filt}
@@ -1238,7 +1221,7 @@ class Database:
                 text("""
                     SELECT pr.run_id, pr.user_id, pr.status, pr.current_step,
                            pr.started_at, pr.completed_at, pr.summary_stats,
-                           pr.session_id, u.username
+                           pr.session_id, u.email
                     FROM pipeline_runs pr
                     LEFT JOIN users u ON u.id = pr.user_id
                     WHERE pr.run_id = :run_id
@@ -1259,7 +1242,7 @@ class Database:
             df = pd.read_sql_query(
                 text(f"""
                     SELECT pr.run_id, pr.status, pr.started_at, pr.completed_at,
-                           pr.summary_stats, u.username
+                           pr.summary_stats, u.email
                     FROM pipeline_runs pr
                     LEFT JOIN users u ON u.id = pr.user_id
                     WHERE {filt}
@@ -1323,7 +1306,7 @@ class Database:
                     MasterSyncLog.status,
                     MasterSyncLog.error_message,
                     MasterSyncLog.session_id,
-                    User.username
+                    User.email
                 )
                 .outerjoin(User, MasterSyncLog.user_id == User.id)
             )
@@ -1343,7 +1326,7 @@ class Database:
                     "status": r[5],
                     "error_message": r[6],
                     "session_id": r[7],
-                    "username": r[8]
+                    "email": r[8]
                 })
             return pd.DataFrame(data)
 
@@ -1752,10 +1735,9 @@ _SQLITE_SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         full_name TEXT,
-        email TEXT,
+        email TEXT UNIQUE NOT NULL,
         role TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_login TIMESTAMP
@@ -1954,10 +1936,9 @@ _POSTGRES_SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS users (
         id BIGSERIAL PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         full_name TEXT,
-        email TEXT,
+        email TEXT UNIQUE NOT NULL,
         role TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         last_login TIMESTAMPTZ

@@ -41,10 +41,11 @@ def test_validate_npl_upload_rejects_empty():
 
 
 def test_npl_categories_endpoint(client, auth_headers, monkeypatch):
-    import planning_suite.features.new_product_launch as npl
+    from planning_suite.services.api_cache import CacheNS, cache_invalidate
+    import planning_suite.services.npl_wizard as wiz
 
-    fake = pd.DataFrame({"Sub-category": ["A", "B", "A"]})
-    monkeypatch.setattr(npl, "load_product_master", lambda: fake)
+    cache_invalidate(CacheNS.NPL_WIZARD, "categories")
+    monkeypatch.setattr(wiz, "list_categories", lambda: ["A", "B"])
     resp = client.get("/api/new-product-launch/masters/categories", headers=auth_headers)
     assert resp.status_code == 200
     cats = resp.json()["categories"]
