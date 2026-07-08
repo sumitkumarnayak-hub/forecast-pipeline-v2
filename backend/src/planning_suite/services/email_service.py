@@ -154,6 +154,24 @@ def _log_email_attempt(
     )
 
 
+def _get_nextjs_mail_url() -> str:
+    import os
+    explicit = os.getenv("NEXTJS_EMAIL_URL", "").strip()
+    if explicit:
+        return explicit
+    origins = os.getenv("CORS_ORIGINS", "").strip().split(",")
+    for origin in origins:
+        origin = origin.strip().rstrip("/")
+        if origin:
+            if "vercel.app" in origin:
+                return f"{origin}/api/send-email"
+    for origin in origins:
+        origin = origin.strip().rstrip("/")
+        if "localhost" in origin or "127.0.0.1" in origin:
+            return f"{origin}/api/send-email"
+    return "http://localhost:3000/api/send-email"
+
+
 def send_to_addresses(
     *,
     recipients: list[str],
@@ -215,10 +233,59 @@ def send_to_addresses(
             "error": "Email not configured.",
         }
 
+    # Try sending via Next.js server actions endpoint first to bypass Hugging Face firewall
+    import os
+    import requests
+    url = _get_nextjs_mail_url()
+    secret = os.getenv("AUTH_SECRET_KEY", "dev-insecure-auth-key-change-before-production").strip()
+    nextjs_success = False
+    nextjs_error = ""
+
+    try:
+        resp = requests.post(
+            url,
+            json={
+                "to": clean,
+                "subject": subject,
+                "html": html_body,
+                "secret": secret
+            },
+            timeout=12.0
+        )
+        if resp.status_code == 200:
+            nextjs_success = True
+        else:
+            nextjs_error = f"Next.js returned status {resp.status_code}: {resp.text}"
+    except Exception as e:
+        nextjs_error = str(e)
+
+    if nextjs_success:
+        try:
+            log_id = _log_email_attempt(
+                db,
+                email_type=email_type,
+                subject=subject,
+                recipients=clean,
+                status="sent",
+                body_preview=plain_preview,
+                triggered_by_user_id=triggered_by_user_id,
+                metadata=metadata,
+            )
+            return {
+                "ok": True,
+                "status": "sent",
+                "recipients": clean,
+                "log_id": log_id,
+                "error": "",
+            }
+        except Exception:
+            pass
+
+    # Fallback to direct SMTP (Redmail) if Next.js server is not reachable
     cfg = get_smtp_config()
     import socket
     old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(4.0)
+    socket.setdefaulttimeout(15.0)
     try:
         sender = _get_sender()
         sender.send(
@@ -228,14 +295,14 @@ def send_to_addresses(
             html=html_body,
         )
     except Exception as exc:
-        socket.setdefaulttimeout(old_timeout)
+        full_error = f"Next.js API failed ({nextjs_error}). SMTP failed ({exc})."
         log_id = _log_email_attempt(
             db,
             email_type=email_type,
             subject=subject,
             recipients=clean,
             status="failed",
-            error_message=str(exc),
+            error_message=full_error,
             body_preview=plain_preview,
             triggered_by_user_id=triggered_by_user_id,
             metadata=metadata,
@@ -245,7 +312,7 @@ def send_to_addresses(
             "status": "failed",
             "recipients": clean,
             "log_id": log_id,
-            "error": str(exc),
+            "error": full_error,
         }
     finally:
         socket.setdefaulttimeout(old_timeout)
