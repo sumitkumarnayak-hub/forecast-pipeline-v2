@@ -335,14 +335,14 @@ class Database:
                     pass
 
 
-    def authenticate_user(self, username, password):
-        """Authenticate user and return user data."""
+    def authenticate_user(self, email, password):
+        """Authenticate user by email and return user data."""
         import bcrypt
         from sqlalchemy.orm import Session
         from planning_suite.db.models import User
 
         with Session(self.engine) as session:
-            user = session.query(User).filter_by(username=username).first()
+            user = session.query(User).filter(User.email.ilike(email.strip())).first()
 
         if user and bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
             if getattr(user, "is_active", True) is False:

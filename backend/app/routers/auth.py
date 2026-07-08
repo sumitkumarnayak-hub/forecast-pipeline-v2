@@ -10,14 +10,14 @@ from planning_suite.db.engine import Database
 router = APIRouter()
 
 
-def _client_key(request: Request, username: str) -> str:
+def _client_key(request: Request, email: str) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
     ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
-    return f"{ip}:{username.strip().lower()}"
+    return f"{ip}:{email.strip().lower()}"
 
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
     remember_me: bool = True
 
@@ -28,14 +28,14 @@ class LoginResponse(BaseModel):
 
 @router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest, request: Request, response: Response, db: Database = Depends(get_db)):
-    key = _client_key(request, body.username)
+    key = _client_key(request, body.email)
     if not check_login_allowed(key):
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts. Please wait a few minutes and try again.",
         )
 
-    user = db.authenticate_user(body.username.strip(), body.password)
+    user = db.authenticate_user(body.email.strip(), body.password)
     if not user:
         record_login_failure(key)
         raise HTTPException(status_code=401, detail="Invalid username or password")

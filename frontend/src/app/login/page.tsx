@@ -10,7 +10,7 @@ import { homePathForRole } from "@/lib/navigation";
 export default function LoginPage() {
   const router = useRouter();
   const { establishSession, user, hydrated } = useAuth();
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -25,15 +25,15 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password) {
-      setError("Please enter both username and password.");
+    if (!email.trim() || !password) {
+      setError("Please enter both email and password.");
       return;
     }
     setLoading(true);
     setError("");
     try {
       const { data } = await api.post("/api/auth/login", {
-        username: username.trim(),
+        email: email.trim(),
         password,
         remember_me: rememberMe,
       });
@@ -74,16 +74,16 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label" htmlFor="username">Username</label>
+            <label className="form-label" htmlFor="email">Email</label>
             <input
-              id="username"
+              id="email"
               className="form-input"
-              type="text"
-              placeholder="Enter your username"
-              value={username}
-              onChange={e => setUsername(e.target.value)}
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
               autoFocus
-              autoComplete="username"
+              autoComplete="email"
               disabled={loading}
             />
           </div>
@@ -122,9 +122,7 @@ export default function LoginPage() {
 
         <div style={{ marginTop: "1.25rem", padding: "0.75rem 1rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: "var(--radius-md)", fontSize: "0.75rem", color: "#fcd34d" }}>
           <div style={{ fontWeight: 600, marginBottom: "0.2rem" }}>Development mode</div>
-          Default logins: <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px", borderRadius: 3 }}>admin / admin123</code>{" "}
-          · <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px", borderRadius: 3 }}>planner / planner123</code>{" "}
-          · <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px", borderRadius: 3 }}>viewer / viewer123</code>
+          Default admin: <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px", borderRadius: 3 }}>sumitkumar.nayak@licious.com / admin123</code>
         </div>
       </div>
     </div>

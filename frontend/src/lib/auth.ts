@@ -98,11 +98,9 @@ export function isAuthenticated(): boolean {
 }
 
 export async function logout(): Promise<void> {
-  try {
-    await api.post("/api/auth/logout");
-  } catch {
-    /* cookie may already be cleared */
-  }
+  // Fire and forget logout api call in the background without awaiting it
+  void api.post("/api/auth/logout").catch(() => {});
+  // Instantly clear client auth session state
   clearAuth();
 }
 
