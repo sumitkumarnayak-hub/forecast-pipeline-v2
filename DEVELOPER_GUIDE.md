@@ -60,6 +60,7 @@ To maintain sub-second page loads, the system avoids querying Google Sheets on e
 * **Caching Reads**: Worksheets are stored locally as `.parquet` files under the backend's outputs directory. The backend reads from these local files, returning data in **less than 100ms**.
 * **Automatic Expiry (TTL)**: Cache files expire after a set time limit (e.g. 30 minutes for master data, 5 minutes for parameters). When expired, the next read triggers a fresh fetch from Google Sheets and rebuilds the Parquet file.
 * **Asynchronous Cache Warmups**: When write actions are committed (e.g. confirming a Hub Launch sync to the `P-H Master` sheet), the local cache immediately becomes stale. The backend appends the rows to Google Sheets, resolves the user request instantly, and triggers a **detached background thread** to load the fresh sheet and rebuild the Parquet cache file in the background.
+* **Startup Cache Pre-Warming**: On server boot, a background thread fetches and creates the Parquet cache files for all critical worksheets (`hub_mapping`, `product_hub_master`, `ff_input`) immediately. This prevents a slow first fetch from exceeding server gateway timeouts.
 
 ---
 
@@ -253,7 +254,7 @@ Planners can execute baseline steps individually for granular control:
 * **Inputs**: Target hub codes and source reference codes configured in the **FF Input** tab of the Hub Launch spreadsheet.
 * **Outputs**: Cloned forecast parameters appended to the `P-H Master` sheet.
 * **State Machine & Branching Logic**:
-  * **Start**: User clicks **Fetch & Preview Sync Mappings**.
+  * **Start**: Renders last cached updated timestamp immediately on load. User clicks **Fetch & Preview Sync Mappings** (Cached read) or **Fetch Live Sheets** (Direct Google Sheets API read).
   * **Validation Path**:
     * **Valid**: All new hubs exist in the `Hub Mapping` configurations.
     * **Warnings**: Renders warning boxes (e.g. *Hub Mapping missing row for new hub 'Test'*).
