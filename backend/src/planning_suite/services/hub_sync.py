@@ -2,13 +2,13 @@
 New Hub Launch Service
 
 Clones active product configurations from a source reference hub to a newly launched
-hub inside the P-H Master sheet.
+hub inside the P-H Master sheet, with support for batch preview calculations from FF Input.
 """
 from __future__ import annotations
 import pandas as pd
 from typing import Dict, Any, List, Tuple
 from planning_suite.services.google_sheets import GoogleSheetsManager
-from planning_suite.core.dataframe import clean_sheet_df
+from planning_suite.core.dataframe import clean_sheet_df, df_to_records, sanitize_for_json
 
 P_MASTER_READ_RANGE = "A:K"
 PH_MASTER_READ_RANGE = "A:AX"
@@ -49,11 +49,158 @@ def build_column_mapping(ph_headers: List[str], h_headers: List[str]) -> Dict[st
             mapping[th] = match
     return mapping
 
+def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
+    """
+    Reads 'FF Input' tab from NEW_HUB_LAUNCH_SHEET_KEY and matches against P-H Master & Hub Mapping.
+    Returns preview summary and rows to be added.
+    """
+    from planning_suite.config import DEMAND_PLANNING_SHEET_ID, NEW_HUB_LAUNCH_SHEET_KEY
+
+    # 1. Fetch data from Google Sheets in parallel/batch
+    raw_dpm = sheets.batch_read_worksheets(
+        DEMAND_PLANNING_SHEET_ID,
+        [
+            ("Hub Mapping", HUB_MASTER_READ_RANGE),
+            ("P-H Master", PH_MASTER_READ_RANGE),
+        ],
+    )
+    
+    raw_launch = sheets.batch_read_worksheets(
+        NEW_HUB_LAUNCH_SHEET_KEY,
+        [
+            ("FF Input", "A:H"),
+        ]
+    )
+
+    def _to_df(data_list) -> pd.DataFrame:
+        if not data_list or len(data_list) < 2:
+            return pd.DataFrame()
+        return clean_sheet_df(pd.DataFrame(data_list[1:], columns=data_list[0]))
+
+    hub_df = _to_df(raw_dpm.get("Hub Mapping"))
+    ph_df = _to_df(raw_dpm.get("P-H Master"))
+    ff_df = _to_df(raw_launch.get("FF Input"))
+
+    if ff_df.empty:
+        raise ValueError("FF Input sheet is empty or could not be read.")
+    if hub_df.empty or ph_df.empty:
+        raise ValueError("Could not read Hub Mapping or P-H Master sheets data.")
+
+    ph_headers = raw_dpm["P-H Master"][0]
+    hub_headers = raw_dpm["Hub Mapping"][0]
+    ff_headers = raw_launch["FF Input"][0]
+
+    # Normalize column names
+    ph_cols = _col_map(ph_df.columns)
+    hub_col = _actual(ph_cols, "hub_name")
+    prod_id_col = _actual(ph_cols, "product_id")
+
+    ff_cols = _col_map(ff_df.columns)
+    ff_hub_col = _actual(ff_cols, "hub_name")
+    ff_source_col = _actual(ff_cols, "source_hub")
+
+    # Extract new hub mapping pairs
+    mappings: List[Tuple[str, str]] = []
+    seen_pairs = set()
+    for _, row in ff_df.iterrows():
+        nh = str(row.get(ff_hub_col, "")).strip()
+        sh = str(row.get(ff_source_col, "")).strip()
+        if not nh or not sh:
+            continue
+        pair = (nh, sh)
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            mappings.append(pair)
+
+    if not mappings:
+        raise ValueError("No valid Hub_name/Source_Hub pairs found in FF Input sheet tab.")
+
+    # Validate Hub Mapping rows
+    unique_new_hubs = sorted({p[0] for p in mappings})
+    validation_errors = validate_new_hub_mapping_rows(hub_df, unique_new_hubs)
+
+    h_cols = _col_map(hub_df.columns)
+    h_hub_col = _actual(h_cols, "hub_name")
+    h_col_map = build_column_mapping(ph_headers, hub_headers)
+
+    hub_lookup = {}
+    for _, r in hub_df.iterrows():
+        name = str(r.get(h_hub_col, "")).strip()
+        if name:
+            hub_lookup[name] = r
+
+    # Build existing keys to prevent duplicates
+    existing_keys = {
+        (str(r.get(prod_id_col, "")).strip(), str(r.get(hub_col, "")).strip().lower())
+        for _, r in ph_df.iterrows()
+    }
+
+    preview_rows = []
+    mapping_report = []
+    total_inserted = 0
+    total_skipped = 0
+
+    for new_hub, source_hub in mappings:
+        source_rows = [r for _, r in ph_df.iterrows() if str(r.get(hub_col, "")).strip().lower() == source_hub.lower()]
+        if not source_rows:
+            mapping_report.append({
+                "new_hub": new_hub,
+                "source_hub": source_hub,
+                "status": "error",
+                "message": f"Source hub '{source_hub}' has no rows in P-H Master",
+            })
+            continue
+
+        new_hub_data = hub_lookup.get(new_hub)
+        inserted_for_pair = 0
+        skipped_for_pair = 0
+
+        for src in source_rows:
+            cloned = {h: src.get(h, "") for h in ph_headers}
+            
+            # Map Hub Mapping columns (city, tier, region, etc.)
+            if new_hub_data is not None and h_col_map:
+                for ph_col, h_col in h_col_map.items():
+                    cloned[ph_col] = str(new_hub_data.get(h_col, "")).strip()
+
+            # Set new Hub ID & Name identity
+            cloned[hub_col] = new_hub
+            pid = str(cloned.get(prod_id_col, "")).strip()
+            
+            if (pid, new_hub.lower()) in existing_keys:
+                skipped_for_pair += 1
+                total_skipped += 1
+                continue
+
+            existing_keys.add((pid, new_hub.lower()))
+            inserted_for_pair += 1
+            total_inserted += 1
+            preview_rows.append(cloned)
+
+        mapping_report.append({
+            "new_hub": new_hub,
+            "source_hub": source_hub,
+            "status": "ok",
+            "rows_inserted": inserted_for_pair,
+            "duplicates_skipped": skipped_for_pair,
+        })
+
+    return sanitize_for_json({
+        "success": True,
+        "validation_errors": validation_errors,
+        "rows_to_add": preview_rows,
+        "ph_headers": ph_headers,
+        "duplicates_skipped": total_skipped,
+        "mapping_report": mapping_report,
+        "total_to_insert": total_inserted,
+    })
+
 def clone_from_source_hub_mapping(
     sheets: GoogleSheetsManager,
     new_hub: str,
     source_hub: str,
 ) -> Dict[str, Any]:
+    """Legacy individual new hub launcher sync logic."""
     from planning_suite.config import DEMAND_PLANNING_SHEET_ID
     
     # 1. Fetch P-H Master and Hub Mapping worksheets

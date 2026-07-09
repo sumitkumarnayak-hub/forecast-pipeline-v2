@@ -276,38 +276,63 @@ def npl_auto_sync(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-class SyncNewHubBody(BaseModel):
-    new_hub: str
-    source_hub: str
+class ConfirmHubSyncBody(BaseModel):
+    rows_to_add: List[dict]
+    ph_headers: List[str]
 
 
-@router.post("/sync-new-hub")
-def npl_sync_new_hub(
-    body: SyncNewHubBody,
+@router.get("/sync-new-hub/preview")
+def npl_preview_new_hub_sync(
+    current_user: dict = Depends(require_write),
+):
+    try:
+        from planning_suite.services.sheets_session import get_sheets_manager
+        from planning_suite.services.hub_sync import build_new_hub_sync_preview
+
+        gsm = get_sheets_manager()
+        return build_new_hub_sync_preview(gsm)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/sync-new-hub/confirm")
+def npl_confirm_new_hub_sync(
+    body: ConfirmHubSyncBody,
     current_user: dict = Depends(require_write),
     db: Database = Depends(get_db),
 ):
     try:
+        from planning_suite.config import DPM_SHEET_KEY
         from planning_suite.services.sheets_session import get_sheets_manager
-        from planning_suite.services.hub_sync import clone_from_source_hub_mapping
 
         gsm = get_sheets_manager()
-        res = clone_from_source_hub_mapping(gsm, new_hub=body.new_hub, source_hub=body.source_hub)
+        ss = gsm.gc.open_by_key(DPM_SHEET_KEY)
+        ph_ws = ss.worksheet("P-H Master")
+        values = [[r.get(h, "") for h in body.ph_headers] for r in body.rows_to_add]
+        
+        if values:
+            gsm.append_rows_to_worksheet(
+                "demand_planning_masters",
+                "product_hub_master",
+                values,
+                worksheet=ph_ws,
+                value_input_option="RAW",
+            )
+            
         user_id = int(current_user["sub"])
         db.log_master_sync(
             {
                 "master_type": "new_hub_sync",
                 "user_id": user_id,
-                "records_synced": res.get("rows_inserted", 0),
+                "records_synced": len(body.rows_to_add),
                 "status": "success",
-                "error_message": f"New hub sync: {body.source_hub} -> {body.new_hub}",
+                "error_message": f"New Hub Sync: Appended {len(body.rows_to_add)} rows from FF Input sheet configuration.",
             }
         )
         return {
             "success": True,
-            "rows_inserted": res.get("rows_inserted", 0),
-            "duplicates_skipped": res.get("duplicates_skipped", 0),
-            "detail": f"Successfully cloned {res.get('rows_inserted', 0)} rows from '{body.source_hub}' to '{body.new_hub}' in P-H Master.",
+            "rows_inserted": len(body.rows_to_add),
+            "detail": f"Successfully synced {len(body.rows_to_add)} new hub rows to P-H Master.",
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
