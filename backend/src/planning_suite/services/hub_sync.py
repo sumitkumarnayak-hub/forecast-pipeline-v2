@@ -54,9 +54,9 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
     Reads 'FF Input' tab from NEW_HUB_LAUNCH_SHEET_KEY and matches against P-H Master & Hub Mapping.
     Returns preview summary and rows to be added.
     """
-    # 1. Read worksheets using cached TTL methods for maximum performance
-    hub_df = sheets.read_worksheet_uncached("demand_planning_masters", "Hub Mapping", HUB_MASTER_READ_RANGE, use_cache=True)
-    ph_df = sheets.read_worksheet_uncached("demand_planning_masters", "P-H Master", PH_MASTER_READ_RANGE, use_cache=True)
+    # 1. Read worksheets using cached TTL methods matching SHEETS_CONFIG keys for global Parquet caching
+    hub_df = sheets.read_worksheet_uncached("demand_planning_masters", "hub_mapping", HUB_MASTER_READ_RANGE, use_cache=True)
+    ph_df = sheets.read_worksheet_uncached("demand_planning_masters", "product_hub_master", PH_MASTER_READ_RANGE, use_cache=True)
     ff_df = sheets.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=True)
 
     if ff_df is None or ff_df.empty:
