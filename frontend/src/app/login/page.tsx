@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, ShieldAlert, Sparkles } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { prefetchRoute } from "@/lib/pagePrefetch";
@@ -61,195 +61,113 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="login-page" style={{
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      minHeight: "100vh",
-      background: "radial-gradient(circle at 10% 20%, rgba(26, 32, 53, 1) 0%, rgba(11, 15, 26, 1) 90%)",
-      fontFamily: "'Outfit', 'Inter', sans-serif",
-      position: "relative",
-      overflow: "hidden"
-    }}>
-      {/* Dynamic Background Glowing Orbs */}
-      <div style={{ position: "absolute", width: "400px", height: "400px", background: "radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(0,0,0,0) 70%)", top: "-100px", left: "-100px", borderRadius: "50%", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", width: "500px", height: "500px", background: "radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, rgba(0,0,0,0) 70%)", bottom: "-150px", right: "-150px", borderRadius: "50%", pointerEvents: "none" }} />
+    <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-slate-100 to-indigo-50/30 p-6 overflow-hidden font-sans">
+      {/* Background blobs */}
+      <div className="absolute -top-[10%] -left-[10%] w-[350px] h-[350px] rounded-full bg-indigo-400/5 blur-[80px] pointer-events-none" />
+      <div className="absolute -bottom-[10%] -right-[10%] w-[350px] h-[350px] rounded-full bg-purple-400/5 blur-[80px] pointer-events-none" />
 
-      <div className="login-card animate-fade-in" style={{
-        background: "rgba(22, 28, 45, 0.65)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
-        border: "1px solid rgba(255, 255, 255, 0.08)",
-        borderRadius: "24px",
-        padding: "3rem 2.5rem",
-        width: "100%",
-        maxWidth: "440px",
-        boxShadow: "0 20px 40px rgba(0, 0, 0, 0.3)",
-        position: "relative",
-        zIndex: 10
-      }}>
-        <div style={{ textAlign: "center", marginBottom: "2.5rem" }}>
-          <div style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 60,
-            height: 60,
-            borderRadius: "18px",
-            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(99, 102, 241, 0.05) 100%)",
-            border: "1px solid rgba(99, 102, 241, 0.3)",
-            boxShadow: "0 8px 16px rgba(99, 102, 241, 0.15)",
-            marginBottom: "1.25rem",
-            fontSize: "1.75rem"
-          }}>📊</div>
-          <div style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#818cf8", marginBottom: "0.5rem" }}>Demand Planning</div>
-          <div style={{ fontSize: "1.95rem", fontWeight: 800, letterSpacing: "-0.03em", color: "#ffffff", background: "linear-gradient(to right, #ffffff, #c7d2fe)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Planning Suite</div>
-          <div style={{ fontSize: "0.88rem", color: "#94a3b8", marginTop: "0.4rem" }}>Sign in to orchestrate forecasts</div>
+      <div className="relative w-full max-w-[400px] rounded-3xl bg-white/45 backdrop-blur-2xl border border-white/60 p-10 shadow-[0_8px_32px_0_rgba(31,38,135,0.04)] box-border">
+        {/* Logo/Icon */}
+        <div className="text-center mb-8">
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Planning Suite</h2>
+          <p className="text-xs text-slate-500 mt-1">Demand Planning Platform</p>
         </div>
 
+        {/* Error Alert */}
         {error && (
-          <div className="alert alert-danger" style={{
-            marginBottom: "1.5rem",
-            background: "rgba(239, 68, 68, 0.1)",
-            border: "1px solid rgba(239, 68, 68, 0.2)",
-            color: "#fca5a5",
-            borderRadius: "12px",
-            padding: "0.75rem 1rem",
-            fontSize: "0.8rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem"
-          }}>
-            <span>⚠️</span>
+          <div className="flex items-center gap-2 mb-5 rounded-xl border border-red-100 bg-red-50/50 p-3 text-xs text-red-700">
+            <ShieldAlert className="w-4 h-4 text-red-500 shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group" style={{ marginBottom: "1.25rem" }}>
-            <label className="form-label" htmlFor="email" style={{ color: "#cbd5e1", fontSize: "0.82rem", fontWeight: 500, marginBottom: "0.4rem", display: "block" }}>Email</label>
-            <input
-              id="email"
-              className="form-input"
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              autoFocus
-              autoComplete="email"
-              disabled={loading}
-              style={{
-                background: "rgba(15, 23, 42, 0.6)",
-                border: "1px solid rgba(255, 255, 255, 0.1)",
-                borderRadius: "12px",
-                color: "#ffffff",
-                padding: "0.75rem 1rem",
-                width: "100%",
-                fontSize: "0.88rem"
-              }}
-            />
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          {/* Email input */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="email" className="text-xs font-semibold text-slate-600 px-0.5">
+              Email Address
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+                <Mail className="w-4 h-4" />
+              </span>
+              <input
+                id="email"
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                autoFocus
+                autoComplete="email"
+                disabled={loading}
+                className="w-full bg-white/60 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50"
+              />
+            </div>
           </div>
-          <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-            <label className="form-label" htmlFor="password" style={{ color: "#cbd5e1", fontSize: "0.82rem", fontWeight: 500, marginBottom: "0.4rem", display: "block" }}>Password</label>
-            <div className="password-input-wrap" style={{ position: "relative" }}>
+
+          {/* Password input */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="password" className="text-xs font-semibold text-slate-600 px-0.5">
+              Password
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+                <Lock className="w-4 h-4" />
+              </span>
               <input
                 id="password"
-                className="form-input password-input"
                 type={showPassword ? "text" : "password"}
-                placeholder="Enter your password"
+                placeholder="••••••••"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 autoComplete="current-password"
                 disabled={loading}
-                style={{
-                  background: "rgba(15, 23, 42, 0.6)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
-                  borderRadius: "12px",
-                  color: "#ffffff",
-                  padding: "0.75rem 1rem",
-                  paddingRight: "2.5rem",
-                  width: "100%",
-                  fontSize: "0.88rem"
-                }}
+                className="w-full bg-white/60 border border-slate-200 rounded-xl py-2.5 pl-10 pr-11 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50"
               />
               <button
                 type="button"
-                className="password-toggle-btn"
                 onClick={() => setShowPassword(v => !v)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
                 tabIndex={-1}
-                style={{
-                  position: "absolute",
-                  right: "10px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  background: "none",
-                  border: "none",
-                  color: "#94a3b8",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center"
-                }}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
               >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-2" style={{ marginBottom: "1.75rem" }}>
+
+          {/* Keep me signed in */}
+          <div className="flex items-center gap-2 mt-0.5">
             <input
               type="checkbox"
               id="rem"
               checked={rememberMe}
               onChange={e => setRememberMe(e.target.checked)}
               disabled={loading}
-              style={{ accentColor: "#6366f1", width: 14, height: 14, cursor: "pointer" }}
+              className="accent-blue-600 w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500/20"
             />
-            <label htmlFor="rem" style={{ fontSize: "0.8rem", color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>Keep me signed in</label>
+            <label htmlFor="rem" className="text-xs text-slate-600 cursor-pointer select-none">
+              Keep me signed in
+            </label>
           </div>
+
+          {/* Submit button */}
           <button
             type="submit"
-            className="btn btn-primary w-full"
             disabled={loading}
-            style={{
-              background: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
-              border: "none",
-              borderRadius: "12px",
-              color: "#ffffff",
-              padding: "0.8rem",
-              fontWeight: 600,
-              fontSize: "0.92rem",
-              boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)",
-              cursor: "pointer",
-              transition: "transform 0.1s, opacity 0.15s"
-            }}
-            onMouseDown={e => e.currentTarget.style.transform = "scale(0.98)"}
-            onMouseUp={e => e.currentTarget.style.transform = "scale(1)"}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 font-medium text-sm transition-all active:scale-[0.98] disabled:opacity-50 shadow-[0_4px_12px_rgba(37,99,235,0.2)] mt-2"
           >
-            {loading ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
-                <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                Signing in…
-              </div>
-            ) : "Sign In"}
+            {loading ? "Signing in…" : "Sign In"}
           </button>
         </form>
 
-        <div style={{
-          marginTop: "1.75rem",
-          padding: "1rem 1.25rem",
-          background: "rgba(30, 41, 59, 0.5)",
-          border: "1px solid rgba(255, 255, 255, 0.05)",
-          borderRadius: "14px",
-          fontSize: "0.78rem",
-          color: "#94a3b8",
-          lineHeight: 1.5
-        }}>
-          <div style={{ fontWeight: 700, color: "#fcd34d", marginBottom: "0.35rem", display: "flex", alignItems: "center", gap: "0.3rem" }}>
-            <span>🛠️</span> Development Mode Credentials
+        {/* Development mode indicator */}
+        <div className="mt-8 rounded-xl bg-white/40 border border-white/60 p-4 text-[11px] text-slate-500 leading-relaxed shadow-sm">
+          <div className="flex items-center gap-1.5 font-semibold text-purple-600 mb-1">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Test Credentials</span>
           </div>
-          <div style={{ fontSize: "0.74rem" }}>
-            <span style={{ color: "#cbd5e1" }}>Admin:</span> <code style={{ color: "#cbd5e1", background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: 4, fontFamily: "monospace" }}>sumitkumar.nayak@licious.com / admin123</code>
-          </div>
+          <code>sumitkumar.nayak@licious.com / admin123</code>
         </div>
       </div>
     </div>
