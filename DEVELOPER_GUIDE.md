@@ -57,7 +57,7 @@ graph TD
 ## 2. High-Performance Caching Layer (Parquet Cache Engine)
 To maintain sub-second page loads, the system avoids querying Google Sheets on every page reload by using an optimized local Parquet cache:
 
-* **Caching Reads**: Worksheets are saved locally as `.parquet` files under the backend's outputs directory. The backend reads from these local files, returning data in **less than 100ms**.
+* **Caching Reads**: Worksheets are stored locally as `.parquet` files under the backend's outputs directory. The backend reads from these local files, returning data in **less than 100ms**.
 * **Automatic Expiry (TTL)**: Cache files expire after a set time limit (e.g. 30 minutes for master data, 5 minutes for parameters). When expired, the next read triggers a fresh fetch from Google Sheets and rebuilds the Parquet file.
 * **Asynchronous Cache Warmups**: When write actions are committed (e.g. confirming a Hub Launch sync to the `P-H Master` sheet), the local cache immediately becomes stale. The backend appends the rows to Google Sheets, resolves the user request instantly, and triggers a **detached background thread** to load the fresh sheet and rebuild the Parquet cache file in the background.
 
@@ -103,78 +103,109 @@ The system uses Role-Based Access Control (RBAC) to restrict action permissions 
 
 ---
 
-## 2. Page-by-Page Operational Guide
+## 2. Page-by-Page Operational Guide & Transaction State Machine
 
-### 📊 Dashboard
+### A. General Navigation Transitions
+The system enforces sequential workflows. If a validation check fails, the user is blocked from proceeding until the input data is corrected.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: User Opens Page
+    Idle --> Fetching: User Click "Fetch/Load"
+    Fetching --> ValidationFailed: Formats/Values Mismatch
+    ValidationFailed --> Idle: User Fixes Input Data
+    Fetching --> ValidationSuccess: Format and Mappings OK
+    ValidationSuccess --> Confirming: Click "Confirm & Sync"
+    Confirming --> SyncSuccess: Data Saved to Sheets
+    Confirming --> SyncFailed: API Error or Network Timeout
+    SyncFailed --> ValidationSuccess: Retry Operation
+    SyncSuccess --> AsyncCacheWarmup: Spawns Background Thread
+    SyncSuccess --> EmailNotification: Send Notification Email
+    AsyncCacheWarmup --> [*]
+    EmailNotification --> [*]
+```
+
+---
+
+### B. Detailed Page Profiles
+
+#### 📊 Dashboard
 * **Target Audience**: Planners, Managers, Admins, Viewers.
 * **Purpose**: Overview of the forecasting pipeline.
 * **Inputs**: Reads system metadata and execution logs from the database.
 * **Outputs**: Displays active sync status, data load KPI graphs, and execution history. Check this page to verify that background automation runs completed successfully.
+* **State Machine & Branching Logic**:
+  * **If Successful**: Dashboard renders green "Connected" status indicators and lists history tables.
+  * **If Failed**: Renders red alert banners. The planner should check server logs to debug database connections.
 
-### ⚡ Auto-Pilot
+#### ⚡ Auto-Pilot
 * **Target Audience**: Planners, Admins.
 * **Purpose**: Run the end-to-end forecasting pipeline with a single click.
 * **Inputs**: Google Sheets configuration parameters.
 * **Outputs**: Updated baseline forecast values written to database tables.
-* **How to use**:
-  1. Click the **Run Auto-Pilot** button.
-  2. The system sequentially executes data loading, parameter configuration, baseline generation, validation checks, and spreadsheet syncs.
-  3. A live log window displays execution progress.
+* **State Machine & Branching Logic**:
+  * **Start**: User clicks **Run Auto-Pilot**. State transitions to `RUNNING`.
+  * **Success Path**: The pipeline completes all steps. State transitions to `COMPLETED` and sends an email notification.
+  * **Failure Path**: If any step fails, execution halts. State transitions to `FAILED` and displays the error log.
 
-### ⚙️ Manual Baseline steps (1 → 5)
+#### ⚙️ Manual Baseline steps (1 → 5)
 Planners can execute baseline steps individually for granular control:
 
 * **Step 1: Load Raw Data**:
   * **Inputs**: Sales history database.
   * **Outputs**: Raw baseline dataset.
   * **Action**: Click *Load Raw Data* to fetch historical actuals.
+  * **Next Steps**: If successful, proceed to **Step 2**. If failed (e.g., database timeout), resolve database connection parameters in settings before retrying.
 * **Step 2: Configure Parameters**:
   * **Inputs**: Override spreadsheets (growth, seasonality).
   * **Outputs**: Configured baseline parameters.
   * **Action**: Review overrides and click *Confirm Parameters*.
+  * **Next Steps**: If successful, proceed to **Step 3**. If invalid parameters are entered, the system highlights the cells; correct them in the parameters sheet before proceeding.
 * **Step 3: Generate Baseline**:
   * **Inputs**: Historical data and configuration parameters.
   * **Outputs**: Statistical forecast projection database.
   * **Action**: Click *Generate Forecast* and wait for execution logs.
+  * **Next Steps**: If successful, proceed to **Step 4**. If algorithm parameters fail, adjust config values and retry.
 * **Step 4: Review & Validate**:
   * **Inputs**: Generated forecast projections.
   * **Outputs**: Validation report flags.
   * **Action**: Review flagged items and confirm data integrity.
+  * **Next Steps**: If adjustments are needed, revert to **Step 2** to update parameters. If approved, proceed to **Step 5**.
 * **Step 5: Approve Baseline**:
   * **Inputs**: Confirmed forecast projections.
   * **Outputs**: Promoted baseline database records.
   * **Action**: Click *Approve and Promote* to unlock the **Final Plan** tab.
+  * **Next Steps**: Triggers an automated notification email to the planning team. Unlocks read access on the **Final Plan** page.
 
-### 📦 Product Launch (NPL)
+#### 📦 Product Launch (NPL)
 * **Target Audience**: Admins, Planners, Product Managers.
 * **Purpose**: Launch new SKUs by cloning reference parameters from templates to target cities.
 * **Inputs**: Template mappings configured in the NPL configuration Google Sheet.
 * **Outputs**: New configuration rows appended to the `P-H Master` sheet.
-* **How to use**:
-  1. Add template rows and target cities to the NPL configuration Google Sheet.
-  2. In the UI, click **Fetch & Validate Product Mappings**.
-  3. Review the preview table for anomalies or duplicate warnings.
-  4. Click **Confirm & Sync to Master** to append configurations.
+* **State Machine & Branching Logic**:
+  * **Start**: User clicks **Fetch & Validate Product Mappings**.
+  * **Validation Path**: If missing columns are found, the UI blocks the confirm step. If mappings are valid, the preview table is rendered.
+  * **Sync Path**: User clicks **Confirm & Sync**. On success, the backend sends a confirmation email and starts the background cache warmup.
 
-### 🔌 Hub Launch
+#### 🔌 Hub Launch
 * **Target Audience**: Admins, Planners.
 * **Purpose**: Configure newly launched distribution hubs by cloning product settings from existing reference hubs.
 * **Inputs**: Target hub codes and source reference codes configured in the **FF Input** tab of the Hub Launch spreadsheet.
 * **Outputs**: Cloned forecast parameters appended to the `P-H Master` sheet.
-* **How to use**:
-  1. Add target hub codes and source reference codes to the **FF Input** tab of the Hub Launch spreadsheet.
-  2. Click **Fetch & Preview Sync Mappings** in the UI.
-  3. The page displays the **Rows to Sync** count, **Duplicates Skipped** count, and a list of validation warnings (e.g. *Hub Mapping missing row for new hub 'Test'*).
-  4. Even if warnings exist, you can proceed with the valid rows. The **Confirm & Sync Hubs** button remains active.
-  5. Click **Confirm & Sync Hubs** to write the configuration to `P-H Master`. The backend will refresh the caches in the background.
+* **State Machine & Branching Logic**:
+  * **Start**: User clicks **Fetch & Preview Sync Mappings**.
+  * **Validation Path**:
+    * **Valid**: All new hubs exist in the `Hub Mapping` configurations.
+    * **Warnings**: Renders warning boxes (e.g. *Hub Mapping missing row for new hub 'Test'*).
+  * **Sync Path**: Click **Confirm & Sync Hubs**. If the insertion succeeds, the backend starts a background cache warmup and transitions the UI to the success screen. If it fails, a red warning alert is displayed.
 
-### 📋 Final Plan
+#### 📋 Final Plan
 * **Target Audience**: Admins, Planners.
 * **Purpose**: Displays final forecasting reports. Locked until the active baseline is approved in step 5.
 * **Inputs**: Approved baseline projections.
 * **Outputs**: Read-only validation summaries and CSV export configurations.
 
-### ⚙️ Settings
+#### ⚙️ Settings
 * **Target Audience**: All Roles.
 * **Purpose**: Configuration profiles manager.
 * **Inputs**: User input settings overrides (e.g. passwords, email address, API paths).
