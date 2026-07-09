@@ -8,15 +8,43 @@ This handbook is the single source of truth for the **Demand Planning Suite**. I
 
 This section explains the technical design of the system, data flows, and performance optimization mechanics.
 
-## 1. System Topology
+## 1. System Topology & Data Exchange Architecture
 The Demand Planning Suite uses a decoupled, high-throughput model designed to handle large-scale database operations and live synchronization with Google Sheets:
 
 ```mermaid
 graph TD
-    UI[Next.js App Router] -->|Axios REST Calls| API[FastAPI Backend]
-    API -->|Metadata / Logs| DB[(PostgreSQL / SQLite)]
-    API -->|Live Append Syncs| Sheets[Google Sheets API v4]
-    API -->|High-Speed Reads| Cache[(Local Parquet TTL Cache)]
+    subgraph Client Layer [Frontend Client - Next.js]
+        UI[App Shell & Navigation Router]
+        Axios[Axios HTTP Client]
+        Auth[Auth Context & RBAC State]
+        UI --> Axios
+        UI --> Auth
+    end
+
+    subgraph Service Layer [FastAPI API Gateway]
+        Router[API Router Endpoints]
+        Val[Validation Validator Engine]
+        Cache[Parquet Cache Manager]
+        DB_Svc[Database Storage Manager]
+        G_Client[Google Sheets OAuth Client]
+        
+        Router --> Val
+        Router --> Cache
+        Router --> DB_Svc
+        Router --> G_Client
+    end
+
+    subgraph Storage & Cloud Layer
+        DB[(SQLite / PostgreSQL)]
+        GSheets[Google Sheets API v4]
+        Parquet[(Local Parquet Files)]
+        
+        DB_Svc --> DB
+        G_Client --> GSheets
+        Cache --> Parquet
+    end
+
+    Axios -->|REST API Requests| Router
 ```
 
 * **Frontend**: Next.js App Router, TypeScript, and Vanilla Tailwind CSS. It uses page pre-fetching to ensure instantaneous transitions between views.
@@ -32,6 +60,32 @@ To maintain sub-second page loads, the system avoids querying Google Sheets on e
 * **Caching Reads**: Worksheets are saved locally as `.parquet` files under the backend's outputs directory. The backend reads from these local files, returning data in **less than 100ms**.
 * **Automatic Expiry (TTL)**: Cache files expire after a set time limit (e.g. 30 minutes for master data, 5 minutes for parameters). When expired, the next read triggers a fresh fetch from Google Sheets and rebuilds the Parquet file.
 * **Asynchronous Cache Warmups**: When write actions are committed (e.g. confirming a Hub Launch sync to the `P-H Master` sheet), the local cache immediately becomes stale. The backend appends the rows to Google Sheets, resolves the user request instantly, and triggers a **detached background thread** to load the fresh sheet and rebuild the Parquet cache file in the background.
+
+---
+
+## 3. Automated Email Trigger Workflows
+When a critical pipeline stage finishes (such as baseline approvals or product launch sync confirmations), the system triggers automated notification emails:
+
+```mermaid
+sequenceDiagram
+    participant User as User (UI Client)
+    participant API as FastAPI Router
+    participant DB as SQLite/PostgreSQL
+    participant SMTP as SMTP Relay Server
+    participant Recipient as Planner Email
+
+    User->>API: Confirm & Sync Approval Request
+    API->>DB: Log Transaction Metadata
+    API->>API: Generate HTML Email Template
+    API->>SMTP: Connect & Dispatch Mail via SMTP (SSL/TLS)
+    SMTP-->>API: SMTP Transfer Successful
+    API-->>User: Return HTTP 200 (Success)
+    SMTP->>Recipient: Send Sync Confirmation Email
+```
+
+* **Configuration**: Credentials (`FROM_EMAIL`, `FROM_EMAIL_APP_PASSWORD`) are loaded securely from environment variables.
+* **Template Rendering**: Uses dynamic HTML templates displaying statistics (new rows, skipped records, timestamps).
+* **Delivery**: Dispatched via standard SMTP over secure ports (e.g., port 465 or 587).
 
 ---
 
@@ -113,6 +167,18 @@ Planners can execute baseline steps individually for granular control:
   3. The page displays the **Rows to Sync** count, **Duplicates Skipped** count, and a list of validation warnings (e.g. *Hub Mapping missing row for new hub 'Test'*).
   4. Even if warnings exist, you can proceed with the valid rows. The **Confirm & Sync Hubs** button remains active.
   5. Click **Confirm & Sync Hubs** to write the configuration to `P-H Master`. The backend will refresh the caches in the background.
+
+### 📋 Final Plan
+* **Target Audience**: Admins, Planners.
+* **Purpose**: Displays final forecasting reports. Locked until the active baseline is approved in step 5.
+* **Inputs**: Approved baseline projections.
+* **Outputs**: Read-only validation summaries and CSV export configurations.
+
+### ⚙️ Settings
+* **Target Audience**: All Roles.
+* **Purpose**: Configuration profiles manager.
+* **Inputs**: User input settings overrides (e.g. passwords, email address, API paths).
+* **Outputs**: Updated configuration profile records.
 
 ---
 
