@@ -54,41 +54,26 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
     Reads 'FF Input' tab from NEW_HUB_LAUNCH_SHEET_KEY and matches against P-H Master & Hub Mapping.
     Returns preview summary and rows to be added.
     """
-    from planning_suite.config import DEMAND_PLANNING_SHEET_ID, NEW_HUB_LAUNCH_SHEET_KEY
+    # 1. Read worksheets using cached TTL methods for maximum performance
+    hub_df = sheets.read_worksheet_uncached("demand_planning_masters", "Hub Mapping", HUB_MASTER_READ_RANGE, use_cache=True)
+    ph_df = sheets.read_worksheet_uncached("demand_planning_masters", "P-H Master", PH_MASTER_READ_RANGE, use_cache=True)
+    ff_df = sheets.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=True)
 
-    # 1. Fetch data from Google Sheets in parallel/batch
-    raw_dpm = sheets.batch_read_worksheets(
-        DEMAND_PLANNING_SHEET_ID,
-        [
-            ("Hub Mapping", HUB_MASTER_READ_RANGE),
-            ("P-H Master", PH_MASTER_READ_RANGE),
-        ],
-    )
-    
-    raw_launch = sheets.batch_read_worksheets(
-        NEW_HUB_LAUNCH_SHEET_KEY,
-        [
-            ("FF Input", "A:H"),
-        ]
-    )
+    if ff_df is None or ff_df.empty:
+        # Fallback to direct read if cache read failed
+        from planning_suite.config import NEW_HUB_LAUNCH_SHEET_KEY
+        raw = sheets.batch_read_worksheets(NEW_HUB_LAUNCH_SHEET_KEY, [("FF Input", "A:H")])
+        data = raw.get("FF Input") or []
+        if len(data) >= 2:
+            ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
 
-    def _to_df(data_list) -> pd.DataFrame:
-        if not data_list or len(data_list) < 2:
-            return pd.DataFrame()
-        return clean_sheet_df(pd.DataFrame(data_list[1:], columns=data_list[0]))
+    if hub_df is None or hub_df.empty or ph_df is None or ph_df.empty or ff_df is None or ff_df.empty:
+        raise ValueError("Could not read Hub Mapping, P-H Master, or FF Input sheet configuration.")
 
-    hub_df = _to_df(raw_dpm.get("Hub Mapping"))
-    ph_df = _to_df(raw_dpm.get("P-H Master"))
-    ff_df = _to_df(raw_launch.get("FF Input"))
-
-    if ff_df.empty:
-        raise ValueError("FF Input sheet is empty or could not be read.")
-    if hub_df.empty or ph_df.empty:
-        raise ValueError("Could not read Hub Mapping or P-H Master sheets data.")
-
-    ph_headers = raw_dpm["P-H Master"][0]
-    hub_headers = raw_dpm["Hub Mapping"][0]
-    ff_headers = raw_launch["FF Input"][0]
+    # Retrieve canonical headers
+    ph_headers = list(ph_df.columns)
+    hub_headers = list(hub_df.columns)
+    ff_headers = list(ff_df.columns)
 
     # Normalize column names
     ph_cols = _col_map(ph_df.columns)
