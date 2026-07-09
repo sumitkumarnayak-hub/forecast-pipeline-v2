@@ -320,6 +320,21 @@ def npl_confirm_new_hub_sync(
                 value_input_option="RAW",
             )
             
+        # Warm up cached data asynchronously in a background task
+        if values:
+            from fastapi import BackgroundTasks
+            # We can invoke cache warmups to fetch a fresh dataframe copy in the background
+            def warmup_cache():
+                try:
+                    # Read with use_cache=False to force a reload from Sheets, which auto-overwrites the cached Parquet file
+                    gsm.read_worksheet_uncached("demand_planning_masters", "product_hub_master", use_cache=False)
+                except Exception:
+                    pass
+            
+            # Start background thread execution to warm up the cache immediately
+            import threading
+            threading.Thread(target=warmup_cache, daemon=True).start()
+
         user_id = int(current_user["sub"])
         db.log_master_sync(
             {
