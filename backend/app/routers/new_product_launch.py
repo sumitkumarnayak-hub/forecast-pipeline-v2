@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @router.get("/info")
 def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
     """Return sheet URL and last sync timestamp for the NPL page header."""
-    from planning_suite.config import NEW_PRODUCT_LAUNCH_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL
+    from planning_suite.config import NEW_PRODUCT_LAUNCH_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL, NEW_HUB_LAUNCH_SHEET_URL
 
     # Fetch last sync from master_sync_log for ph_master or npl-related types
     last_sync: str | None = None
@@ -29,7 +29,7 @@ def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depe
             from sqlalchemy import text as _text
             row = conn.execute(_text("""
                 SELECT sync_date FROM master_sync_log
-                WHERE master_type IN ('ph_master_sync', 'npl_auto_sync', 'new_product_launch_sync')
+                WHERE master_type IN ('ph_master_sync', 'npl_auto_sync', 'new_product_launch_sync', 'new_hub_sync')
                 ORDER BY sync_date DESC
                 LIMIT 1
             """)).fetchone()
@@ -41,6 +41,7 @@ def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depe
 
     return {
         "npl_sheet_url": NEW_PRODUCT_LAUNCH_SHEET_URL or None,
+        "new_hub_sheet_url": NEW_HUB_LAUNCH_SHEET_URL or None,
         "ph_master_sheet_url": DEMAND_PLANNING_MASTERS_SHEET_URL or None,
         "last_synced": last_sync,
     }
