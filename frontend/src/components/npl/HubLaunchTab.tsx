@@ -220,7 +220,7 @@ export default function HubLaunchTab() {
             </button>
             <button
               onClick={handleConfirm}
-              disabled={running || preview.total_to_insert === 0 || preview.validation_errors.length > 0 || !canWrite}
+              disabled={running || preview.rows_to_add.length === 0 || !canWrite}
               className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium text-sm px-6 py-2.5 rounded-xl transition-all shadow-sm cursor-pointer"
             >
               {running ? (
