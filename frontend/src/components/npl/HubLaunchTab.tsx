@@ -20,6 +20,7 @@ interface PreviewData {
     message?: string;
   }>;
   total_to_insert: number;
+  cache_last_updated?: string | null;
 }
 
 export default function HubLaunchTab() {
@@ -153,6 +154,11 @@ export default function HubLaunchTab() {
               )}
             </button>
           </div>
+          {preview?.cache_last_updated && (
+            <p className="text-xs text-slate-400 mt-2">
+              Local cache was last updated on: <span className="font-semibold text-slate-500">{new Date(preview.cache_last_updated).toLocaleString("en-IN")}</span>
+            </p>
+          )}
         </div>
       )}
 
@@ -232,12 +238,19 @@ export default function HubLaunchTab() {
 
           {/* Action Row */}
           <div className="flex items-center justify-between pt-2">
-            <button
-              onClick={resetFlow}
-              className="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-sm font-medium rounded-xl transition-colors"
-            >
-              Reset Configuration
-            </button>
+            <div className="flex flex-col items-start gap-1">
+              <button
+                onClick={resetFlow}
+                className="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-sm font-medium rounded-xl transition-colors"
+              >
+                Reset Configuration
+              </button>
+              {preview.cache_last_updated && (
+                <span className="text-[10px] text-slate-400 mt-1">
+                  Cached: {new Date(preview.cache_last_updated).toLocaleString("en-IN")}
+                </span>
+              )}
+            </div>
             <button
               onClick={handleConfirm}
               disabled={running || preview.rows_to_add.length === 0 || !canWrite}

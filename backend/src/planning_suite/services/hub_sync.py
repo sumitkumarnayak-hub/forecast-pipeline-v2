@@ -179,6 +179,21 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager, bypass_cache: bool =
             "duplicates_skipped": skipped_for_pair,
         })
 
+    # 4. Resolve cache modified timestamp for user info tracking
+    import os
+    import time
+    from planning_suite.services import sheets_cache
+    cache_path = sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
+    
+    last_updated = None
+    if cache_path.exists():
+        try:
+            mtime = cache_path.stat().st_mtime
+            # Return ISO format string for Javascript parsing
+            last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
+        except Exception:
+            pass
+
     return sanitize_for_json({
         "success": True,
         "validation_errors": validation_errors,
@@ -187,6 +202,7 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager, bypass_cache: bool =
         "duplicates_skipped": total_skipped,
         "mapping_report": mapping_report,
         "total_to_insert": total_inserted,
+        "cache_last_updated": last_updated,
     })
 
 def clone_from_source_hub_mapping(
