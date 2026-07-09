@@ -21,6 +21,18 @@ logger = logging.getLogger(__name__)
 def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
     """Return sheet URL and last sync timestamp for the NPL page header."""
     from planning_suite.config import NEW_PRODUCT_LAUNCH_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL, NEW_HUB_LAUNCH_SHEET_URL
+    import time
+    from planning_suite.services import sheets_cache
+
+    # Resolve local cache modified time for Hub Launch
+    cache_path = sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
+    cache_last_updated = None
+    if cache_path.exists():
+        try:
+            mtime = cache_path.stat().st_mtime
+            cache_last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
+        except Exception:
+            pass
 
     # Fetch last sync from master_sync_log for ph_master or npl-related types
     last_sync: str | None = None
@@ -44,6 +56,7 @@ def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depe
         "new_hub_sheet_url": NEW_HUB_LAUNCH_SHEET_URL or None,
         "ph_master_sheet_url": DEMAND_PLANNING_MASTERS_SHEET_URL or None,
         "last_synced": last_sync,
+        "cache_last_updated": cache_last_updated,
     }
 
 

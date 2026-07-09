@@ -30,6 +30,18 @@ export default function HubLaunchTab() {
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [step, setStep] = useState<"idle" | "preview" | "success">("idle");
   const [syncedCount, setSyncedCount] = useState(0);
+  const [initialCacheTime, setInitialCacheTime] = useState<string | null>(null);
+
+  // Fetch cache timestamp on load
+  useState(() => {
+    api.get("/api/new-product-launch/info")
+      .then(({ data }) => {
+        if (data.cache_last_updated) {
+          setInitialCacheTime(data.cache_last_updated);
+        }
+      })
+      .catch(() => {});
+  });
 
   const fetchPreview = async (bypassCache: boolean = false) => {
     setRunning(true);
@@ -154,9 +166,9 @@ export default function HubLaunchTab() {
               )}
             </button>
           </div>
-          {preview?.cache_last_updated && (
+          {(preview?.cache_last_updated || initialCacheTime) && (
             <p className="text-xs text-slate-400 mt-2">
-              Local cache was last updated on: <span className="font-semibold text-slate-500">{new Date(preview.cache_last_updated).toLocaleString("en-IN")}</span>
+              Local cache was last updated on: <span className="font-semibold text-slate-500">{new Date(preview?.cache_last_updated || initialCacheTime!).toLocaleString("en-IN")}</span>
             </p>
           )}
         </div>
