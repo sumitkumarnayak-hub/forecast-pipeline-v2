@@ -1,35 +1,36 @@
-# Demand Planning & Forecast Pipeline Suite: System Architecture & Operations Manual
+# Demand Planning & Forecast Pipeline Suite: Complete System Guide
 
-This guide serves as the single source of truth for the **Demand Planning Suite**. It is structured to help software engineers, product managers, business planners, and operations leads understand both the high-level architecture and page-by-page functionality of the platform.
+This handbook is the single source of truth for the **Demand Planning Suite**. It is designed to onboard new software engineers, assist product managers in coordinating launches, guide business planners in executing forecast cycles, and provide system administrators with deployment details.
 
 ---
 
-# PART 1: SYSTEM ARCHITECTURE & TECHNICAL DESIGN
+# PART 1: SYSTEM ARCHITECTURE & DATA FLOWS
 
 This section explains the technical design of the system, data flows, and performance optimization mechanics.
 
-## 1. High-Level Architecture Topology
-The Demand Planning Suite uses a decoupled, high-performance web structure built to support heavy analytical queries and real-time edits to Google Sheets:
+## 1. System Topology
+The Demand Planning Suite uses a decoupled, high-throughput model designed to handle large-scale database operations and live synchronization with Google Sheets:
 
 ```mermaid
 graph TD
-    UI[Next.js App Router] -->|REST APIs via Axios| API[FastAPI Backend]
-    API -->|Write Log / Metadata| DB[(SQLite / PostgreSQL)]
+    UI[Next.js App Router] -->|Axios REST Calls| API[FastAPI Backend]
+    API -->|Metadata / Logs| DB[(PostgreSQL / SQLite)]
     API -->|Live Append Syncs| Sheets[Google Sheets API v4]
     API -->|High-Speed Reads| Cache[(Local Parquet TTL Cache)]
 ```
 
-* **Frontend**: Built with **Next.js (App Router)** and TypeScript. It features a light glassmorphic Tailwind interface, Lucide icon sets, dynamic KPI card animations, and navigation pre-fetching for instant page load transitions.
-* **Backend**: Built with **FastAPI (Python)**, SQLAlchemy, Pandas, and PyArrow. It exposes REST APIs for sync controls, computes configurations cloning, runs validation rules, and handles asynchronous queue tasks.
-* **Data Layer**: Historical records and sync logs are kept in SQLite (development) or PostgreSQL (production). Target forecast configurations are synced directly to Google Sheets worksheets.
+* **Frontend**: Next.js App Router, TypeScript, and Vanilla Tailwind CSS. It uses page pre-fetching to ensure instantaneous transitions between views.
+* **Backend**: FastAPI (Python), SQLAlchemy, Pandas, and PyArrow. It exposes REST endpoints, runs validation rules, and manages asynchronous background tasks.
+* **Database**: Local SQLite for development and PostgreSQL for production. It records sync metadata and execution logs.
+* **External Integration**: Google Sheets API v4 (using `gspread` service accounts) serves as the planning database.
 
 ---
 
 ## 2. High-Performance Caching Layer (Parquet Cache Engine)
-Querying 100,000+ rows directly from the Google Sheets API on every page reload causes timeouts and slow response times (often exceeding 45 seconds). To maintain **sub-second page loads**, the system uses an optimized local Parquet cache:
+To maintain sub-second page loads, the system avoids querying Google Sheets on every page reload by using an optimized local Parquet cache:
 
-* **Caching Reads**: Worksheet configurations are stored locally inside the backend runtime outputs as `.parquet` files. When a user requests data, the backend reads from these local files, returning data in **less than 100ms**.
-* **Automatic Expiry (TTL)**: Cache files expire after a set time limit (e.g., 30 minutes for master data, 5 minutes for parameters). When expired, the next read triggers a fresh fetch from Google Sheets and rebuilds the Parquet file.
+* **Caching Reads**: Worksheets are saved locally as `.parquet` files under the backend's outputs directory. The backend reads from these local files, returning data in **less than 100ms**.
+* **Automatic Expiry (TTL)**: Cache files expire after a set time limit (e.g. 30 minutes for master data, 5 minutes for parameters). When expired, the next read triggers a fresh fetch from Google Sheets and rebuilds the Parquet file.
 * **Asynchronous Cache Warmups**: When write actions are committed (e.g. confirming a Hub Launch sync to the `P-H Master` sheet), the local cache immediately becomes stale. The backend appends the rows to Google Sheets, resolves the user request instantly, and triggers a **detached background thread** to load the fresh sheet and rebuild the Parquet cache file in the background.
 
 ---
@@ -53,11 +54,14 @@ The system uses Role-Based Access Control (RBAC) to restrict action permissions 
 ### 📊 Dashboard
 * **Target Audience**: Planners, Managers, Admins, Viewers.
 * **Purpose**: Overview of the forecasting pipeline.
-* **How to use**: Displays active sync status, data load KPI graphs, and execution history. Check this page to verify that background automation runs completed successfully.
+* **Inputs**: Reads system metadata and execution logs from the database.
+* **Outputs**: Displays active sync status, data load KPI graphs, and execution history. Check this page to verify that background automation runs completed successfully.
 
 ### ⚡ Auto-Pilot
 * **Target Audience**: Planners, Admins.
 * **Purpose**: Run the end-to-end forecasting pipeline with a single click.
+* **Inputs**: Google Sheets configuration parameters.
+* **Outputs**: Updated baseline forecast values written to database tables.
 * **How to use**:
   1. Click the **Run Auto-Pilot** button.
   2. The system sequentially executes data loading, parameter configuration, baseline generation, validation checks, and spreadsheet syncs.
@@ -66,15 +70,32 @@ The system uses Role-Based Access Control (RBAC) to restrict action permissions 
 ### ⚙️ Manual Baseline steps (1 → 5)
 Planners can execute baseline steps individually for granular control:
 
-* **Step 1: Load Raw Data**: Fetches weekly actuals from databases to establish baseline starter sets.
-* **Step 2: Configure Parameters**: Loads multipliers and growth parameters from override sheets.
-* **Step 3: Generate Baseline**: Runs forecasting algorithms on historical data.
-* **Step 4: Review & Validate**: Shows anomalies, negative forecasts, or huge sales swings.
-* **Step 5: Approve Baseline**: Locks the active baseline and promotes the forecast to production. This unlocks access to the **Final Plan** tab.
+* **Step 1: Load Raw Data**:
+  * **Inputs**: Sales history database.
+  * **Outputs**: Raw baseline dataset.
+  * **Action**: Click *Load Raw Data* to fetch historical actuals.
+* **Step 2: Configure Parameters**:
+  * **Inputs**: Override spreadsheets (growth, seasonality).
+  * **Outputs**: Configured baseline parameters.
+  * **Action**: Review overrides and click *Confirm Parameters*.
+* **Step 3: Generate Baseline**:
+  * **Inputs**: Historical data and configuration parameters.
+  * **Outputs**: Statistical forecast projection database.
+  * **Action**: Click *Generate Forecast* and wait for execution logs.
+* **Step 4: Review & Validate**:
+  * **Inputs**: Generated forecast projections.
+  * **Outputs**: Validation report flags.
+  * **Action**: Review flagged items and confirm data integrity.
+* **Step 5: Approve Baseline**:
+  * **Inputs**: Confirmed forecast projections.
+  * **Outputs**: Promoted baseline database records.
+  * **Action**: Click *Approve and Promote* to unlock the **Final Plan** tab.
 
 ### 📦 Product Launch (NPL)
 * **Target Audience**: Admins, Planners, Product Managers.
 * **Purpose**: Launch new SKUs by cloning reference parameters from templates to target cities.
+* **Inputs**: Template mappings configured in the NPL configuration Google Sheet.
+* **Outputs**: New configuration rows appended to the `P-H Master` sheet.
 * **How to use**:
   1. Add template rows and target cities to the NPL configuration Google Sheet.
   2. In the UI, click **Fetch & Validate Product Mappings**.
@@ -84,6 +105,8 @@ Planners can execute baseline steps individually for granular control:
 ### 🔌 Hub Launch
 * **Target Audience**: Admins, Planners.
 * **Purpose**: Configure newly launched distribution hubs by cloning product settings from existing reference hubs.
+* **Inputs**: Target hub codes and source reference codes configured in the **FF Input** tab of the Hub Launch spreadsheet.
+* **Outputs**: Cloned forecast parameters appended to the `P-H Master` sheet.
 * **How to use**:
   1. Add target hub codes and source reference codes to the **FF Input** tab of the Hub Launch spreadsheet.
   2. Click **Fetch & Preview Sync Mappings** in the UI.
