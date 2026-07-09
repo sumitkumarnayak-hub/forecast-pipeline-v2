@@ -49,15 +49,16 @@ def build_column_mapping(ph_headers: List[str], h_headers: List[str]) -> Dict[st
             mapping[th] = match
     return mapping
 
-def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
+def build_new_hub_sync_preview(sheets: GoogleSheetsManager, bypass_cache: bool = False) -> Dict[str, Any]:
     """
     Reads 'FF Input' tab from NEW_HUB_LAUNCH_SHEET_KEY and matches against P-H Master & Hub Mapping.
     Returns preview summary and rows to be added.
     """
+    use_cache = not bypass_cache
     # 1. Read worksheets using cached TTL methods matching SHEETS_CONFIG keys for global Parquet caching
-    hub_df = sheets.read_worksheet_uncached("demand_planning_masters", "hub_mapping", HUB_MASTER_READ_RANGE, use_cache=True)
-    ph_df = sheets.read_worksheet_uncached("demand_planning_masters", "product_hub_master", PH_MASTER_READ_RANGE, use_cache=True)
-    ff_df = sheets.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=True)
+    hub_df = sheets.read_worksheet_uncached("demand_planning_masters", "hub_mapping", HUB_MASTER_READ_RANGE, use_cache=use_cache)
+    ph_df = sheets.read_worksheet_uncached("demand_planning_masters", "product_hub_master", PH_MASTER_READ_RANGE, use_cache=use_cache)
+    ff_df = sheets.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=use_cache)
 
     if ff_df is None or ff_df.empty:
         # Fallback to direct read if cache read failed

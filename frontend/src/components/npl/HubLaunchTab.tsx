@@ -30,12 +30,13 @@ export default function HubLaunchTab() {
   const [step, setStep] = useState<"idle" | "preview" | "success">("idle");
   const [syncedCount, setSyncedCount] = useState(0);
 
-  const fetchPreview = async () => {
+  const fetchPreview = async (bypassCache: boolean = false) => {
     setRunning(true);
     setMsg({ text: "", type: "" });
     setPreview(null);
     try {
-      const { data } = await api.get("/api/new-product-launch/sync-new-hub/preview");
+      const url = `/api/new-product-launch/sync-new-hub/preview?bypass_cache=${bypassCache ? "true" : "false"}`;
+      const { data } = await api.get(url);
       setPreview(data);
       setStep("preview");
       if (data.validation_errors && data.validation_errors.length > 0) {
@@ -116,23 +117,42 @@ export default function HubLaunchTab() {
           <p className="text-sm text-slate-500 max-w-lg mx-auto">
             Loads pending launch hub settings from the configuration sheet, runs validations, and outputs skipped/new records before merging.
           </p>
-          <button
-            onClick={fetchPreview}
-            disabled={running}
-            className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium text-sm px-6 py-2.5 rounded-xl transition-all shadow-sm"
-          >
-            {running ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                Reading Sheets...
-              </>
-            ) : (
-              <>
-                <Eye className="w-4 h-4" />
-                Fetch & Preview Sync Mappings
-              </>
-            )}
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => fetchPreview(false)}
+              disabled={running}
+              className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-medium text-sm px-6 py-2.5 rounded-xl transition-all shadow-sm cursor-pointer"
+            >
+              {running ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Reading...
+                </>
+              ) : (
+                <>
+                  <Eye className="w-4 h-4" />
+                  Fetch & Preview Sync Mappings
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => fetchPreview(true)}
+              disabled={running}
+              className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium text-sm px-6 py-2.5 rounded-xl transition-all shadow-sm cursor-pointer"
+            >
+              {running ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Fetching Live...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Fetch Live Sheets
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
 

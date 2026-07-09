@@ -284,6 +284,7 @@ class ConfirmHubSyncBody(BaseModel):
 
 @router.get("/sync-new-hub/preview")
 def npl_preview_new_hub_sync(
+    bypass_cache: bool = Query(False),
     current_user: dict = Depends(require_write),
 ):
     try:
@@ -291,7 +292,7 @@ def npl_preview_new_hub_sync(
         from planning_suite.services.hub_sync import build_new_hub_sync_preview
 
         gsm = get_sheets_manager()
-        return build_new_hub_sync_preview(gsm)
+        return build_new_hub_sync_preview(gsm, bypass_cache=bypass_cache)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
