@@ -1,0 +1,397 @@
+{
+  "success": true,
+  "validation_errors": [],
+  "rows_to_add": [],
+  "ph_headers": [
+    "city_name",
+    "hub_name",
+    "sub category",
+    "sku class prod",
+    "product_id",
+    "HTT",
+    "Anchor ID",
+    "Anchor Name",
+    "Cut Classification",
+    "Plan Design",
+    "Active_Flag_Mon",
+    "Active_Flag_Tue",
+    "Active_Flag_Wed",
+    "Active_Flag_Thu",
+    "Active_Flag_Fri",
+    "Active_Flag_Sat",
+    "Active_Flag_Sun",
+    "Split %",
+    "Launch date",
+    "End Date",
+    "Price",
+    "DOC/Percentage_BufferFlag",
+    "Inv_open_1_flag_Mon",
+    "Inv_open_1_flag_Tue",
+    "Inv_open_1_flag_wed",
+    "Inv_open_1_flag_Thu",
+    "Inv_open_1_flag_Fri",
+    "Inv_open_1_flag_Sat",
+    "Inv_open_1_flag_Sun",
+    "sale_open_1_flag_Mon",
+    "sale_open_1_flag_Tue",
+    "sale_open_1_flag_wed",
+    "sale_open_1_flag_Thu",
+    "sale_open_1_flag_Fri",
+    "sale_open_1_flag_Sat",
+    "sale_open_1_flag_Sun",
+    "Buffer_Mon",
+    "Capping_Mon",
+    "Buffer_Tue",
+    "Capping_Tue",
+    "Buffer_Wed",
+    "Capping_Wed",
+    "Buffer_Thu",
+    "Capping_Thu",
+    "Buffer_Fri",
+    "Capping_Fri",
+    "Buffer_Sat",
+    "Capping_Sat",
+    "Buffer_Sun",
+    "Capping_Sun"
+  ],
+  "duplicates_skipped": 35904,
+  "mapping_report": [
+    {
+      "new_hub": "AGC",
+      "source_hub": "NGC",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "JPNS",
+      "source_hub": "JPN",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "WLS",
+      "source_hub": "KAM",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "MLT",
+      "source_hub": "CLT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GNJ",
+      "source_hub": "VTH",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "YLK",
+      "source_hub": "JAK",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "NBL",
+      "source_hub": "BEL",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "NTT",
+      "source_hub": "ECT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "NLH",
+      "source_hub": "ECT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "HGD",
+      "source_hub": "HOODI",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "TLK",
+      "source_hub": "WDH",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "RNG",
+      "source_hub": "WDH",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "RHN",
+      "source_hub": "WDH",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "ITP",
+      "source_hub": "HOODI",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GHA",
+      "source_hub": "VSH",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GHA",
+      "source_hub": "MUL",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "CLT",
+      "source_hub": "MLT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "HSL",
+      "source_hub": "HSR",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "PSN",
+      "source_hub": "HOODI",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "MRB",
+      "source_hub": "MIR",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "HFN",
+      "source_hub": "NVC",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "HSN",
+      "source_hub": "NGC",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "RJN",
+      "source_hub": "GZB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "RRN",
+      "source_hub": "MSB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "BDG",
+      "source_hub": "KRP",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "SNG",
+      "source_hub": "ECT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "MHP",
+      "source_hub": "HOODI",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "ANR",
+      "source_hub": "ECT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "SNG",
+      "source_hub": "BEG",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "CCG",
+      "source_hub": "CCS",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "ALP",
+      "source_hub": "TUB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "STG",
+      "source_hub": "SUN",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "NHP",
+      "source_hub": "FDB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "STG",
+      "source_hub": "ECS",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "NGS",
+      "source_hub": "BEL",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "KLJ",
+      "source_hub": "KLK",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "BIC",
+      "source_hub": "MIR",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "MLE",
+      "source_hub": "MLD",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "ECT",
+      "source_hub": "NTT",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GOV",
+      "source_hub": "CHM",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GGL",
+      "source_hub": "HSL",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GGL",
+      "source_hub": "KDB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "AND",
+      "source_hub": "GDB",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "SMS",
+      "source_hub": "BKC",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "KYN",
+      "source_hub": "VIM",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "Kukatpally",
+      "source_hub": "MDP",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "Yousufguda",
+      "source_hub": "MDP",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    },
+    {
+      "new_hub": "GCB",
+      "source_hub": "MDP",
+      "status": "ok",
+      "rows_inserted": 0,
+      "duplicates_skipped": 748
+    }
+  ],
+  "total_to_insert": 0
+}

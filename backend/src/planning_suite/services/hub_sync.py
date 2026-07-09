@@ -114,11 +114,19 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
         if name:
             hub_lookup[name] = r
 
-    # Build existing keys to prevent duplicates
-    existing_keys = {
-        (str(r.get(prod_id_col, "")).strip(), str(r.get(hub_col, "")).strip().lower())
-        for _, r in ph_df.iterrows()
-    }
+    # Pre-build lookup map for source hub rows in O(N) time
+    source_hubs_set = {sh.lower() for nh, sh in mappings}
+    source_rows_by_hub = {}
+    for _, r in ph_df.iterrows():
+        sh_val = str(r.get(hub_col, "")).strip().lower()
+        if sh_val in source_hubs_set:
+            source_rows_by_hub.setdefault(sh_val, []).append(r)
+
+    # Build existing keys to prevent duplicates using set lookup
+    existing_keys = set(zip(
+        ph_df[prod_id_col].astype(str).str.strip(),
+        ph_df[hub_col].astype(str).str.strip().str.lower()
+    ))
 
     preview_rows = []
     mapping_report = []
@@ -126,7 +134,7 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager) -> Dict[str, Any]:
     total_skipped = 0
 
     for new_hub, source_hub in mappings:
-        source_rows = [r for _, r in ph_df.iterrows() if str(r.get(hub_col, "")).strip().lower() == source_hub.lower()]
+        source_rows = source_rows_by_hub.get(source_hub.lower(), [])
         if not source_rows:
             mapping_report.append({
                 "new_hub": new_hub,
