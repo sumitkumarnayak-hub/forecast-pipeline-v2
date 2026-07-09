@@ -127,7 +127,67 @@ stateDiagram-v2
 
 ---
 
-### B. Detailed Page Profiles
+### B. Functional Pipelines: Visual Workflows
+
+This section maps out the operational steps for the core functional tasks in the suite.
+
+#### Workflow 1: New Product Launch (NPL) Sync
+Clones template forecast configurations to launch targets.
+
+```mermaid
+flowchart TD
+    Start([1. Configure NPL Sheet]) --> Fetch[2. Click Fetch & Validate Mappings]
+    Fetch --> Read[3. Read Template Products & Target Cities]
+    Read --> Check{4. Validations OK?}
+    
+    Check -->|No: Warning Logs| Resolve[5. Resolve Duplicates or Missing Sheets]
+    Resolve --> Start
+    
+    Check -->|Yes: Preview Rendered| Review[6. Review KPI Summary & Preview Grid]
+    Review --> Confirm[7. Click Confirm & Sync to Master]
+    
+    Confirm --> Append[8. Append Rows to P-H Master Worksheet]
+    Append --> DB[9. Log Transaction Sync Entry to DB]
+    Append --> Warm[10. Trigger Async Parquet Cache Refresh]
+    Append --> Email[11. Dispatch SMTP Notification Email]
+    
+    Warm --> Done([Workflow Completed])
+    Email --> Done
+```
+
+---
+
+#### Workflow 2: New Hub Launch Sync
+Clones ref product mappings to target distribution hubs.
+
+```mermaid
+flowchart TD
+    Start([1. Configure Hub Launch sheet: FF Input tab]) --> Fetch[2. Click Fetch & Preview Mappings]
+    Fetch --> Query[3. Query parameters from sheet]
+    Query --> Check{4. Target hubs exist in Hub Mapping tab?}
+    
+    Check -->|No: Validation Alert| Warning[5. Render Missing Row Warnings]
+    Warning --> Choose{6. Ignore warnings and proceed?}
+    
+    Choose -->|No| Fix[7. Fix mappings in sheet]
+    Fix --> Start
+    
+    Choose -->|Yes| Filter[8. Filter out duplicates & valid rows only]
+    Check -->|Yes: Validation OK| Filter
+    
+    Filter --> Review[9. Review Rows to Sync count & table preview]
+    Review --> Confirm[10. Click Confirm & Sync Hubs]
+    
+    Confirm --> Append[11. Append rows to P-H Master worksheet]
+    Append --> DB[12. Log Transaction Sync Entry to DB]
+    Append --> Warm[13. Trigger Async Parquet Cache Refresh]
+    
+    Warm --> Done([Workflow Completed])
+```
+
+---
+
+### C. Detailed Page Profiles
 
 #### 📊 Dashboard
 * **Target Audience**: Planners, Managers, Admins, Viewers.
@@ -209,7 +269,7 @@ Planners can execute baseline steps individually for granular control:
 * **Target Audience**: All Roles.
 * **Purpose**: Central system configuration profiles manager.
 * **Sub-Sections (Tabs)**:
-  1. **Profile**: Displays user authentication data (full name, centralized email address, and active role status). Updates are centralized.
+  1. **Profile**: Displays user authentication data (full name, centralized email address, and active role status). Updates are centrally managed.
   2. **Preferences**: Allows switching local behaviors (e.g., toggling live automated email alerts, toggling automatic master configurations loads, and limiting table rows counts previews).
   3. **Users (Admin Only)**: Allows admins to create new users, manage existing planner accounts, and delete inactive profiles.
   4. **Email Config**: Shows SMTP status (Configured/Not Configured), allows sending test emails to validated planners, managing target recipient subscriber lists, and viewing raw transactional email logs.
