@@ -1,131 +1,119 @@
-# Demand Planning Suite: Core Engineering & Architecture Guide
+# Demand Planning Suite: Operations & Engineering Playbook
 
-Welcome to the Developer & Architecture Guide for the **Demand Planning Suite**. This documentation outlines the system design, core features (New Product Launch, Hub Launch), caching layer optimizations, local replication procedures, and cloud deployment flows.
+Welcome to the comprehensive, developer-grade **Operations & Engineering Playbook** for the **Demand Planning Suite**. This guide outlines system topology, core workflows, user role permissions, and page-by-page operational instructions.
 
 ---
 
-## 1. System Architecture Overview
+## 1. System Architecture & Caching Topology
 
-The system is split into a decoupled modern web application structure:
-* **Frontend**: Next.js (App Router), TypeScript, and Tailwind CSS.
-* **Backend**: FastAPI (Python), SQLAlchemy, and PostgreSQL/SQLite.
-* **Data Sources**: Real-time integration with Google Sheets API (v4) using `gspread` and oauth service account credentials.
+The architecture leverages a high-performance web application pattern to interface with heavy analytical databases and live Google Sheets documents.
 
 ```mermaid
 graph TD
-    UI[Next.js App Router] -->|REST APIs| API[FastAPI Server]
-    API -->|Read/Write| DB[(SQLite / PostgreSQL)]
-    API -->|Live Sync| Sheets[Google Sheets API]
-    API -->|Fast Reads| Cache[(Local Parquet Cache)]
+    UI[Next.js Frontend] -->|REST API| API[FastAPI Backend]
+    API -->|Read/Write| DB[(SQLite/PostgreSQL)]
+    API -->|Live Google Sheets Sync| Sheets[Google Sheets API]
+    API -->|High-Speed Reads| Cache[(Parquet TTL Cache)]
 ```
 
----
-
-## 2. Core Functional Modules
-
-### A. New Product Launch (NPL)
-* **Objective**: Automate launching new SKUs by cloning reference parameters from a template product to selected target cities and launching hubs.
-* **Parameters Source**: Loads configurations from the `NPL` configuration Google Sheet.
-* **Pipeline Integration**: Recomputes forecasting parameters (DOC values, price metrics, inventory flags) and syncs rows to the master database and `P-H Master` sheets.
-
-### B. New Hub Launch
-* **Objective**: Automatically create configuration mappings for newly launched distribution centers.
-* **Input Sheet**: Configured in the `FF Input` tab of the Hub Launch spreadsheet.
-* **Workflow**:
-  1. **Fetch Preview**: Reads mapping rows (Target Hub vs. Reference Source Hub).
-  2. **Validation**: Checks if destination hub rows are configured in the `Hub Mapping` configuration tab.
-  3. **Diff Check**: Discards duplicate rows already synced.
-  4. **Cloning**: Clones all product metrics from the reference source hub, applies target hub details (name, coordinates, region, tier), and prepares the append matrix.
-  5. **Confirm Sync**: Writes the new rows to the destination `P-H Master` sheet.
+### Parquet Caching Mechanism
+To eliminate Sheets API latency (which can reach 40+ seconds for sheets containing 113,000+ records), the system serializes sheets into optimized local Parquet file directories:
+* **Lookup Path**: Checks cached data in `backend/outputs/` directory.
+* **Cached Reads**: Serves reads within milliseconds if the cache is fresh.
+* **Asynchronous Warmups**: Upon triggering confirm endpoints, the backend spawns a detached execution thread to query fresh sheet updates from the API, overwrite the local Parquet files, and warm up caches asynchronously without blocking user request resolution.
 
 ---
 
-## 3. High-Performance Caching Layer (Parquet-backed TTL Cache)
+## 2. User Roles & Access Control Matrix
 
-To resolve API latency issues with Google Sheets, the system implements a **Local TTL Parquet Caching Layer**:
+The suite enforces role-based access control (RBAC). Roles are configured inside your profile database settings:
 
-* **How it works**:
-  * Instead of querying Google Sheets API on every page reload, data is serialized into local `.parquet` files under the backend's runtime output directory.
-  * Reads look up the local file first. If the file is within its TTL (e.g., 30 minutes for Master data, 5 minutes for logs), it loads the dataframe **instantly (< 100ms)**.
-* **Cache Invalidation & Background Warmups**:
-  * After committing insertions/syncs (e.g., adding rows to `P-H Master`), the cache becomes stale.
-  * The backend triggers an **asynchronous background thread** to fetch a fresh copy of the sheet from Google API, compute clean data, and overwrite the local Parquet cache without blocking the user response.
-
----
-
-## 4. Local Development Setup
-
-Follow these instructions to run the entire stack locally:
-
-### A. Backend Setup
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
-2. Create and activate a Python virtual environment:
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate   # On Windows
-   source venv/bin/activate # On Unix
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Create a `.env` file inside the `backend` folder matching the template below:
-   ```env
-   DATABASE_URL=sqlite:///forecasting_db.sqlite
-   GOOGLE_CREDENTIALS_JSON={"type": "service_account", ...}
-   NEW_HUB_LAUNCH_SHEET_URL=https://docs.google.com/spreadsheets/d/1ZraxKQ-oJPrIablGSaMffTBQiJSx9us7omj8yG3etVM/edit
-   ```
-5. Run the FastAPI development server:
-   ```bash
-   uvicorn app.main:app --reload --port 8000
-   ```
-
-### B. Frontend Setup
-1. Navigate to the frontend directory:
-   ```bash
-   cd ../frontend
-   ```
-2. Install npm dependencies:
-   ```bash
-   npm install
-   ```
-3. Create a `.env.local` configuration:
-   ```env
-   NEXT_PUBLIC_API_URL=http://localhost:8000
-   ```
-4. Run the Next.js development server:
-   ```bash
-   npm run dev
-   ```
-5. Open [http://localhost:3000](http://localhost:3000) in your browser.
+| Role | Navigation Pages Accessible | Write/Sync Permission |
+| :--- | :--- | :--- |
+| **Administrator** | All Pages | Yes (Can execute baselines, sync master tables, configure pipelines) |
+| **Planner** | Dashboard, Auto-Pilot, Baseline 1-5, Master Data, Hub Launch, Final Plan | Yes (Can run pipelines and update forecast matrices) |
+| **Product** | Dashboard, Product Launch, Settings | Yes (Limited to launching new products & template cloning) |
+| **Viewer** | Dashboard, Master Data, Settings, About | No (Read-Only preview access) |
 
 ---
 
-## 5. CI/CD & Deployment Architecture
+## 3. Sidebar Page-by-Page Operational Guide
 
-The suite uses a dual-deployment model optimized for rapid iteration:
+### 📂 Dashboard
+* **Roles**: Administrator, Planner, Viewer, Product.
+* **Functionality**:
+  * Shows pipeline sync statuses, forecasting metrics summary, and active job notifications.
+  * Allows downloading diagnostic summaries.
 
-### A. Frontend (Vercel)
-* **Framework**: Next.js App Router.
-* **Build Command**: `npm run build`
-* **Output**: Fully static/dynamic pages deployed to edge servers globally.
+### ⚡ Auto-Pilot
+* **Roles**: Administrator, Planner.
+* **Functionality**:
+  * Trigger a fully automated end-to-end pipeline sync run (runs all baseline generation tasks, validations, and exports sequentially in one click).
 
-### B. Backend (Hugging Face Spaces)
-* **Platform**: Spaces running Docker container deployments.
-* **CI/CD Triggers**: Pushes to `hf/main` trigger Docker image rebuilds and deployment rollouts automatically.
-* **Process Manager**: Uvicorn server processes requests inside Docker.
+### ⚙️ Manual Baseline Steps (1 → 5)
+Follow these sub-navigation steps sequentially for manual baseline generation runs:
+
+#### 1. Load Raw Data
+* **Purpose**: Fetches fresh weekly historical sales actuals from the database and constructs the baseline starting point.
+* **Action**: Click *Load Raw Data* and monitor the terminal log overlay.
+
+#### 2. Configure Parameters
+* **Purpose**: Syncs parameters (growth rate overrides, seasonality overrides) from master spreadsheets.
+* **Action**: Review mapped values and confirm configuration overrides.
+
+#### 3. Generate Baseline
+* **Purpose**: Runs the statistical forecasting algorithm models.
+* **Action**: Trigger run and wait for processing logs to complete.
+
+#### 4. Review & Validate
+* **Purpose**: Inspect outliers, negative baseline errors, or massive sales swings.
+* **Action**: View validation tables, flag rows for corrections, or proceed.
+
+#### 5. Approve Baseline
+* **Purpose**: Promotes the generated baseline to production. Once approved, it unlocks access to the **Final Plan** tab.
+
+### 📦 Product Launch (NPL)
+* **Roles**: Administrator, Planner, Product.
+* **Functionality**:
+  * Launch new product configurations by cloning reference parameters from a templates product to target cities.
+  * Displays warning logs, already-existing flags, and total insert metrics.
+  * Actions include **Fetch & Validate Product Mappings** followed by **Confirm & Sync to Master**.
+
+### 🔌 Hub Launch
+* **Roles**: Administrator, Planner.
+* **Functionality**:
+  * Setup target launched distribution centers using existing source reference hubs.
+  * **Fetch & Preview Mappings**: Queries parameters dynamically from the `FF Input` tab on the Hub Launch configuration spreadsheet.
+  * **Validations Grid**: Verifies if destination hubs exist in the `Hub Mapping` configurations. If validation fails, it lists warnings (e.g., *Hub Mapping missing row for new hub 'Test'*).
+  * **Confirm & Sync Hubs**: Appends configuration rows directly to `P-H Master` sheet. Enabled for partial syncs even if warnings are present on other rows.
+
+### 📋 Final Plan
+* **Roles**: Administrator, Planner.
+* **Functionality**:
+  * Exposes the final consolidated forecast plan. This remains locked until step 5 (Approve Baseline) has been confirmed.
+
+### ⚙️ Settings
+* **Roles**: All Roles.
+* **Functionality**:
+  * Update profile settings, change database connections, and view API endpoints paths.
 
 ---
 
-## 6. How to Test Changes Locally
-To verify sheet reading and sync calculations without deploying:
-1. Make changes to the `FF Input` spreadsheet tab.
-2. Run the local preview inspection script:
-   ```bash
-   $env:PYTHONPATH="src"
-   python scratch/inspect_new_hub_preview.py
-   ```
-3. Inspect `scratch/preview_output.json` to verify calculated preview outputs and validation status codes.
+## 4. Local Installation & Deployment Guidelines
+
+### A. Environment Configuration (.env)
+Create a `.env` file under the `backend/` directory:
+```env
+# Backend Server
+DATABASE_URL=sqlite:///forecasting_db.sqlite
+GOOGLE_CREDENTIALS_JSON={"type": "service_account", ...}
+NEW_HUB_LAUNCH_SHEET_URL=https://docs.google.com/spreadsheets/d/1ZraxKQ-oJPrIablGSaMffTBQiJSx9us7omj8yG3etVM/edit?usp=sharing
+```
+
+### B. Deployment & Production Setup
+1. **Frontend (Vercel)**:
+   * Build command: `npm run build`
+   * Environment variable required: `NEXT_PUBLIC_API_URL` pointing to backend host.
+2. **Backend (Docker & Hugging Face Spaces)**:
+   * Build container: `docker build -t forecast-backend -f Dockerfile .`
+   * Deployment: Direct push triggers on `git push hf main` rebuild the server.
