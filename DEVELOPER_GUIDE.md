@@ -207,13 +207,74 @@ Planners can execute baseline steps individually for granular control:
 
 #### ⚙️ Settings
 * **Target Audience**: All Roles.
-* **Purpose**: Configuration profiles manager.
-* **Inputs**: User input settings overrides (e.g. passwords, email address, API paths).
-* **Outputs**: Updated configuration profile records.
+* **Purpose**: Central system configuration profiles manager.
+* **Sub-Sections (Tabs)**:
+  1. **Profile**: Displays user authentication data (full name, centralized email address, and active role status). Updates are centralized.
+  2. **Preferences**: Allows switching local behaviors (e.g., toggling live automated email alerts, toggling automatic master configurations loads, and limiting table rows counts previews).
+  3. **Users (Admin Only)**: Allows admins to create new users, manage existing planner accounts, and delete inactive profiles.
+  4. **Email Config**: Shows SMTP status (Configured/Not Configured), allows sending test emails to validated planners, managing target recipient subscriber lists, and viewing raw transactional email logs.
+  5. **Session**: Exposes browser client metadata (timezone, platform resolution) alongside live backend API server system statistics.
+  6. **About**: Renders developer metadata, framework versions (FastAPI, Next.js), active database engines, and environment check statuses.
 
 ---
 
-# PART 3: LOCAL DEVELOPMENT & TESTING
+# PART 3: DOCKER & CONTAINER DEPLOYMENT DESIGN
+
+The analytical engine is fully containerized to ensure consistent execution environments between development and production space environments.
+
+## 1. Dockerfile Walkthrough & Explanations
+Here is the production Dockerfile (`Dockerfile`) used to build our backend image:
+
+```dockerfile
+# Planning Suite API — Hugging Face Spaces (Docker SDK) at root
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=7860 \
+    APP_ENV=production
+
+WORKDIR /app
+
+# System libraries: Postgres (psycopg2), build tools, R runtime (pyreadr / 6w RDS)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    r-base-core \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+COPY backend/app ./app
+COPY backend/src ./src
+COPY backend/scripts ./scripts
+
+# Writable artifact dirs (synced from Google Drive at startup when STORAGE_BACKEND=drive)
+RUN mkdir -p data/outputs/sheets_cache data/outputs/cache data/masters data/dp_logics data/analytics data/ff_inputs data/raw_actuals
+
+COPY backend/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+```
+
+### Explanations of Key Docker Instructions:
+* **`FROM python:3.12-slim-bookworm`**: Uses a lightweight, secure base image to minimize container size.
+* **`r-base-core`**: Installs R binaries required for analytical libraries (e.g. `pyreadr` RDS database parsing).
+* **`mkdir -p data/...`**: Creates directories with write permissions for saving local cached Parquet files.
+* **`docker-entrypoint.sh`**: Initializes database migrations, checks environment credentials, and starts the Uvicorn production server process.
+
+---
+
+# PART 4: LOCAL DEVELOPMENT & TESTING
 
 Follow these steps to run and test the application on your local machine.
 
