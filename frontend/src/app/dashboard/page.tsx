@@ -242,9 +242,10 @@ export default function DashboardPage() {
   ) => {
     setTrendsLoading(true);
     try {
-      const q = trendQuery(cities, cats, days, dod, wow);
-      const { data } = await api.get(`/api/dashboard/revenue-trends?${q}`);
-      setTrends(data);
+      // const q = trendQuery(cities, cats, days, dod, wow);
+      // const { data } = await api.get(`/api/dashboard/revenue-trends?${q}`);
+      // setTrends(data);
+      setTrends({ empty: true });
     } catch {
       setTrends({ empty: true });
     }
@@ -255,8 +256,9 @@ export default function DashboardPage() {
     if (!week) return;
     setAnalyticsLoading(true);
     try {
-      const { data } = await api.get(`/api/dashboard/analytics?week=${encodeURIComponent(week)}`);
-      setAnalytics(data);
+      // const { data } = await api.get(`/api/dashboard/analytics?week=${encodeURIComponent(week)}`);
+      // setAnalytics(data);
+      setAnalytics({ empty: true });
       setError("");
     } catch (e: any) {
       setError(e?.response?.data?.detail || "Failed to load week analytics");
@@ -278,12 +280,21 @@ export default function DashboardPage() {
     }
 
     try {
-      const { data } = await api.get<DashboardBootstrap>("/api/dashboard/bootstrap");
-      if (seq !== bootstrapSeq.current) return;
-      cacheSet(DASHBOARD_BOOTSTRAP_KEY, data, 300_000);
-      applyBootstrap(data);
-      setDataWarning(data.data_warning || "");
-      setError("");
+      // const { data } = await api.get<DashboardBootstrap>("/api/dashboard/bootstrap");
+      // if (seq !== bootstrapSeq.current) return;
+      // cacheSet(DASHBOARD_BOOTSTRAP_KEY, data, 300_000);
+      // applyBootstrap(data);
+      // setDataWarning(data.data_warning || "");
+      // setError("");
+      
+      // Load empty skeleton defaults to avoid loading dashboard data from backend
+      const dummyBootstrap: DashboardBootstrap = {
+        pipeline_card: { has_run: false },
+        weeks: { weeks: [], default_week: "" },
+        analytics: { empty: true },
+        revenue_trends: { empty: true, filters: { all_cities: [] } }
+      };
+      applyBootstrap(dummyBootstrap);
     } catch (e: unknown) {
       if (seq !== bootstrapSeq.current) return;
       const err = e as { response?: { data?: { detail?: string } } };

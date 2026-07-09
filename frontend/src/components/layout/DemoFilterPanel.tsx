@@ -15,7 +15,7 @@ type DemoFilter = {
 
 export default function DemoFilterPanel() {
   const { role, hydrated } = useAuth();
-  const admin = hydrated && role === "admin";
+  const isVisible = hydrated && ["admin", "planner", "viewer", "product"].includes(role);
   const [data, setData] = useState<DemoFilter | null>(null);
   const [loading, setLoading] = useState(true);
   const [city, setCity] = useState("All Cities");
@@ -24,7 +24,7 @@ export default function DemoFilterPanel() {
   const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
-    if (!admin) return;
+    if (!isVisible) return;
     setLoading(true);
     try {
       const { data: res } = await api.get<DemoFilter>("/api/demo-filter");
@@ -37,13 +37,13 @@ export default function DemoFilterPanel() {
     } finally {
       setLoading(false);
     }
-  }, [admin]);
+  }, [isVisible]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  if (!admin) return null;
+  if (!isVisible) return null;
 
   const hubOptions = data?.available_hubs || [];
 

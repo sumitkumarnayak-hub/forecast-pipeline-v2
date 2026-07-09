@@ -79,7 +79,7 @@ class DemoFilterBody(BaseModel):
 @router.post("")
 def update_filter(
     body: DemoFilterBody,
-    current_user: dict = Depends(require_admin),
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = int(current_user["sub"])
     state = set_demo_filter(user_id, city=body.city, hubs=body.hubs)
@@ -92,7 +92,7 @@ def update_filter(
 
 
 @router.delete("")
-def reset_filter(current_user: dict = Depends(require_admin)):
+def reset_filter(current_user: dict = Depends(get_current_user)):
     user_id = int(current_user["sub"])
     clear_demo_filter(user_id)
     return {"detail": "Demo filter cleared", "active": False}
