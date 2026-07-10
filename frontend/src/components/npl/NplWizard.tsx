@@ -548,8 +548,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           <div className="flex items-center justify-between w-full">
             <span className="font-semibold flex items-center gap-2">
               {planLevel === "hub" 
-                ? "⚠️ Hub Plan is synced! Please update the masters list and send email."
-                : "⚠️ FF Input is synced! Please update the masters list and send email."
+                ? "⚠️ Hub Plan is synced! Please update the masters list."
+                : "⚠️ FF Input is synced! Please update the masters list."
               }
             </span>
             <button 

@@ -604,8 +604,10 @@ def wizard_preview_sync(
             if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
                 header_row_idx = idx
                 break
-        sheet_headers = plan_sheet.row_values(header_row_idx)
-        columns = [str(h).strip() for h in sheet_headers if str(h).strip()]
+        sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
+        while sheet_headers and not sheet_headers[-1]:
+            sheet_headers.pop()
+        columns = list(sheet_headers)
 
         # 4. Fetch Product Master details map ONCE outside the loop to prevent loading ages
         pm_details_map = _get_product_master_details_map()
@@ -740,7 +742,10 @@ def wizard_submit(
             if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
                 header_row_idx = idx
                 break
-        sheet_headers = plan_sheet.row_values(header_row_idx)
+        sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
+        # Filter out trailing empty columns
+        while sheet_headers and not sheet_headers[-1]:
+            sheet_headers.pop()
         
         all_rows = plan_sheet.get_all_values()
         existing_keys = set()
@@ -1331,8 +1336,10 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
             header_row_idx = idx
             break
             
-    sheet_headers = plan_sheet.row_values(header_row_idx)
-    columns = [str(h).strip() for h in sheet_headers]
+    sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
+    while sheet_headers and not sheet_headers[-1]:
+        sheet_headers.pop()
+    columns = list(sheet_headers)
 
     # Pre-build product master details lookups map
     pm_details_map = _get_product_master_details_map()
