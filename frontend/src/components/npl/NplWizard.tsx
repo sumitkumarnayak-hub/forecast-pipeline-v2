@@ -547,7 +547,10 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         <div className="alert alert-warning mb-4 text-sm flex flex-col gap-2 p-4 border border-amber-200 rounded-xl bg-amber-50 text-amber-900 shadow-sm animate-fade-in">
           <div className="flex items-center justify-between w-full">
             <span className="font-semibold flex items-center gap-2">
-              ⚠️ FF Input is synced! Please update the masters list and send email.
+              {planLevel === "hub" 
+                ? "⚠️ Hub Plan is synced! Please update the masters list and send email."
+                : "⚠️ FF Input is synced! Please update the masters list and send email."
+              }
             </span>
             <button 
               className="btn btn-sm btn-secondary cursor-pointer"
@@ -558,7 +561,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </button>
           </div>
           <p className="text-xs text-amber-800 leading-normal">
-            The wizard has successfully appended the new product configurations. Please proceed to update the master sheets so the pipeline can read the fresh configs.
+            The wizard has successfully synced new product configurations to the {planLevel === "hub" ? "Hub_Plan" : "City_Plan (FF Input)"} sheet. Please update the master worksheets to reflect the new configurations.
           </p>
         </div>
       )}
