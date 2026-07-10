@@ -17,6 +17,71 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+@router.get("/cache-status")
+def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
+    """Expose details of parquet sheets_cache, modification dates, and defined TTLs."""
+    import time
+    from planning_suite.services import sheets_cache
+    from planning_suite import config as cfg
+    
+    # Files of interest
+    cached_sheets = [
+        {"worksheet": "P Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
+        {"worksheet": "P-L Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
+        {"worksheet": "P-H Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
+        {"worksheet": "Hub Mapping", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
+        {"worksheet": "Hub_Changes", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "pipeline_params"},
+        {"worksheet": "Variables", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "pipeline_params"},
+        {"worksheet": "Submission_Log", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
+        {"worksheet": "Hub level Suggestion", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "dp_logics"},
+        {"worksheet": "Launch_Output", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
+        {"worksheet": "City_Plan", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
+        {"worksheet": "Hub_Plan", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
+    ]
+    
+    status_list = []
+    for s in cached_sheets:
+        name = s["worksheet"]
+        category = s["category"]
+        ttl = sheets_cache.ttl_for_worksheet(name, category)
+        
+        # Calculate possible paths
+        p1 = sheets_cache.cache_path(s["sheet_key"] or "", name, "all")
+        p2 = sheets_cache.cache_path(s["sheet_key"] or "", name, "")
+        p3 = sheets_cache.cache_path_for_category(category, name)
+        
+        active_path = None
+        for p in (p1, p2, p3):
+            if p.exists():
+                active_path = p
+                break
+                
+        last_updated = "Never Fetched"
+        is_fresh = False
+        if active_path:
+            mtime = active_path.stat().st_mtime
+            age = time.time() - mtime
+            is_fresh = age <= ttl
+            last_updated = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime(mtime))
+            
+        # Frequency formatting
+        if ttl >= 3600:
+            freq = f"Every {ttl // 3600} hr(s)"
+        else:
+            freq = f"Every {ttl // 60} min(s)"
+            
+        status_list.append({
+            "name": name,
+            "category": category,
+            "last_updated": last_updated,
+            "fresh": is_fresh,
+            "frequency": freq,
+            "ttl": ttl
+        })
+        
+    return {"cache_status": status_list}
+
+
 @router.get("/info")
 def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
     """Return sheet URL and last sync timestamp for the NPL page header."""
