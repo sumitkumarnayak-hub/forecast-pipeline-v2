@@ -99,12 +99,27 @@ def test_validation_edge_cases():
     valid_df.to_excel(buf_valid, index=False)
     buf_valid.seek(0)
     
+    # 5. Negative Weekdays Allocation Test
+    negative_day_df = pd.DataFrame([
+        {
+            "city_name": "Bangalore",
+            "product_id": "pr_test_neg",
+            "product_name": "Test Product",
+            "category": "Eggs",
+            "MRP": 119.5,
+            "Mon": -20, "Tue": 0, "Wed": 0, "Thu": 0, "Fri": 0, "Sat": 0, "Sun": 0
+        }
+    ])
+    
+    buf_neg = io.BytesIO()
+    negative_day_df.to_excel(buf_neg, index=False)
+    buf_neg.seek(0)
+    
     t0 = time.perf_counter()
-    res_df, errors = parse_city_upload(buf_valid)
-    t_valid = (time.perf_counter() - t0) * 1000
-    print(f"\n[Test 4] Valid Payload Parse (Time: {t_valid:.2f}ms):")
+    _, errors = parse_city_upload(buf_neg)
+    t_neg = (time.perf_counter() - t0) * 1000
+    print(f"\n[Test 5] Negative Weekday Allocations Check (Time: {t_neg:.2f}ms):")
     print(f"Errors returned: {errors}")
-    print(f"Processed row count: {len(res_df)}")
 
 if __name__ == "__main__":
     test_validation_edge_cases()

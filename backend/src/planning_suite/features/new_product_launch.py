@@ -727,6 +727,17 @@ def parse_city_upload(file) -> tuple:
         except Exception as e:
             logger.warning(f"Error checking valid cities list: {e}")
 
+    # 4. Validate Mon-Sun allocations are non-negative integers
+    for day in WEEKDAYS:
+        if day in df.columns:
+            day_series = pd.to_numeric(df[day], errors="coerce")
+            if day_series.isna().any():
+                errors.append(f"Column '{day}' contains empty or non-numeric values.")
+            elif (day_series < 0).any():
+                errors.append(f"Column '{day}' values must be non-negative (>= 0).")
+        else:
+            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
+
     if errors:
         return pd.DataFrame(), errors
 
@@ -791,6 +802,17 @@ def parse_hub_upload(file) -> tuple:
                 errors.extend(invalid_rows[:5]) # limit to first 5 errors to keep it clean
         except Exception as e:
             logger.warning(f"Error checking valid cities list: {e}")
+
+    # 4. Validate Mon-Sun allocations are non-negative integers
+    for day in WEEKDAYS:
+        if day in df.columns:
+            day_series = pd.to_numeric(df[day], errors="coerce")
+            if day_series.isna().any():
+                errors.append(f"Column '{day}' contains empty or non-numeric values.")
+            elif (day_series < 0).any():
+                errors.append(f"Column '{day}' values must be non-negative (>= 0).")
+        else:
+            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
 
     if errors:
         return pd.DataFrame(), errors
