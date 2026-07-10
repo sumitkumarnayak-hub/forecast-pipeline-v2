@@ -753,3 +753,156 @@ def notify_npl_submitted(
             "detail": approval_result.detail,
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hub Launch: FF Input Sheet Change Notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
+    """
+    Send an immediate email when the FF Input sheet changes are detected.
+    version_entry = { detected_at, summary, diff: {added, removed, modified}, headers, ... }
+    Uses a rich HTML email styled like Google Sheets version history.
+    """
+    import html as _html
+
+    diff    = version_entry.get("diff", {})
+    summary = version_entry.get("summary", "changes detected")
+    det_at  = version_entry.get("detected_at", "")
+    headers = version_entry.get("headers", [])
+    before  = version_entry.get("row_count_before", 0)
+    after   = version_entry.get("row_count_after", 0)
+
+    # Format IST timestamp
+    try:
+        from datetime import datetime, timezone, timedelta
+        IST = timezone(timedelta(hours=5, minutes=30))
+        dt  = datetime.fromisoformat(det_at.replace("Z", "+00:00")).astimezone(IST)
+        ts_str = dt.strftime("%d %b %Y, %I:%M:%S %p IST")
+    except Exception:
+        ts_str = det_at
+
+    def _th(cols: list[str]) -> str:
+        ths = "".join(
+            f"<th style='padding:6px 10px;background:#F1F5F9;border:1px solid #E2E8F0;"
+            f"font-size:11px;text-transform:uppercase;color:#64748B;white-space:nowrap;'>"
+            f"{_html.escape(c)}</th>"
+            for c in cols
+        )
+        return f"<tr>{ths}</tr>"
+
+    def _row_html(row: dict, cols: list[str], bg: str, text: str,
+                  changed_cells: list[str] | None = None,
+                  before_vals: dict | None = None) -> str:
+        cells = []
+        for c in cols:
+            val = _html.escape(str(row.get(c, "")).strip())
+            if changed_cells and c in changed_cells and before_vals:
+                old = _html.escape(str(before_vals.get(c, "")).strip())
+                cell_html = (
+                    f"<span style='background:#FEF08A;border-radius:2px;padding:1px 3px;'>"
+                    f"<del style='color:#EF4444;'>{old}</del>"
+                    f" → <strong>{val}</strong></span>"
+                )
+            else:
+                cell_html = val
+            cells.append(
+                f"<td style='padding:5px 10px;border:1px solid #E2E8F0;"
+                f"background:{bg};color:{text};font-size:12px;'>{cell_html}</td>"
+            )
+        return "<tr>" + "".join(cells) + "</tr>"
+
+    def _table_section(title: str, rows_html: str, cols: list[str], accent: str) -> str:
+        if not rows_html:
+            return ""
+        return f"""
+        <div style='margin-bottom:16px;'>
+          <p style='margin:0 0 6px 0;font-weight:700;font-size:13px;color:{accent};'>{title}</p>
+          <div style='overflow-x:auto;'>
+            <table style='border-collapse:collapse;width:100%;font-family:Inter,monospace;'>
+              {_th(cols)}
+              {rows_html}
+            </table>
+          </div>
+        </div>"""
+
+    # Build row HTML for each change type
+    added_html   = "".join(_row_html(r, headers, "#F0FDF4", "#166534")          for r in diff.get("added", []))
+    removed_html = "".join(_row_html(r, headers, "#FEF2F2", "#991B1B")          for r in diff.get("removed", []))
+    modified_html = "".join(
+        _row_html(m["row"], headers, "#FFFBEB", "#92400E",
+                  changed_cells=m["changed_cells"],
+                  before_vals=m["before"])
+        for m in diff.get("modified", [])
+    )
+
+    table_html = (
+        _table_section(f"+ Added ({len(diff.get('added', []))}) rows",   added_html,    headers, "#16A34A")
+        + _table_section(f"✕ Removed ({len(diff.get('removed', []))}) rows", removed_html,  headers, "#DC2626")
+        + _table_section(f"~ Modified ({len(diff.get('modified', []))}) rows", modified_html, headers, "#D97706")
+    )
+
+    if not table_html.strip():
+        table_html = "<p style='color:#64748B;'>No row-level diff available.</p>"
+
+    html_body = f"""
+    <div style='font-family:Inter,Segoe UI,sans-serif;max-width:680px;color:#0F172A;'>
+      <div style='background:#1E293B;padding:16px 20px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:1.1rem;color:#F8FAFC;'>
+          📋 FF Input Sheet — Changes Detected
+        </h2>
+        <p style='margin:4px 0 0 0;font-size:0.8rem;color:#94A3B8;'>{ts_str}</p>
+      </div>
+      <div style='padding:16px 20px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 8px 8px;'>
+        <p style='margin:0 0 12px 0;'>
+          The <strong>FF Input</strong> tab of the New Hub Launch sheet has been updated.
+          <strong>Please update the Master sheets accordingly.</strong>
+        </p>
+        <table style='border-collapse:collapse;margin:0 0 16px 0;'>
+          <tr>
+            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Summary</td>
+            <td style='padding:4px 0;font-size:12px;font-weight:700;color:#0F172A;'>{_html.escape(summary)}</td>
+          </tr>
+          <tr>
+            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Row count</td>
+            <td style='padding:4px 0;font-size:12px;color:#475569;'>{before} → {after}</td>
+          </tr>
+          <tr>
+            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Detected at</td>
+            <td style='padding:4px 0;font-size:12px;color:#475569;'>{ts_str}</td>
+          </tr>
+        </table>
+        <div style='margin-bottom:8px;'>
+          <strong style='font-size:13px;'>Change Details:</strong>
+          <p style='margin:4px 0 0 0;font-size:11px;color:#64748B;'>
+            🟢 Green = added &nbsp;|&nbsp; 🔴 Red = removed &nbsp;|&nbsp; 🟡 Yellow = modified cell (old → new)
+          </p>
+        </div>
+        {table_html}
+        <p style='margin-top:16px;padding:12px;background:#EFF6FF;border-radius:8px;
+                  border-left:4px solid #2563EB;font-size:12px;'>
+          <strong>Action required:</strong> Open Planning Suite → <strong>Hub Launch</strong>
+          and click <strong>Fetch &amp; Preview Sync Mappings</strong> to review the updated
+          configuration before syncing to P-H Master.
+        </p>
+        <p style='margin-top:16px;font-size:11px;color:#94A3B8;'>
+          Planning Suite · FF Input Change Watcher · {ts_str}
+        </p>
+      </div>
+    </div>"""
+
+    return _safe_operational_send(
+        event="ff_input_changed",
+        category="general",
+        subject=f"[Hub Launch] FF Input sheet updated — {summary} ({ts_str})",
+        html_body=html_body,
+        triggered_by_user_id=None,
+        metadata={
+            "summary": summary,
+            "detected_at": det_at,
+            "added_count": len(diff.get("added", [])),
+            "removed_count": len(diff.get("removed", [])),
+            "modified_count": len(diff.get("modified", [])),
+        },
+    )

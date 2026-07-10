@@ -120,6 +120,15 @@ async def lifespan(app: FastAPI):
         start_cache_warmup()
     except Exception as exc:
         logger.warning("Cache warmup warning: %s", exc)
+
+    try:
+        from planning_suite.services.ff_input_watcher import start_ff_input_watcher
+
+        start_ff_input_watcher(interval_seconds=45)
+        logger.info("FF Input change watcher started (45s interval)")
+    except Exception as exc:
+        logger.warning("FF Input watcher startup warning: %s", exc)
+
     yield
 
 

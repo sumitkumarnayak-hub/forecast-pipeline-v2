@@ -457,9 +457,42 @@ def npl_ff_input_data(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/sync-new-hub/change-status")
+def npl_ff_input_change_status(current_user: dict = Depends(get_current_user)):
+    """
+    Returns the current FF Input change watcher state for frontend polling.
+    Frontend should call this every ~30 seconds to detect new changes automatically.
+    """
+    try:
+        from planning_suite.services.ff_input_watcher import get_change_status
+        status = get_change_status()
+        return {
+            "change_detected": status["change_detected"],
+            "change_history": status["change_history"],
+            "last_checked_at": status["last_checked_at"],
+            "watcher_started": status["watcher_started"],
+            "poll_interval_seconds": status["poll_interval_seconds"],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/sync-new-hub/dismiss-changes")
+def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
+    """
+    Clears the change_detected flag. Version history is preserved.
+    Call this when user clicks Dismiss on the notification banner.
+    """
+    try:
+        from planning_suite.services.ff_input_watcher import dismiss_changes
+        dismiss_changes()
+        return {"ok": True, "message": "Change notification dismissed. History preserved."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/sync-new-hub/confirm")
+
 def npl_confirm_new_hub_sync(
     body: ConfirmHubSyncBody,
     current_user: dict = Depends(require_write),
