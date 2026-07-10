@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
@@ -11,7 +11,7 @@ import {
   Landmark,
   Eye,
   Database,
-  GitDiff,
+  ArrowLeftRight,
   Bell,
   ChevronRight,
 } from "lucide-react";
@@ -312,7 +312,7 @@ export default function HubLaunchTab() {
           padding: "1rem",
         }}>
           <div className="flex items-start gap-3">
-            <GitDiff size={18} className="shrink-0 mt-0.5" style={{ color: "#a855f7" }} />
+            <ArrowLeftRight size={18} className="shrink-0 mt-0.5" style={{ color: "#a855f7" }} />
             <div style={{ flex: 1 }}>
               <div style={{
                 fontWeight: 600,
