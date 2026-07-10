@@ -706,14 +706,15 @@ def notify_npl_submitted(
         "Cities": _esc(cities_label) if cities_label else "—",
         "Hub rows": str(hub_count),
         "Launch date(s)": _esc(date_label),
-        "Submitted by": _esc(submitted_by) if submitted_by else "—",
+        "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
 
+    # Pass pre-compiled HTML to build_email_html since build_email_html escapes intro
     success_html = build_email_html(
         headline="New launch plan synced to Masters",
-        intro=f"A <strong>{_esc(sub_type)}</strong> plan was successfully synced to the Google Sheet. <strong>Please update the master lists worksheets to reflect the new configs.</strong>",
+        intro=f"A {sub_type} plan was successfully synced to the Google Sheet. Please update the master lists worksheets to reflect the new configs.",
         fields=fields,
-        action="Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
+        action=f"Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
     )
     success_result = _safe_operational_send(
         event="npl_submitted",
@@ -727,14 +728,9 @@ def notify_npl_submitted(
 
     approval_html = build_email_html(
         headline="Launch plan synced to Masters - Update required",
-        intro=(
-            f"A new <strong>{_esc(sub_type)}</strong> plan has been synced to target master sheets. "
-            "<strong>Action Required: Please update the master worksheets to complete the launch setup.</strong>"
-        ),
+        intro=f"A new {sub_type} plan has been synced to target master sheets. Action Required: Please update the master worksheets to complete the launch setup.",
         fields=fields,
-        action=(
-            "Please update the master worksheets (P-H Master / Hub Mapping) as required."
-        ),
+        action="Please update the master worksheets (P-H Master / Hub Mapping) as required.",
     )
     approval_result = _safe_operational_send(
         event="npl_approval_needed",

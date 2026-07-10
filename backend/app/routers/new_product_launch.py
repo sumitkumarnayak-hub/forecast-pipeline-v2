@@ -728,23 +728,29 @@ def wizard_submit(
                     val = 0
                 aggregated_sources[group_key][day] += val
 
-        # 1.3 Append to City_Plan of NEW_PRODUCT_LAUNCH_SHEET_KEY
-        city_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "City_Plan")
-        sheet_sample = city_plan_sheet.get("A1:AP5")
+        # 1.3 Determine level target tab dynamically: if any row has a hub, target is Hub_Plan, else City_Plan
+        has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
+        target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+
+        plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+        sheet_sample = plan_sheet.get("A1:AP5")
         header_row_idx = 1
         for idx, r in enumerate(sheet_sample, 1):
             normalized_row = [str(x).strip().upper() for x in r]
-            if "OWNER" in normalized_row or "PRODUCT_ID" in normalized_row:
+            if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
                 header_row_idx = idx
                 break
-        sheet_headers = city_plan_sheet.row_values(header_row_idx)
+        sheet_headers = plan_sheet.row_values(header_row_idx)
         
-        all_rows = city_plan_sheet.get_all_values()
+        all_rows = plan_sheet.get_all_values()
         existing_keys = set()
         for row in all_rows[header_row_idx:]:
             if len(row) < len(sheet_headers):
                 row = row + [""] * (len(sheet_headers) - len(row))
-            key = _npl_city_plan_key(row, sheet_headers)
+            if target_worksheet == "Hub_Plan":
+                key = _npl_hub_plan_key_dynamic(row, sheet_headers)
+            else:
+                key = _npl_city_plan_key(row, sheet_headers)
             if key:
                 existing_keys.add(key)
 
@@ -753,15 +759,40 @@ def wizard_submit(
 
         values_to_append = []
         update_date = datetime.now().strftime("%Y-%m-%d")
-        for source in aggregated_sources.values():
-            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-            key = _npl_city_plan_key(row_vals, sheet_headers)
+        for source in rows:
+            row_source = {
+                "Submission_Type": body.sub_type,
+                "Product ID": str(source.get("product_id", "")).strip(),
+                "Product Name": source.get("product_name", ""),
+                "Category": source.get("category", ""),
+                "City": source.get("city_name", ""),
+                "Hub": str(source.get("hub_name", "")).strip(),
+                "MRP": source.get("MRP", ""),
+                "Start Date": source.get("Launch Date", ""),
+                "Submitted_By": username,
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Mon": source.get("Mon", 0),
+                "Tue": source.get("Tue", 0),
+                "Wed": source.get("Wed", 0),
+                "Thu": source.get("Thu", 0),
+                "Fri": source.get("Fri", 0),
+                "Sat": source.get("Sat", 0),
+                "Sun": source.get("Sun", 0),
+                "_owner_email": "",
+            }
+            if target_worksheet == "Hub_Plan":
+                row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+                key = _npl_hub_plan_key_dynamic(row_vals, sheet_headers)
+            else:
+                row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+                key = _npl_city_plan_key(row_vals, sheet_headers)
+                
             if key and key in existing_keys:
                 continue
             values_to_append.append(row_vals)
 
         if values_to_append:
-            city_plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED")
+            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED")
 
         # 1.5 Mark submission status as Approved (or Synced) immediately
         update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")

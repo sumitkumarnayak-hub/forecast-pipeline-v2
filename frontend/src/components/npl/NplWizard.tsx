@@ -77,7 +77,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [stepState, setStepState] = useState<{ step: string; status: "idle" | "loading" | "success" | "error"; message: string }>({ step: "", status: "idle", message: "" });
 
   const [category, setCategory] = useState("");
-  const [planLevel, setPlanLevel] = useState<"city" | "hub">("city");
+  const [planLevel, setPlanLevel] = useState<"city" | "hub" | "">("");
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
 
   // --- Hub catalog vs. hub selection --------------------------------------
@@ -713,13 +713,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               </div>
             )}
             <div className="form-group">
-              <label className="form-label">Plan Level</label>
+              <label className="form-label">Plan Level <span className="text-danger">*</span></label>
               <select
                 className="form-input text-sm"
                 value={planLevel}
-                onChange={e => setPlanLevel(e.target.value as "city" | "hub")}
+                onChange={e => setPlanLevel(e.target.value as "city" | "hub" | "")}
                 disabled={readOnly}
               >
+                <option value="">Select Plan Level</option>
                 <option value="city">City Level</option>
                 <option value="hub">Hub Level</option>
               </select>
@@ -812,12 +813,22 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </div>
           )}
           <div className="flex gap-2 mb-4">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={downloadTemplate} disabled={readOnly || busy === "template"}>
+            <button 
+              type="button" 
+              className="btn btn-secondary btn-sm" 
+              onClick={downloadTemplate} 
+              disabled={readOnly || busy === "template" || !planLevel}
+            >
               <Download size={13} /> Download template
             </button>
-            <label className="btn btn-primary btn-sm" style={{ cursor: readOnly ? "not-allowed" : "pointer" }}>
-              <Upload size={13} /> Upload filled file
-              <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
+            <label 
+              className="btn btn-primary btn-sm" 
+              style={{ cursor: (readOnly || !planLevel) ? "not-allowed" : "pointer", opacity: (!planLevel) ? 0.6 : 1 }}
+            >
+              <Upload size={13} /> {(!planLevel) ? "Select Plan Level first" : "Upload filled file"}
+              {planLevel && (
+                <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
+              )}
             </label>
           </div>
         </>
