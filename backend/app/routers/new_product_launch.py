@@ -1234,9 +1234,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
 
 
 def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_check: bool) -> dict:
-    """Build the exact City_Plan rows for preview or sync."""
+    """Build the exact City_Plan or Hub_Plan rows for preview or sync."""
     from datetime import datetime
-
     from planning_suite import config as cfg
     from planning_suite.features.new_product_launch import _open_sheet
 
@@ -1258,33 +1257,45 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
     if statuses != {"approved"}:
         raise RuntimeError("Approve this submission before previewing or syncing it.")
 
-    city_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "City_Plan")
+    # Determine sync plan level target tab: if Hub column contains data, target is Hub_Plan, else City_Plan
+    has_hubs = any(str(r.get("Hub", "")).strip() for r in matching_rows)
+    target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+    
+    plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
     
     # Locate header row dynamically (row containing OWNER or PRODUCT_ID)
-    sheet_sample = city_plan_sheet.get("A1:AP5")
+    sheet_sample = plan_sheet.get("A1:AP5")
     header_row_idx = 1
     for idx, r in enumerate(sheet_sample, 1):
         normalized_row = [str(x).strip().upper() for x in r]
-        if "OWNER" in normalized_row or "PRODUCT_ID" in normalized_row:
+        if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
             header_row_idx = idx
             break
             
-    sheet_headers = city_plan_sheet.row_values(header_row_idx)
+    sheet_headers = plan_sheet.row_values(header_row_idx)
     columns = [str(h).strip() for h in sheet_headers]
+
+    # Pre-build product master details lookups map
+    pm_details_map = _get_product_master_details_map()
 
     existing_keys = set()
     if include_existing_check:
-        all_rows = city_plan_sheet.get_all_values()
+        all_rows = plan_sheet.get_all_values()
         for row in all_rows[header_row_idx:]:
             if len(row) < len(sheet_headers):
                 row = row + [""] * (len(sheet_headers) - len(row))
-            key = _npl_city_plan_key(row, sheet_headers)
+            if target_worksheet == "Hub_Plan":
+                key = _npl_hub_plan_key_dynamic(row, sheet_headers)
+            else:
+                key = _npl_city_plan_key(row, sheet_headers)
             if key:
                 existing_keys.add(key)
 
-    # Group/aggregate matching hub rows into city rows
-    WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    aggregated_sources = {}
+    values = []
+    rows = []
+    skipped = 0
+    update_date = datetime.now().strftime("%Y-%m-%d")
+    
     for source in matching_rows:
         sub_type = source.get("Submission_Type", "New Launch")
         pid = str(source.get("Product ID", "")).strip()
@@ -1296,37 +1307,42 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
         submitted_by = source.get("Submitted_By", "")
         timestamp = source.get("Timestamp", "")
         
-        group_key = (sub_type, pid, pname, cat, city, mrp, start_date)
-        if group_key not in aggregated_sources:
-            aggregated_sources[group_key] = {
-                "Submission_Type": sub_type,
-                "Product ID": pid,
-                "Product Name": pname,
-                "Category": cat,
-                "City": city,
-                "MRP": mrp,
-                "Start Date": start_date,
-                "Submitted_By": submitted_by,
-                "Timestamp": timestamp,
-                "Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0, "Fri": 0, "Sat": 0, "Sun": 0
-            }
-        for day in WEEKDAYS:
-            try:
-                val = int(float(source.get(day, 0) or 0))
-            except Exception:
-                val = 0
-            aggregated_sources[group_key][day] += val
+        # Format dates properly
+        fmt_start_date = _format_date_npl(start_date)
+        fmt_timestamp = timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
 
-    values = []
-    rows = []
-    skipped = 0
-    update_date = datetime.now().strftime("%Y-%m-%d")
-    for source in aggregated_sources.values():
-        row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date)
-        key = _npl_city_plan_key(row_vals, sheet_headers)
+        row_source = {
+            "Submission_Type": sub_type,
+            "Product ID": pid,
+            "Product Name": pname,
+            "Category": cat,
+            "City": city,
+            "Hub": str(source.get("Hub", "")).strip(),
+            "MRP": mrp,
+            "Start Date": fmt_start_date,
+            "Submitted_By": submitted_by,
+            "Timestamp": fmt_timestamp,
+            "Mon": source.get("Mon", 0),
+            "Tue": source.get("Tue", 0),
+            "Wed": source.get("Wed", 0),
+            "Thu": source.get("Thu", 0),
+            "Fri": source.get("Fri", 0),
+            "Sat": source.get("Sat", 0),
+            "Sun": source.get("Sun", 0),
+            "_owner_email": source.get("_owner_email", ""),
+        }
+
+        if target_worksheet == "Hub_Plan":
+            row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+            key = _npl_hub_plan_key_dynamic(row_vals, sheet_headers)
+        else:
+            row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+            key = _npl_city_plan_key(row_vals, sheet_headers)
+            
         if key and key in existing_keys:
             skipped += 1
             continue
+            
         values.append(row_vals)
         rows.append(dict(zip(columns, row_vals)))
         if key:
@@ -1335,7 +1351,7 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
     return {
         "status": "ready",
         "spreadsheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
-        "worksheet": "City_Plan",
+        "worksheet": target_worksheet,
         "columns": columns,
         "rows": rows,
         "values": values,
@@ -1346,66 +1362,107 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
 
 
 def _append_approved_to_new_product_launch(submission_id: str) -> dict:
-    """Append approved Submission_Log rows to the env-configured NPL City_Plan sheet."""
+    """Append approved Submission_Log rows to the env-configured NPL City_Plan or Hub_Plan sheet."""
     from planning_suite import config as cfg
     from planning_suite.features.new_product_launch import _open_sheet
 
     prepared = _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
     values = prepared.pop("values", [])
+    target_worksheet = prepared["worksheet"]
+    
     if values:
-        city_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "City_Plan")
-        city_plan_sheet.append_rows(values, value_input_option="USER_ENTERED")
+        plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+        plan_sheet.append_rows(values, value_input_option="USER_ENTERED")
 
     logger.info(
-        "[NPL] approval sync complete for %s: appended=%d skipped=%d target=%s!City_Plan",
+        "[NPL] approval sync complete for %s: appended=%d skipped=%d target=%s!%s",
         submission_id,
         len(values),
         prepared["rows_skipped"],
         cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
+        target_worksheet,
     )
     return {
         "status": "success",
-        "worksheet": "City_Plan",
+        "worksheet": target_worksheet,
         "rows_appended": len(values),
         "rows_skipped": prepared["rows_skipped"],
         "matched_rows": prepared["matched_rows"],
     }
 
 
-def _build_hub_plan_row(source: dict, *, update_date: str) -> list:
+def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: str, pm_details_map: dict | None = None) -> list:
+    row = []
     pid = str(source.get("Product ID", "")).strip()
-    return [
-        "Demand Planning",
-        source.get("Submission_Type", "New Launch"),
-        "App",
-        update_date,
-        source.get("Category", ""),
-        pid,
-        source.get("Product Name", ""),
-        pid,
-        "",
-        source.get("City", ""),
-        source.get("Hub", ""),
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        source.get("MRP", ""),
-        source.get("Start Date", ""),
-        source.get("Mon", 0),
-        source.get("Tue", 0),
-        source.get("Wed", 0),
-        source.get("Thu", 0),
-        source.get("Fri", 0),
-        source.get("Sat", 0),
-        source.get("Sun", 0),
-        "Confirmed",
-        "",
-        "",
-        source.get("Submitted_By", ""),
-    ]
+    
+    # Use cached map if provided
+    pm_details = pm_details_map.get(pid, {}) if pm_details_map is not None else {}
+    
+    for h in headers:
+        h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
+        if h_norm in ("owner", "owner name"):
+            row.append("Demand Planning")
+        elif h_norm == "type":
+            row.append(source.get("Submission_Type", "New Launch"))
+        elif h_norm == "channel":
+            row.append("App")
+        elif h_norm in ("update date", "updated date"):
+            row.append(_format_date_npl(update_date))
+        elif h_norm in ("sub category", "subcategory"):
+            row.append(source.get("Category", ""))
+        elif h_norm in ("product id", "sku", "product_id"):
+            row.append(pid)
+        elif h_norm in ("product name", "sku name", "product_name"):
+            row.append(source.get("Product Name", ""))
+        elif h_norm == "anchor id":
+            row.append(pid)
+        elif h_norm in ("city", "city name"):
+            row.append(source.get("City", ""))
+        elif h_norm in ("hub name", "hub_name", "hub"):
+            row.append(source.get("Hub", ""))
+        elif h_norm in ("mrp", "mrp (before kvi discount)"):
+            row.append(source.get("MRP", ""))
+        elif h_norm == "change date":
+            row.append(_format_date_npl(source.get("Start Date", "")))
+        elif h_norm == "uom":
+            row.append(source.get("UOM", pm_details.get("UOM", "")))
+        elif h_norm == "yield":
+            row.append(source.get("Yield", pm_details.get("Yield", "")))
+        elif h_norm == "rm":
+            row.append(source.get("RM", pm_details.get("RM", "")))
+        elif h_norm in ("meat ratio (for va)", "meat ratio"):
+            row.append(source.get("Meat Ratio (for VA)", "NA"))
+        elif h_norm == "total shelf life":
+            row.append(source.get("Total Shelf Life", pm_details.get("Total Shelf Life", "")))
+        elif h_norm == "hub shelf life":
+            row.append(source.get("Hub Shelf Life", pm_details.get("Hub Shelf Life", "")))
+        elif h_norm == "plu code":
+            row.append(source.get("PLU_CODE", pm_details.get("PLU_CODE", "")))
+        elif h_norm == "mon":
+            row.append(int(float(source.get("Mon", 0) or 0)))
+        elif h_norm == "tue":
+            row.append(int(float(source.get("Tue", 0) or 0)))
+        elif h_norm == "wed":
+            row.append(int(float(source.get("Wed", 0) or 0)))
+        elif h_norm == "thu":
+            row.append(int(float(source.get("Thu", 0) or 0)))
+        elif h_norm == "fri":
+            row.append(int(float(source.get("Fri", 0) or 0)))
+        elif h_norm == "sat":
+            row.append(int(float(source.get("Sat", 0) or 0)))
+        elif h_norm == "sun":
+            row.append(int(float(source.get("Sun", 0) or 0)))
+        elif h_norm in ("planning confirmation", "planning confirm"):
+            row.append("Confirmed")
+        elif h_norm == "submitted by":
+            row.append(source.get("Submitted_By", ""))
+        elif h_norm == "owner email":
+            row.append(source.get("_owner_email", ""))
+        elif h_norm == "submitted at":
+            row.append(source.get("Timestamp", ""))
+        else:
+            row.append("")
+    return row
 
 
 def _normalize_hub_plan_headers(headers: list[str]) -> list[str]:
@@ -1432,3 +1489,24 @@ def _npl_hub_plan_key_from_b_to_s(row: list) -> tuple[str, str, str, str, str] |
     values = [row[0], row[4], row[8], row[9], row[17]]
     key = tuple(str(v).strip().lower() for v in values)
     return key if all(key) else None
+
+
+def _npl_hub_plan_key_dynamic(row_vals: list, headers: list[str]) -> tuple[str, str, str, str, str] | None:
+    try:
+        type_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "type")
+        pid_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "productid")
+        city_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "city")
+        hub_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "hubname")
+        date_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "change date")
+        
+        val_type = str(row_vals[type_idx]).strip().lower()
+        val_pid = str(row_vals[pid_idx]).strip().lower()
+        val_city = str(row_vals[city_idx]).strip().lower()
+        val_hub = str(row_vals[hub_idx]).strip().lower()
+        val_date = str(row_vals[date_idx]).strip().lower()
+        
+        if val_type and val_pid and val_city and val_hub and val_date:
+            return (val_type, val_pid, val_city, val_hub, val_date)
+    except Exception:
+        pass
+    return None

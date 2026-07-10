@@ -693,7 +693,43 @@ def parse_city_upload(file) -> tuple:
     missing = [c for c in ["city_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
+    
     errors = []
+    
+    # 1. Clean nulls & check for empty columns
+    for col in ["city_name", "product_id"]:
+        if col in df.columns:
+            if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
+                errors.append(f"Row values in column '{col}' cannot be empty.")
+    
+    # 2. Validate MRP is not empty, numeric and > 0
+    if "MRP" in df.columns:
+        mrp_series = pd.to_numeric(df["MRP"], errors="coerce")
+        if mrp_series.isna().any():
+            errors.append("Column 'MRP' contains empty or non-numeric values.")
+        elif (mrp_series <= 0).any():
+            errors.append("Column 'MRP' values must be strictly greater than 0.")
+    else:
+        errors.append("Column 'MRP' is missing from the uploaded sheet.")
+
+    # 3. Validate cities list against official list
+    if "city_name" in df.columns and not errors:
+        try:
+            from planning_suite.features.new_product_launch import load_salience_source, get_cities_from_salience
+            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_salience_source())}
+            invalid_rows = []
+            for idx, row in df.iterrows():
+                city = str(row["city_name"]).strip()
+                if city.lower() not in valid_cities:
+                    invalid_rows.append(f"Row {idx+2}: '{city}' is not a valid planning city.")
+            if invalid_rows:
+                errors.extend(invalid_rows[:5]) # limit to first 5 errors to keep it clean
+        except Exception as e:
+            logger.warning(f"Error checking valid cities list: {e}")
+
+    if errors:
+        return pd.DataFrame(), errors
+
     try:
         df = CITY_UPLOAD_SCHEMA.validate(df)
     except Exception as err:
@@ -722,7 +758,43 @@ def parse_hub_upload(file) -> tuple:
     missing = [c for c in ["city_name", "hub_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
+    
     errors = []
+    
+    # 1. Clean nulls & check for empty columns
+    for col in ["city_name", "hub_name", "product_id"]:
+        if col in df.columns:
+            if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
+                errors.append(f"Row values in column '{col}' cannot be empty.")
+    
+    # 2. Validate MRP is not empty, numeric and > 0
+    if "MRP" in df.columns:
+        mrp_series = pd.to_numeric(df["MRP"], errors="coerce")
+        if mrp_series.isna().any():
+            errors.append("Column 'MRP' contains empty or non-numeric values.")
+        elif (mrp_series <= 0).any():
+            errors.append("Column 'MRP' values must be strictly greater than 0.")
+    else:
+        errors.append("Column 'MRP' is missing from the uploaded sheet.")
+
+    # 3. Validate cities list against official list
+    if "city_name" in df.columns and not errors:
+        try:
+            from planning_suite.features.new_product_launch import load_salience_source, get_cities_from_salience
+            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_salience_source())}
+            invalid_rows = []
+            for idx, row in df.iterrows():
+                city = str(row["city_name"]).strip()
+                if city.lower() not in valid_cities:
+                    invalid_rows.append(f"Row {idx+2}: '{city}' is not a valid planning city.")
+            if invalid_rows:
+                errors.extend(invalid_rows[:5]) # limit to first 5 errors to keep it clean
+        except Exception as e:
+            logger.warning(f"Error checking valid cities list: {e}")
+
+    if errors:
+        return pd.DataFrame(), errors
+
     try:
         df = HUB_UPLOAD_SCHEMA.validate(df)
     except Exception as err:

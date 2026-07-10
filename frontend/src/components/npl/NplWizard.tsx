@@ -143,6 +143,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   const [syncSteps, setSyncSteps] = useState<SyncStep[]>(SYNC_STEPS_DEFAULT);
   const [showSyncSteps, setShowSyncSteps] = useState(false);
+  const [showSyncBanner, setShowSyncBanner] = useState(false);
 
   // Use a ref so the stage-change effect captures the latest function references
   const confirmActionsRef = useRef<{ checkDuplicates: () => void; previewSync: () => void } | null>(null);
@@ -423,6 +424,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setEmailResult(data.email || null);
       setMsg({ text: `Synced successfully! Submission ID: ${data.submission_id}`, type: "success" });
       setStepState({ step: "submit", status: "success", message: "Successfully synced" });
+      setShowSyncBanner(true);
 
       // Reset the wizard after a short delay (e.g. 2.5 seconds) so user can see step-wise green checkmarks
       setTimeout(() => {
@@ -541,6 +543,25 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   return (
     <div className="card" style={{ padding: "1.25rem" }}>
+      {showSyncBanner && (
+        <div className="alert alert-warning mb-4 text-sm flex flex-col gap-2 p-4 border border-amber-200 rounded-xl bg-amber-50 text-amber-900 shadow-sm animate-fade-in">
+          <div className="flex items-center justify-between w-full">
+            <span className="font-semibold flex items-center gap-2">
+              ⚠️ FF Input is synced! Please update the masters list and send email.
+            </span>
+            <button 
+              className="btn btn-sm btn-secondary cursor-pointer"
+              onClick={() => setShowSyncBanner(false)}
+              style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }}
+            >
+              Dismiss
+            </button>
+          </div>
+          <p className="text-xs text-amber-800 leading-normal">
+            The wizard has successfully appended the new product configurations. Please proceed to update the master sheets so the pipeline can read the fresh configs.
+          </p>
+        </div>
+      )}
       <h4 style={{ margin: "0 0 0.25rem" }}>{title}</h4>
       <p className="text-xs text-muted mb-4">{description}</p>
       {nplLoading && !context && (

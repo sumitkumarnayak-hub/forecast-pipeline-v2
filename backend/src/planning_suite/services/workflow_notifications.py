@@ -710,15 +710,15 @@ def notify_npl_submitted(
     }
 
     success_html = build_email_html(
-        headline="New launch plan submitted",
-        intro=f"A <strong>{_esc(sub_type)}</strong> plan was successfully submitted and written to the Google Sheet.",
+        headline="New launch plan synced to Masters",
+        intro=f"A <strong>{_esc(sub_type)}</strong> plan was successfully synced to the Google Sheet. <strong>Please update the master lists worksheets to reflect the new configs.</strong>",
         fields=fields,
         action="Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
     )
     success_result = _safe_operational_send(
         event="npl_submitted",
         category="launch_planner",
-        subject=f"[Planning Suite] Launch submitted — {product_name} ({sub_type})",
+        subject=f"[Planning Suite] Sync Completed: Update Masters — {product_name} ({sub_type})",
         html_body=success_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
@@ -726,21 +726,20 @@ def notify_npl_submitted(
     )
 
     approval_html = build_email_html(
-        headline="Launch plan awaiting approval",
+        headline="Launch plan synced to Masters - Update required",
         intro=(
-            f"A new <strong>{_esc(sub_type)}</strong> plan has been submitted "
-            "and is pending admin approval before it can proceed."
+            f"A new <strong>{_esc(sub_type)}</strong> plan has been synced to target master sheets. "
+            "<strong>Action Required: Please update the master worksheets to complete the launch setup.</strong>"
         ),
         fields=fields,
         action=(
-            "Open Planning Suite → <strong>Product Launch → Submission History</strong>, "
-            "select the submission and click <strong>Approve</strong> or <strong>Reject</strong>."
+            "Please update the master worksheets (P-H Master / Hub Mapping) as required."
         ),
     )
     approval_result = _safe_operational_send(
         event="npl_approval_needed",
         category="launch_admin",
-        subject=f"[Planning Suite] Launch approval needed — {product_name} ({sub_type})",
+        subject=f"[Planning Suite] Sync Completed: Update Masters — {product_name} ({sub_type})",
         html_body=approval_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
