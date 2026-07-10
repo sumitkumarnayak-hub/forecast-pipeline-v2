@@ -19,25 +19,31 @@ logger = logging.getLogger(__name__)
 
 @router.get("/cache-status")
 def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
-    """Expose details of parquet sheets_cache, modification dates, and defined TTLs."""
+    """Expose details of parquet sheets_cache, modification dates, and defined TTLs by scanning cache dir."""
     import time
+    import os
+    from pathlib import Path
     from planning_suite.services import sheets_cache
     from planning_suite import config as cfg
     
     # Files of interest
     cached_sheets = [
-        {"worksheet": "P Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
-        {"worksheet": "P-L Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
-        {"worksheet": "P-H Master", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
-        {"worksheet": "Hub Mapping", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "demand_planning_masters"},
-        {"worksheet": "Hub_Changes", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "pipeline_params"},
-        {"worksheet": "Variables", "sheet_key": cfg.DEMAND_PLANNING_SHEET_ID, "category": "pipeline_params"},
-        {"worksheet": "Submission_Log", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
-        {"worksheet": "Hub level Suggestion", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "dp_logics"},
-        {"worksheet": "Launch_Output", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
-        {"worksheet": "City_Plan", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
-        {"worksheet": "Hub_Plan", "sheet_key": cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "category": "npl_log"},
+        {"worksheet": "P Master", "category": "demand_planning_masters"},
+        {"worksheet": "P-L Master", "category": "demand_planning_masters"},
+        {"worksheet": "P-H Master", "category": "demand_planning_masters"},
+        {"worksheet": "Hub Mapping", "category": "demand_planning_masters"},
+        {"worksheet": "Hub_Changes", "category": "pipeline_params"},
+        {"worksheet": "Variables", "category": "pipeline_params"},
+        {"worksheet": "Submission_Log", "category": "npl_log"},
+        {"worksheet": "Hub level Suggestion", "category": "dp_logics"},
+        {"worksheet": "Launch_Output", "category": "npl_log"},
+        {"worksheet": "City_Plan", "category": "npl_log"},
+        {"worksheet": "Hub_Plan", "category": "npl_log"},
     ]
+    
+    # Scan the sheets_cache directory for any files matching the worksheet names
+    cache_dir = sheets_cache._cache_dir()
+    cache_files = list(cache_dir.glob("*.parquet")) if cache_dir.exists() else []
     
     status_list = []
     for s in cached_sheets:
@@ -45,24 +51,24 @@ def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
         category = s["category"]
         ttl = sheets_cache.ttl_for_worksheet(name, category)
         
-        # Calculate possible paths
-        p1 = sheets_cache.cache_path(s["sheet_key"] or "", name, "all")
-        p2 = sheets_cache.cache_path(s["sheet_key"] or "", name, "")
-        p3 = sheets_cache.cache_path_for_category(category, name)
-        
+        # Match cache files by suffix matching the normalized worksheet name
+        match_suffix = f"_{name.replace(' ', '_')}.parquet"
         active_path = None
-        for p in (p1, p2, p3):
-            if p.exists():
+        for p in cache_files:
+            if p.name.endswith(match_suffix):
                 active_path = p
                 break
                 
         last_updated = "Never Fetched"
         is_fresh = False
         if active_path:
-            mtime = active_path.stat().st_mtime
-            age = time.time() - mtime
-            is_fresh = age <= ttl
-            last_updated = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime(mtime))
+            try:
+                mtime = active_path.stat().st_mtime
+                age = time.time() - mtime
+                is_fresh = age <= ttl
+                last_updated = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime(mtime))
+            except Exception:
+                pass
             
         # Frequency formatting
         if ttl >= 3600:
@@ -1548,6 +1554,8 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
         elif h_norm == "anchor id":
             row.append(pid)
         elif h_norm in ("city", "city name"):
+            # If both city and hub_name exist as headers, "city" should get City, and "hub name" should get Hub.
+            # However, in some headers "city" can refer to either, so we check carefully.
             row.append(source.get("City", ""))
         elif h_norm in ("hub name", "hub_name", "hub"):
             row.append(source.get("Hub", ""))
