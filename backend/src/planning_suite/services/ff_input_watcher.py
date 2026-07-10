@@ -128,9 +128,15 @@ def _diff_summary(diff: dict) -> str:
 
 def get_change_status() -> dict:
     """Return current watcher state — called by API endpoint."""
+    from planning_suite.db.engine import get_shared_database
+    db = get_shared_database()
+    
+    db_status = db.get_latest_hub_launch_status()
+    db_history = db.get_hub_launch_versions(limit=_MAX_HISTORY)
+    
     return {
-        "change_detected": _state["change_detected"],
-        "change_history":  _state["change_history"],
+        "change_detected": db_status.get("change_detected", False),
+        "change_history":  db_history,
         "last_checked_at": _state["last_checked_at"],
         "watcher_started": _state["watcher_started"],
         "poll_interval_seconds": _state["poll_interval_seconds"],
@@ -139,6 +145,9 @@ def get_change_status() -> dict:
 
 def dismiss_changes() -> None:
     """Clear the change_detected flag (history persists)."""
+    from planning_suite.db.engine import get_shared_database
+    db = get_shared_database()
+    db.dismiss_hub_launch_alerts()
     _state["change_detected"] = False
 
 
@@ -191,9 +200,10 @@ def _poll_once() -> None:
         diff = compute_diff(_state["last_known_rows"], new_rows, headers)
         summary = _diff_summary(diff)
         detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        version_id = f"v{int(time.time())}"
 
         version_entry = {
-            "version_id": f"v{int(time.time())}",
+            "version_id": version_id,
             "detected_at": detected_at,
             "summary": summary,
             "diff": diff,
@@ -202,7 +212,23 @@ def _poll_once() -> None:
             "headers": headers,
         }
 
-        # Prepend (newest first), keep max 20
+        # Persist version entry to database for shared session persistence
+        try:
+            from planning_suite.db.engine import get_shared_database
+            db = get_shared_database()
+            db.save_hub_launch_version(
+                version_id=version_id,
+                detected_at=detected_at,
+                summary=summary,
+                diff=diff,
+                row_count_before=len(_state["last_known_rows"]),
+                row_count_after=len(new_rows),
+                headers=headers
+            )
+        except Exception as e:
+            logger.warning("[FFWatcher] Failed to persist change version in DB: %s", e)
+
+        # Prepend (newest first), keep max 20 as in-memory backup
         _state["change_history"] = ([version_entry] + _state["change_history"])[:_MAX_HISTORY]
         _state["change_detected"] = True
         _state["last_known_hash"] = new_hash
