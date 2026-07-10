@@ -13,10 +13,10 @@ import {
   BadgeCheck,
   Database,
   Package,
-  LineChart,
+  // LineChart,
   Settings,
   ClipboardList,
-  ShieldCheck,
+  // ShieldCheck,
   BookOpen,
 } from "lucide-react";
 
@@ -132,7 +132,7 @@ export const SIDEBAR_NAV: NavEntry[] = [
     label: "Hub Launch",
     href: "/hub-launch",
     icon: Zap,
-    roles: ["admin", "planner"],
+    roles: ["admin", "planner","product"],
   },
   {
     type: "link",

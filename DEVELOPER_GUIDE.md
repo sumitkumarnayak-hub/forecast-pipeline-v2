@@ -90,7 +90,99 @@ sequenceDiagram
 
 ---
 
+## 4. Real-Time FF Input Watcher & Diff Engine (Hub Launch)
+To ensure planners are notified immediately when the configuration changes in Google Sheets (without having to reload or sync), the system uses a background daemon thread watcher coupled with a cell-level diff engine:
+
+```mermaid
+flowchart TD
+    Sheet[Google Sheets: FF Input Tab]
+    
+    subgraph WatcherDaemon [Watcher Daemon - Thread (every 45s)]
+        Read[GSM Read Worksheet Uncached]
+        HashCheck{Hash changed?}
+        DiffEngine[Composite Diff Engine]
+        History[Append VersionEntry to History]
+        Email[Send Color-Coded HTML Email]
+    end
+    
+    subgraph ClientPoll [Frontend Client Polling (every 30s)]
+        Poll[GET /change-status]
+        UIChange{change_detected?}
+        Banner[Show Purple Notification Banner]
+        View[Expand Version History Panel]
+    end
+
+    Sheet -->|Read live rows| Read
+    Read --> HashCheck
+    HashCheck -->|No| Sleep[Sleep 45s]
+    HashCheck -->|Yes| DiffEngine
+    DiffEngine --> History
+    DiffEngine --> Email
+    
+    Poll --> UIChange
+    UIChange -->|Yes| Banner
+    Banner -->|User clicks View| View
+    View -->|Loads in-memory version list| UIChange
+```
+
+### A. Watcher Daemon Lifecycle (`ff_input_watcher.py`)
+* **Startup**: Triggered automatically in the FastAPI `lifespan` startup hook via `start_ff_input_watcher(interval_seconds=45)`.
+* **Threading**: Spawns a dedicated daemon thread `ff-input-watcher` that runs continuously in the background. It waits `10s` initially on boot to allow cache warming to finish before polling.
+* **Bypassing Cache**: The watcher explicitly uses `use_cache=False` to fetch the live worksheet data directly from the Google Sheets API.
+* **State Management**: Stores the watcher status, a rolling buffer of the last `20` change versions, and the `change_detected` flag in an in-memory dictionary. This state is reset on application restart.
+
+### B. Row-Level Identity & Composite Keys
+Because rows can be reordered in Google Sheets, index-based comparison is not reliable. Instead, the diff engine builds a composite unique key for each row:
+$$\text{Composite Key} = \text{lowercase}(\text{hub\_name}) \mathbin{\Vert} \text{lowercase}(\text{source\_hub})$$
+The columns are looked up using case-insensitive header normalization (`hub_name`/`Hub_name` and `source_hub`/`Source_Hub`).
+
+### C. Diff Calculation Logic (`compute_diff`)
+1. **Added Rows**: Mappings whose composite key exists in the new sheet but not in the old snapshot.
+2. **Removed Rows**: Mappings whose composite key exists in the old snapshot but not in the new sheet.
+3. **Modified Cells**: Mappings whose composite key exists in both, but one or more cell values differ. For modified rows, it tracks:
+   * Which specific columns changed (`changed_cells`).
+   * The values before and after the change (`before` and `after` value maps).
+
+### D. Version Entry Data Structure
+Each history version is saved as a structured JSON object:
+```json
+{
+  "version_id": "v1783669123",
+  "detected_at": "2026-07-10T11:22:15Z",
+  "summary": "1 added, 2 modified, 1 removed",
+  "row_count_before": 58,
+  "row_count_after": 58,
+  "headers": ["city_name", "Type", "Hub_name", "Hub_id", "Source_Hub", "Percentage", "Start_date", "End_date"],
+  "diff": {
+    "added": [{"city_name": "NCR", "Type": "New Hub", "Hub_name": "WLS", ...}],
+    "removed": [],
+    "modified": [
+      {
+        "key": "agc|ngc",
+        "changed_cells": ["Percentage"],
+        "before": {"Percentage": "0.5"},
+        "after": {"Percentage": "0.32"},
+        "row": {"city_name": "NCR", "Type": "New Hub", "Hub_name": "AGC", "Percentage": "0.32", ...}
+      }
+    ],
+    "unchanged_count": 56
+  }
+}
+```
+
+### E. Rich HTML Email Formatting
+When a change is detected, `notify_ff_input_changed` renders a custom HTML email featuring:
+* A summary table showing row count transitions (`58 → 58 rows`).
+* **Color-Coded Tables** representing the diff:
+  * **🟢 Green backgrounds** (`#F0FDF4`) for added rows.
+  * **🔴 Red backgrounds with strikethrough text** (`#FEF2F2`) for removed rows.
+  * **🟡 Yellow backgrounds** (`#FFFBEB`) for modified rows.
+  * **Inline Diff markers**: Changed cells render as `[old_value] → [new_value]` with deletions in red strikethrough (`<del style="color:#EF4444">`) and insertions in bold green (`<strong style="color:#16A34A">`).
+
+---
+
 # PART 2: PLATFORM OPERATIONS & RUNBOOK
+
 
 This section provides page-by-page operational instructions for team members using the application.
 
@@ -249,16 +341,22 @@ Planners can execute baseline steps individually for granular control:
   * **Sync Path**: User clicks **Confirm & Sync**. On success, the backend sends a confirmation email and starts the background cache warmup.
 
 #### 🔌 Hub Launch
-* **Target Audience**: Admins, Planners.
-* **Purpose**: Configure newly launched distribution hubs by cloning product settings from existing reference hubs.
+* **Target Audience**: Admins, Planners, Product Managers.
+* **Purpose**: Configure newly launched distribution hubs by cloning product configuration settings from existing reference hubs.
 * **Inputs**: Target hub codes and source reference codes configured in the **FF Input** tab of the Hub Launch spreadsheet.
 * **Outputs**: Cloned forecast parameters appended to the `P-H Master` sheet.
-* **State Machine & Branching Logic**:
-  * **Start**: Renders last cached updated timestamp immediately on load. User clicks **Fetch & Preview Sync Mappings** (Cached read) or **Fetch Live Sheets** (Direct Google Sheets API read).
-  * **Validation Path**:
-    * **Valid**: All new hubs exist in the `Hub Mapping` configurations.
-    * **Warnings**: Renders warning boxes (e.g. *Hub Mapping missing row for new hub 'Test'*).
-  * **Sync Path**: Click **Confirm & Sync Hubs**. If the insertion succeeds, the backend starts a background cache warmup and transitions the UI to the success screen. If it fails, a red warning alert is displayed.
+* **State Machine & Operational Flow**:
+  1. **Immediate Load (Preview Ready)**: On mounting, the page directly renders the **FF Input Sheet** table. There is no idle state. The **Preview Sync** and **Sync to P-H Master** buttons are immediately visible.
+  2. **Active Watcher Alerts**: The client automatically polls `/api/new-product-launch/sync-new-hub/change-status` every **30 seconds**.
+     * **If a change is detected**: A purple alert banner is displayed immediately. Planners can click **View Version History** to see exactly what changed, or **Dismiss** to hide the alert.
+     * **Dismissing**: Pings `/api/new-product-launch/sync-new-hub/dismiss-changes` to clear the flag.
+  3. **Version History Timeline**: An expandable accordion panel. It displays a timeline of the last 20 commits with a vertical rail:
+     * Glowing **purple node** for the latest version, grey nodes for older ones.
+     * Expansion reveals a Google Sheets-style diff table: green rows represent insertions (`+`), red rows represent deletions (`-`), and yellow cells show modified cells with `old_value → new_value`.
+  4. **Sync Operation**:
+     * **Preview**: User clicks **Preview Sync** to compute insertion candidates (validates that target hubs exist in the `Hub Mapping` configurations). If validation issues exist, warnings are printed.
+     * **Sync Confirmation**: Clicking **Sync to P-H Master** clones parameters, writes them to `P-H Master` in Google Sheets, records the log in database tables, and refreshes the cache.
+
 
 #### 📋 Final Plan
 * **Target Audience**: Admins, Planners.
