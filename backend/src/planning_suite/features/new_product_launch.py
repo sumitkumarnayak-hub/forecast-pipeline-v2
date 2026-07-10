@@ -697,7 +697,7 @@ def parse_city_upload(file) -> tuple:
     errors = []
     
     # 1. Clean nulls & check for empty columns
-    for col in ["city_name", "product_id"]:
+    for col in ["city_name", "product_id", "product_name", "category"]:
         if col in df.columns:
             if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
                 errors.append(f"Row values in column '{col}' cannot be empty.")
@@ -773,7 +773,7 @@ def parse_hub_upload(file) -> tuple:
     errors = []
     
     # 1. Clean nulls & check for empty columns
-    for col in ["city_name", "hub_name", "product_id"]:
+    for col in ["city_name", "hub_name", "product_id", "product_name", "category"]:
         if col in df.columns:
             if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
                 errors.append(f"Row values in column '{col}' cannot be empty.")

@@ -592,26 +592,54 @@ def wizard_preview_sync(
                     val = 0
                 aggregated_sources[group_key][day] += val
 
-        # 3. Read City_Plan headers dynamically
-        city_plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, "City_Plan")
-        sheet_sample = city_plan_sheet.get("A1:AP5")
+        # 3. Determine level target tab dynamically: if any row has a hub, target is Hub_Plan, else City_Plan
+        has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
+        target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+
+        plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+        sheet_sample = plan_sheet.get("A1:AP5")
         header_row_idx = 1
         for idx, r in enumerate(sheet_sample, 1):
             normalized_row = [str(x).strip().upper() for x in r]
-            if "OWNER" in normalized_row or "PRODUCT_ID" in normalized_row:
+            if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
                 header_row_idx = idx
                 break
-        sheet_headers = city_plan_sheet.row_values(header_row_idx)
+        sheet_headers = plan_sheet.row_values(header_row_idx)
         columns = [str(h).strip() for h in sheet_headers if str(h).strip()]
 
         # 4. Fetch Product Master details map ONCE outside the loop to prevent loading ages
         pm_details_map = _get_product_master_details_map()
 
-        # 5. Build preview rows matching City_Plan layout
+        # 5. Build preview rows matching target layout dynamically
         preview_records = []
         update_date = datetime.now().strftime("%Y-%m-%d")
-        for source in aggregated_sources.values():
-            row_vals = _build_city_plan_row_dynamic(source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+        for source in rows:
+            row_source = {
+                "Submission_Type": body.sub_type,
+                "Product ID": str(source.get("product_id", "")).strip(),
+                "Product Name": source.get("product_name", ""),
+                "Category": source.get("category", ""),
+                "City": source.get("city_name", ""),
+                "Hub": str(source.get("hub_name", "")).strip(),
+                "MRP": source.get("MRP", ""),
+                "Start Date": source.get("Launch Date", ""),
+                "Submitted_By": username,
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Mon": source.get("Mon", 0),
+                "Tue": source.get("Tue", 0),
+                "Wed": source.get("Wed", 0),
+                "Thu": source.get("Thu", 0),
+                "Fri": source.get("Fri", 0),
+                "Sat": source.get("Sat", 0),
+                "Sun": source.get("Sun", 0),
+                "_owner_email": "",
+            }
+            if target_worksheet == "Hub_Plan":
+                row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+            else:
+                # Group/aggregate logic for City level is pre-grouped if needed, but we build dynamically
+                row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+                
             record = {}
             for col_name, val in zip(sheet_headers, row_vals):
                 if str(col_name).strip():

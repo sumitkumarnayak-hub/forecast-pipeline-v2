@@ -39,12 +39,12 @@ def test_validation_edge_cases():
     print(f"\n[Test 1] Invalid City Check (Time: {t_invalid_city:.2f}ms):")
     print(f"Errors returned: {errors}")
     
-    # 2. Empty Columns Test
+    # 2. Empty Columns Test (Product ID, Product Name, Category)
     empty_col_df = pd.DataFrame([
         {
             "city_name": "Bangalore",
-            "product_id": "  ",  # Blank Product ID
-            "product_name": "Test Product",
+            "product_id": "pr_1",
+            "product_name": "  ",  # Blank Product Name
             "category": "Eggs",
             "MRP": 120.0,
             "Mon": 5, "Tue": 5, "Wed": 5, "Thu": 5, "Fri": 5, "Sat": 5, "Sun": 5
@@ -58,7 +58,7 @@ def test_validation_edge_cases():
     t0 = time.perf_counter()
     _, errors = parse_city_upload(buf_empty_col)
     t_empty_col = (time.perf_counter() - t0) * 1000
-    print(f"\n[Test 2] Empty Product ID Check (Time: {t_empty_col:.2f}ms):")
+    print(f"\n[Test 2] Empty Product Name Check (Time: {t_empty_col:.2f}ms):")
     print(f"Errors returned: {errors}")
 
     # 3. Invalid MRP (Zero/Negative) Test
