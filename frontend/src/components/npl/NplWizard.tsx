@@ -373,19 +373,22 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setBusy("preview");
     setStepState({ step: "preview", status: "loading", message: "Generating sync preview..." });
     setPreviewRows(null);
+    const t0 = performance.now();
     try {
       const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
       const { data } = await api.post("/api/new-product-launch/wizard/preview-sync", {
         hub_rows: dated,
         sub_type: subType,
         launch_date: launchDate,
+        plan_level: planLevel || undefined,
       });
+      const elapsed = Math.round(performance.now() - t0);
       setPreviewRows(data.rows || []);
       setPreviewCols(data.columns || []);
-      setMsg({ text: `Sync preview generated successfully (${data.rows?.length || 0} rows)`, type: "success" });
-      setStepState({ step: "preview", status: "success", message: "Preview loaded" });
+      setMsg({ text: `Sync preview generated (${data.rows?.length || 0} rows) in ${elapsed}ms — target: ${planLevel === "city" ? "City_Plan" : "Hub_Plan"}`, type: "success" });
+      setStepState({ step: "preview", status: "success", message: `Preview loaded in ${elapsed}ms` });
     } catch (err: unknown) {
-      logError("previewSync", err, { subType, launchDate });
+      logError("previewSync", err, { subType, launchDate, planLevel });
       setMsg({ text: extractErrorMessage(err, "Preview sync failed"), type: "danger" });
       setStepState({ step: "preview", status: "error", message: "Preview sync failed" });
     }
@@ -408,11 +411,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
     try {
       const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
+      const t0Submit = performance.now();
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
         hub_rows: dated,
         sub_type: subType,
         launch_date: launchDate,
+        plan_level: planLevel || undefined,
       });
+      const elapsed = Math.round(performance.now() - t0Submit);
+      console.info(`[NplWizard:submit] Completed in ${elapsed}ms — plan_level=${planLevel}, target=${planLevel === "city" ? "City_Plan" : "Hub_Plan"}`);
 
       // Update steps to success
       setSyncSteps([
@@ -549,7 +556,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             <span className="font-semibold flex items-center gap-2">
               {planLevel === "hub" 
                 ? "⚠️ Hub Plan is synced! Please update the masters list."
-                : "⚠️ FF Input is synced! Please update the masters list."
+                : "⚠️ City Plan is synced! Please update the masters list."
               }
             </span>
             <button 

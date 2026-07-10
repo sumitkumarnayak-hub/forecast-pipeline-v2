@@ -66,7 +66,8 @@ def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
                 mtime = active_path.stat().st_mtime
                 age = time.time() - mtime
                 is_fresh = age <= ttl
-                last_updated = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime(mtime))
+                # Return ISO 8601 UTC so frontend can reformat in user's locale/timezone
+                last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
             except Exception:
                 pass
             
@@ -371,14 +372,91 @@ def npl_preview_new_hub_sync(
     bypass_cache: bool = Query(False),
     current_user: dict = Depends(require_write),
 ):
+    t0 = time.perf_counter()
     try:
         from planning_suite.services.sheets_session import get_sheets_manager
         from planning_suite.services.hub_sync import build_new_hub_sync_preview
 
         gsm = get_sheets_manager()
-        return build_new_hub_sync_preview(gsm, bypass_cache=bypass_cache)
+        result = build_new_hub_sync_preview(gsm, bypass_cache=bypass_cache)
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[HubSync] preview completed in %dms bypass_cache=%s", elapsed, bypass_cache)
+        result["_elapsed_ms"] = elapsed
+        return result
     except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[HubSync] preview failed in %dms: %s", elapsed, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/sync-new-hub/ff-input")
+def npl_ff_input_data(
+    bypass_cache: bool = Query(False),
+    current_user: dict = Depends(require_write),
+):
+    """
+    Returns raw FF Input sheet data rows for display in Hub Launch tab,
+    along with a content hash for client-side change detection.
+    """
+    import hashlib, json
+    t0 = time.perf_counter()
+    try:
+        from planning_suite.services.sheets_session import get_sheets_manager
+        from planning_suite.services import sheets_cache
+        from planning_suite import config as cfg
+
+        gsm = get_sheets_manager()
+        use_cache = not bypass_cache
+
+        ff_df = gsm.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=use_cache)
+
+        if ff_df is None or ff_df.empty:
+            raw = gsm.batch_read_worksheets(cfg.NEW_HUB_LAUNCH_SHEET_KEY, [("FF Input", "A:H")])
+            data = raw.get("FF Input") or []
+            if len(data) >= 2:
+                import pandas as pd
+                from planning_suite.core.dataframe import clean_sheet_df
+                ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+
+        rows = []
+        headers = []
+        content_hash = ""
+        cache_last_updated = None
+
+        if ff_df is not None and not ff_df.empty:
+            ff_df = ff_df.dropna(how="all")
+            headers = list(ff_df.columns)
+            rows = ff_df.where(ff_df.notna(), "").to_dict(orient="records")
+            # Build content hash for change detection
+            serialized = json.dumps(rows, sort_keys=True, default=str)
+            content_hash = hashlib.sha256(serialized.encode()).hexdigest()
+
+        # Resolve cache mtime for display
+        cache_path = sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
+        if cache_path.exists():
+            try:
+                mtime = cache_path.stat().st_mtime
+                cache_last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
+            except Exception:
+                pass
+
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[HubSync] ff-input fetched %d rows in %dms", len(rows), elapsed)
+
+        return {
+            "rows": rows,
+            "headers": headers,
+            "row_count": len(rows),
+            "content_hash": content_hash,
+            "cache_last_updated": cache_last_updated,
+            "_elapsed_ms": elapsed,
+        }
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[HubSync] ff-input failed in %dms: %s", elapsed, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 
 
 @router.post("/sync-new-hub/confirm")
@@ -469,6 +547,7 @@ class SubmitBody(BaseModel):
     sub_type: str = "New Launch"
     launch_date: str | None = None
     send_email: bool = True
+    plan_level: str | None = None
 
 
 class StatusBody(BaseModel):
@@ -663,9 +742,14 @@ def wizard_preview_sync(
                     val = 0
                 aggregated_sources[group_key][day] += val
 
-        # 3. Determine level target tab dynamically: if any row has a hub, target is Hub_Plan, else City_Plan
-        has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
-        target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+        # 3. Determine level target tab based on body.plan_level (default to hub check)
+        if body.plan_level == "city":
+            target_worksheet = "City_Plan"
+        elif body.plan_level == "hub":
+            target_worksheet = "Hub_Plan"
+        else:
+            has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
+            target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
 
         plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
         sheet_sample = plan_sheet.get("A1:AP5")
@@ -801,9 +885,14 @@ def wizard_submit(
                     val = 0
                 aggregated_sources[group_key][day] += val
 
-        # 1.3 Determine level target tab dynamically: if any row has a hub, target is Hub_Plan, else City_Plan
-        has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
-        target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+        # 1.3 Determine level target tab based on body.plan_level (default to hub check)
+        if body.plan_level == "city":
+            target_worksheet = "City_Plan"
+        elif body.plan_level == "hub":
+            target_worksheet = "Hub_Plan"
+        else:
+            has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
+            target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
 
         plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
         sheet_sample = plan_sheet.get("A1:AP5")

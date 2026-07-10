@@ -44,6 +44,25 @@ function ShellFrame({
   }>>([]);
   const [loadingCache, setLoadingCache] = useState(false);
 
+  /** Format any ISO UTC or date string in IST (Asia/Kolkata) */
+  const formatIST = (raw: string): string => {
+    if (!raw || raw === "Never Fetched") return raw;
+    try {
+      return new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date(raw)) + " IST";
+    } catch {
+      return raw;
+    }
+  };
+
   const fetchCacheStatus = async () => {
     setLoadingCache(true);
     try {
@@ -125,8 +144,8 @@ function ShellFrame({
                   right: 0,
                   marginTop: "8px",
                   zIndex: 1000,
-                  width: "360px",
-                  maxHeight: "440px",
+                  width: "400px",
+                  maxHeight: "480px",
                   overflowY: "auto",
                   padding: "1rem",
                   background: "var(--bg-card, #151f32)",
@@ -135,7 +154,10 @@ function ShellFrame({
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", borderBottom: "1px solid var(--border, #2d3c55)", paddingBottom: "0.5rem" }}>
-                  <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>Cache TTL Monitor</span>
+                  <div>
+                    <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>Cache TTL Monitor</span>
+                    <span style={{ fontSize: "0.65rem", marginLeft: "0.5rem", color: "var(--text-muted)", opacity: 0.7 }}>Times in IST</span>
+                  </div>
                   <button 
                     type="button" 
                     className="btn btn-ghost btn-sm" 
@@ -181,7 +203,7 @@ function ShellFrame({
                           </span>
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
-                          <span>Updated: <strong style={{ color: "var(--text-primary)" }}>{item.last_updated}</strong></span>
+                          <span>Updated: <strong style={{ color: "var(--text-primary)" }}>{formatIST(item.last_updated)}</strong></span>
                           <span>TTL: <strong>{item.frequency}</strong></span>
                         </div>
                       </div>
