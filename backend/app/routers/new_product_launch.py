@@ -854,7 +854,7 @@ def wizard_submit(
                 "Fri": source.get("Fri", 0),
                 "Sat": source.get("Sat", 0),
                 "Sun": source.get("Sun", 0),
-                "_owner_email": "",
+                "_owner_email": current_user.get("email", current_user.get("sub", "")),
             }
             if target_worksheet == "Hub_Plan":
                 row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
@@ -868,7 +868,7 @@ def wizard_submit(
             values_to_append.append(row_vals)
 
         if values_to_append:
-            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED")
+            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED", table_range="A1")
 
         # 1.5 Mark submission status as Approved (or Synced) immediately
         update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")
@@ -1232,11 +1232,11 @@ def _format_date_npl(date_val) -> str:
     if not date_val:
         return ""
     if hasattr(date_val, "strftime"):
-        return date_val.strftime("%d-%m-%Y")
+        return date_val.strftime("%m/%d/%Y")
     from datetime import datetime
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(str(date_val).strip(), fmt).strftime("%d-%m-%Y")
+            return datetime.strptime(str(date_val).strip(), fmt).strftime("%m/%d/%Y")
         except ValueError:
             continue
     return str(date_val)
@@ -1360,7 +1360,7 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
         elif h_norm == "submitted by":
             row.append(source.get("Submitted_By", ""))
         elif h_norm == "owner email":
-            row.append("")
+            row.append(source.get("_owner_email", ""))
         elif h_norm == "submitted at":
             row.append(source.get("Timestamp", ""))
         else:
@@ -1509,7 +1509,7 @@ def _append_approved_to_new_product_launch(submission_id: str) -> dict:
     
     if values:
         plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
-        plan_sheet.append_rows(values, value_input_option="USER_ENTERED")
+        plan_sheet.append_rows(values, value_input_option="USER_ENTERED", table_range="A1")
 
     logger.info(
         "[NPL] approval sync complete for %s: appended=%d skipped=%d target=%s!%s",
