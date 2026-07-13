@@ -138,7 +138,7 @@ export const SIDEBAR_NAV: NavEntry[] = [
     type: "link",
     id: "final-plan",
     label: "Final Plan",
-    href: "/final-plan",
+    href: "/final-plan",  
     icon: ClipboardList,
     roles: ["admin", "planner"],
     lockUntilBaselineApproved: true,

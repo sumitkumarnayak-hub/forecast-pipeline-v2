@@ -169,6 +169,13 @@ export default function LoginPage() {
           </div>
           <code>sumitkumar.nayak@licious.com / admin123</code>
         </div>
+        <div className="mt-8 rounded-xl bg-white/40 border border-white/60 p-4 text-[11px] text-slate-500 leading-relaxed shadow-sm">
+          <div className="flex items-center gap-1.5 font-semibold text-purple-600 mb-1">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Product</span>
+          </div>
+          <code>product@licious.com / product123</code>
+        </div>
       </div>
     </div>
   );
