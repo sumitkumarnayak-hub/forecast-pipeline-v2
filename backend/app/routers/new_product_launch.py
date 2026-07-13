@@ -990,7 +990,7 @@ def wizard_submit(
             values_to_append.append(row_vals)
 
         if values_to_append:
-            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED", table_range="A1")
+            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED", table_range=f"A{header_row_idx}")
 
         # 1.5 Mark submission status as Approved (or Synced) immediately
         update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")
@@ -1617,6 +1617,7 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
         "rows_to_append": len(values),
         "rows_skipped": skipped,
         "matched_rows": len(matching_rows),
+        "header_row_idx": header_row_idx,
     }
 
 
@@ -1628,10 +1629,11 @@ def _append_approved_to_new_product_launch(submission_id: str) -> dict:
     prepared = _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
     values = prepared.pop("values", [])
     target_worksheet = prepared["worksheet"]
+    header_row_idx = prepared.get("header_row_idx", 1)
     
     if values:
         plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
-        plan_sheet.append_rows(values, value_input_option="USER_ENTERED", table_range="A1")
+        plan_sheet.append_rows(values, value_input_option="USER_ENTERED", table_range=f"A{header_row_idx}")
 
     logger.info(
         "[NPL] approval sync complete for %s: appended=%d skipped=%d target=%s!%s",
