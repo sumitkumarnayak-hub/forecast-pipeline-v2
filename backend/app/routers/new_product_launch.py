@@ -737,7 +737,7 @@ def wizard_preview_sync(
     from datetime import datetime
 
     t0 = time.perf_counter()
-    username = current_user.get("username", "")
+    username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
     try:
         from planning_suite.services import npl_wizard as wiz
         # 1. Apply launch dates
@@ -859,7 +859,7 @@ def wizard_submit(
 
     sync_started = datetime.now().isoformat()
     t0 = time.perf_counter()
-    username = current_user.get("username", "")
+    username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
     user_id = int(current_user["sub"])
     sub_id = ""
 
@@ -1174,7 +1174,8 @@ def patch_submission_status(
             
         from planning_suite.services.api_cache import CacheNS, cache_invalidate
         cache_invalidate(CacheNS.NPL_WIZARD)
-        logger.info("[NPL] submission %s -> %s by user %s", submission_id, body.status, current_user.get("username"))
+        username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
+        logger.info("[NPL] submission %s -> %s by user %s", submission_id, body.status, username)
         return {
             "detail": f"Submission {submission_id} -> {body.status}",
             "status": body.status,

@@ -504,8 +504,8 @@ class Database:
             "role": user.role,
         }
 
-    def get_user_by_id(self, user_id: int) -> dict | None:
-        """Fetch active user profile by id."""
+    def get_user_by_id(self, user_id: int, include_inactive: bool = False) -> dict | None:
+        """Fetch user profile by id."""
         if not user_id:
             return None
         from sqlalchemy.orm import Session
@@ -515,9 +515,10 @@ class Database:
             user = session.query(User).filter_by(id=user_id).first()
         if not user:
             return None
-        if getattr(user, "is_active", True) is False:
+        if not include_inactive and getattr(user, "is_active", True) is False:
             return None
         return self._row_to_user(user)
+
 
     @staticmethod
     def _user_admin_row(user) -> dict:

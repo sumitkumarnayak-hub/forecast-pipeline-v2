@@ -258,10 +258,11 @@ def send_test_email_endpoint(
             detail="No recipient email — pick a recipient, provide to_email, or set user email",
         )
 
+    username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
     result = send_test_email(
         to_addresses=to,
         triggered_by_user_id=user_id,
-        username=current_user.get("username", ""),
+        username=username,
         custom_message=body.message,
         db=db,
     )
@@ -408,7 +409,7 @@ def update_user_admin(
     updates = body.model_dump(exclude_none=True)
     notification_cats = updates.pop("notification_categories", None)
     try:
-        user_before = db.get_user_by_id(user_id)
+        user_before = db.get_user_by_id(user_id, include_inactive=True)
         if not user_before:
             raise HTTPException(status_code=404, detail="User not found")
         
@@ -422,6 +423,16 @@ def update_user_admin(
                     conn.execute(
                         text("UPDATE email_notification_recipients SET email = :new_email WHERE LOWER(email) = :old_email"),
                         {"new_email": target_email.strip().lower(), "old_email": old_email.strip().lower()}
+                    )
+            
+            # Synchronize active status updates with notification recipients
+            is_active_updated = updates.get("is_active")
+            if is_active_updated is not None:
+                from sqlalchemy import text
+                with db.engine.begin() as conn:
+                    conn.execute(
+                        text("UPDATE email_notification_recipients SET enabled = :enabled WHERE LOWER(email) = :email"),
+                        {"enabled": 1 if is_active_updated else 0, "email": target_email.strip().lower()}
                     )
             
             if notification_cats is not None:
