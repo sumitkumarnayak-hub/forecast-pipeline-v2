@@ -64,7 +64,7 @@ def compute_diff(
     headers: list[str] | None = None,
 ) -> dict:
     """
-    Returns a structured diff between two row snapshots:
+    Returns a structured diff between two row snapshots, supporting duplicate rows correctly:
       {
         added:    [row_dict, ...],
         removed:  [row_dict, ...],
@@ -75,35 +75,66 @@ def compute_diff(
     if not headers:
         headers = list({k for r in old_rows + new_rows for k in r.keys()})
 
-    old_by_key = {_row_key(r, headers): r for r in old_rows}
-    new_by_key = {_row_key(r, headers): r for r in new_rows}
+    # Helper function to check if two rows are exactly equal (all cell values match)
+    def _row_equals(r1: dict, r2: dict, cols: list[str]) -> bool:
+        return all(str(r1.get(c, "")).strip() == str(r2.get(c, "")).strip() for c in cols)
 
-    added_keys   = set(new_by_key) - set(old_by_key)
-    removed_keys = set(old_by_key) - set(new_by_key)
-    common_keys  = set(old_by_key) & set(new_by_key)
-
-    added   = [new_by_key[k] for k in added_keys]
-    removed = [old_by_key[k] for k in removed_keys]
-
-    modified = []
+    # 1. Match exact identical rows (unchanged)
+    unmatched_new = list(new_rows)
+    unmatched_old = []
     unchanged_count = 0
-    for key in common_keys:
-        old_row = old_by_key[key]
-        new_row = new_by_key[key]
-        changed_cells = [
-            col for col in set(list(old_row.keys()) + list(new_row.keys()))
-            if str(old_row.get(col, "")).strip() != str(new_row.get(col, "")).strip()
-        ]
-        if changed_cells:
-            modified.append({
-                "key": key,
-                "before": {c: str(old_row.get(c, "")).strip() for c in changed_cells},
-                "after":  {c: str(new_row.get(c, "")).strip() for c in changed_cells},
-                "row":    new_row,
-                "changed_cells": changed_cells,
-            })
-        else:
+
+    for old_row in old_rows:
+        match_idx = -1
+        for idx, new_row in enumerate(unmatched_new):
+            if _row_equals(old_row, new_row, headers):
+                match_idx = idx
+                break
+        if match_idx != -1:
+            unmatched_new.pop(match_idx)
             unchanged_count += 1
+        else:
+            unmatched_old.append(old_row)
+
+    # 2. Match remaining unmatched rows by key (modified)
+    # Group remaining old rows by their composite key
+    old_by_key: dict[str, list[dict]] = {}
+    for r in unmatched_old:
+        key = _row_key(r, headers)
+        old_by_key.setdefault(key, []).append(r)
+
+    still_unmatched_new = []
+    modified = []
+
+    for new_row in unmatched_new:
+        key = _row_key(new_row, headers)
+        if key in old_by_key and old_by_key[key]:
+            # Pop the first old row with this key to pair it up as modified
+            old_row = old_by_key[key].pop(0)
+            changed_cells = [
+                col for col in headers
+                if str(old_row.get(col, "")).strip() != str(new_row.get(col, "")).strip()
+            ]
+            if changed_cells:
+                modified.append({
+                    "key": key,
+                    "before": {c: str(old_row.get(c, "")).strip() for c in changed_cells},
+                    "after":  {c: str(new_row.get(c, "")).strip() for c in changed_cells},
+                    "row":    new_row,
+                    "changed_cells": changed_cells,
+                })
+            else:
+                unchanged_count += 1
+        else:
+            still_unmatched_new.append(new_row)
+
+    # 3. Any remaining rows in old_by_key are removed
+    removed = []
+    for key, rows in old_by_key.items():
+        removed.extend(rows)
+
+    # Any remaining rows in still_unmatched_new are added
+    added = still_unmatched_new
 
     return {
         "added": added,

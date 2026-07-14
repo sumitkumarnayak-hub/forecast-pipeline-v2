@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   FileText,
   History,
   Loader2,
   RefreshCw,
   Search,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import api from "@/lib/api";
@@ -30,7 +33,6 @@ type LogPayload = {
   view?: string;
 };
 
-
 type ApprovalAppendResult = {
   rows_appended?: number;
   rows_skipped?: number;
@@ -48,6 +50,8 @@ type ActionStep = {
   label: string;
   state: "pending" | "active" | "done" | "failed";
 };
+
+type SheetRow = Record<string, string | number> & { _sheet_row_index: number };
 const COL_LABELS: Record<string, string> = {
   Submission_ID: "Submission ID",
   Submission_Type: "Type",
@@ -156,6 +160,18 @@ export default function SubmissionHistory() {
   const [actingStatus, setActingStatus] = useState("");
   const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
   const [hubLoading, setHubLoading] = useState(false);
+
+  // Actions dropdown
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+
+  // Delete-rows modal
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [sheetRows, setSheetRows] = useState<SheetRow[]>([]);
+  const [sheetRowsLoading, setSheetRowsLoading] = useState(false);
+  const [checkedIndices, setCheckedIndices] = useState<Set<number>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState({ text: "", type: "" });
 
   const logCacheKey = useMemo(
     () => `npl:submission-log:summary:${selTypes.join(",")}|${selStatuses.join(",")}`,
@@ -584,38 +600,305 @@ export default function SubmissionHistory() {
             </div>
           )}
 
-          <div className="npl-history-actions-buttons">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => patchStatus("Withdrawn")} disabled={!!actingStatus}>
-              Withdraw
+          {/* ── Actions dropdown ─────────────────────────────────── */}
+          <div className="npl-history-actions-buttons" style={{ position: "relative" }} ref={actionsRef}>
+
+            {/* Close dropdown on outside click */}
+            {actionsOpen && (
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 40 }}
+                onClick={() => setActionsOpen(false)}
+              />
+            )}
+
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              style={{ display: "flex", alignItems: "center", gap: 5, position: "relative", zIndex: 41 }}
+              onClick={() => setActionsOpen(v => !v)}
+              disabled={!!actingStatus}
+            >
+              Actions
+              {actionsOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
-            {canApprove && (
-              <>
-                <button type="button" className="btn btn-success btn-sm" onClick={() => patchStatus("Approved")} disabled={!!actingStatus}>
-                  <CheckCircle2 size={14} />
-                  Approve
-                </button>
-                <div className="npl-history-reject-wrap">
-                  <input
-                    className="form-input text-sm"
-                    placeholder="Rejection reason (required to reject)"
-                    value={rejectReason}
-                    onChange={e => setRejectReason(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={() => patchStatus("Rejected", rejectReason)}
-                    disabled={!rejectReason.trim() || !!actingStatus}
-                  >
-                    Reject
-                  </button>
-                </div>
-                <button type="button" className="btn btn-danger btn-sm btn-outline" onClick={() => patchStatus("Voided")} disabled={!!actingStatus}>
-                  Void
-                </button>
-              </>
+
+            {actionsOpen && (
+              <div style={{
+                position: "absolute", bottom: "calc(100% + 6px)", left: 0,
+                background: "var(--bg-card)", border: "1px solid var(--border)",
+                borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                minWidth: 220, zIndex: 42, overflow: "hidden",
+                padding: "4px 0",
+              }}>
+
+                {/* Status-aware actions */}
+                {(() => {
+                  const status = String(selectedRow?.["Status"] ?? "").toLowerCase();
+
+                  return (
+                    <>
+                      {/* Pending actions */}
+                      {status === "pending" && canApprove && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--color-success, #22c55e)" }}
+                          onClick={() => { setActionsOpen(false); patchStatus("Approved"); }}
+                          disabled={!!actingStatus}
+                        >
+                          <CheckCircle2 size={14} /> Approve
+                        </button>
+                      )}
+
+                      {status === "pending" && canApprove && (
+                        <>
+                          <div style={{ padding: "2px 1rem" }}>
+                            <input
+                              className="form-input text-sm"
+                              placeholder="Rejection reason (required)"
+                              value={rejectReason}
+                              onChange={e => setRejectReason(e.target.value)}
+                              style={{ width: "100%", fontSize: "0.75rem" }}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
+                            onClick={() => { setActionsOpen(false); patchStatus("Rejected", rejectReason); }}
+                            disabled={!rejectReason.trim() || !!actingStatus}
+                          >
+                            <XCircle size={14} /> Reject
+                          </button>
+                        </>
+                      )}
+
+                      {status === "pending" && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem" }}
+                          onClick={() => { setActionsOpen(false); patchStatus("Withdrawn"); }}
+                          disabled={!!actingStatus}
+                        >
+                          Withdraw
+                        </button>
+                      )}
+
+                      {/* Void for approved */}
+                      {status === "approved" && canApprove && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
+                          onClick={() => { setActionsOpen(false); patchStatus("Voided"); }}
+                          disabled={!!actingStatus}
+                        >
+                          <XCircle size={14} /> Void
+                        </button>
+                      )}
+
+                      {/* Delete rows for rejected */}
+                      {(status === "rejected" || status === "voided") && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
+                          onClick={async () => {
+                            setActionsOpen(false);
+                            setDeleteMsg({ text: "", type: "" });
+                            setCheckedIndices(new Set());
+                            setDeleteModalOpen(true);
+                            setSheetRowsLoading(true);
+                            try {
+                              const { data } = await api.get<{ rows: SheetRow[] }>(`/api/new-product-launch/submissions/${selectedId}/rows`);
+                              setSheetRows(data.rows || []);
+                            } catch {
+                              setSheetRows([]);
+                            } finally {
+                              setSheetRowsLoading(false);
+                            }
+                          }}
+                        >
+                          <Trash2 size={14} /> Delete rows from sheet
+                        </button>
+                      )}
+
+                      {/* Fallback if no status-specific action */}
+                      {!["pending", "approved", "rejected", "voided"].includes(status) && (
+                        <div style={{ padding: "0.75rem 1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          No actions available
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
             )}
           </div>
+
+          {/* ── Delete rows modal ─────────────────────────────────── */}
+          {deleteModalOpen && (
+            <div style={{
+              position: "fixed", inset: 0, zIndex: 100,
+              background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)",
+              display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
+            }}>
+              <div style={{
+                background: "var(--bg-card)", border: "1px solid var(--border)",
+                borderRadius: "16px", width: "100%", maxWidth: 640,
+                boxShadow: "0 24px 60px rgba(0,0,0,0.35)",
+                display: "flex", flexDirection: "column", maxHeight: "90vh",
+              }}>
+                {/* Header */}
+                <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: "10px", background: "rgba(239,68,68,0.1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Trash2 size={16} style={{ color: "#ef4444" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontWeight: 700, fontSize: "0.9rem", color: "var(--text-primary)" }}>Delete rows from Submission_Log?</p>
+                    <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)" }}>Submission: {selectedId} · Check the rows you want to delete</p>
+                  </div>
+                  <button type="button" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }} onClick={() => setDeleteModalOpen(false)}>
+                    <XCircle size={18} />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div style={{ overflowY: "auto", flex: 1, padding: "1rem 1.5rem" }}>
+                  {deleteMsg.text && (
+                    <div className={`alert alert-${deleteMsg.type} text-sm mb-3`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {deleteMsg.type === "success" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                      {deleteMsg.text}
+                    </div>
+                  )}
+
+                  {sheetRowsLoading ? (
+                    <TableSkeleton rows={4} cols={3} />
+                  ) : sheetRows.length === 0 ? (
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "1.5rem 0" }}>No rows found in the sheet for this submission.</p>
+                  ) : (
+                    <div className="table-wrap" style={{ borderRadius: 8, border: "1px solid var(--border)" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.77rem" }}>
+                        <thead>
+                          <tr style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid var(--border)" }}>
+                            <th style={{ padding: "0.5rem 0.75rem", width: 36 }}>
+                              <input
+                                type="checkbox"
+                                checked={sheetRows.length > 0 && checkedIndices.size === sheetRows.length}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setCheckedIndices(new Set(sheetRows.map(r => r._sheet_row_index)));
+                                  } else {
+                                    setCheckedIndices(new Set());
+                                  }
+                                }}
+                                title="Select all"
+                              />
+                            </th>
+                            <th style={{ padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", fontSize: "0.62rem", letterSpacing: "0.04em" }}>Row #</th>
+                            <th style={{ padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", fontSize: "0.62rem", letterSpacing: "0.04em" }}>City</th>
+                            <th style={{ padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", fontSize: "0.62rem", letterSpacing: "0.04em" }}>Hub</th>
+                            <th style={{ padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", fontSize: "0.62rem", letterSpacing: "0.04em" }}>Start Date</th>
+                            <th style={{ padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", fontSize: "0.62rem", letterSpacing: "0.04em" }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sheetRows.map((sr) => {
+                            const idx = sr._sheet_row_index;
+                            const checked = checkedIndices.has(idx);
+                            return (
+                              <tr
+                                key={idx}
+                                style={{
+                                  borderBottom: "1px solid var(--border)",
+                                  background: checked ? "rgba(239,68,68,0.06)" : undefined,
+                                  cursor: "pointer",
+                                  transition: "background 0.12s",
+                                }}
+                                onClick={() => {
+                                  setCheckedIndices(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(idx)) next.delete(idx); else next.add(idx);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <td style={{ padding: "0.45rem 0.75rem" }} onClick={e => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setCheckedIndices(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(idx)) next.delete(idx); else next.add(idx);
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </td>
+                                <td style={{ padding: "0.45rem 0.75rem", color: "var(--text-muted)", fontFamily: "monospace", fontSize: "0.7rem" }}>{idx}</td>
+                                <td style={{ padding: "0.45rem 0.75rem", fontWeight: 500 }}>{String(sr["City"] ?? sr["city_name"] ?? "—")}</td>
+                                <td style={{ padding: "0.45rem 0.75rem" }}>{String(sr["Hub"] ?? sr["hub_name"] ?? "—")}</td>
+                                <td style={{ padding: "0.45rem 0.75rem", color: "var(--text-secondary)" }}>{String(sr["Start Date"] ?? "")}</td>
+                                <td style={{ padding: "0.45rem 0.75rem" }}>
+                                  <span className={`badge ${statusBadgeClass(String(sr["Status"] ?? ""))}`} style={{ fontSize: "0.6rem" }}>{String(sr["Status"] ?? "—")}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div style={{ padding: "1rem 1.5rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    {checkedIndices.size > 0 ? `${checkedIndices.size} row${checkedIndices.size !== 1 ? "s" : ""} selected` : "Select rows to delete"}
+                  </span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDeleteModalOpen(false)} disabled={deleting}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
+                      disabled={checkedIndices.size === 0 || deleting}
+                      onClick={async () => {
+                        setDeleting(true);
+                        setDeleteMsg({ text: "", type: "" });
+                        try {
+                          const { data } = await api.delete<{ detail: string; deleted_count: number; submission_fully_deleted: boolean }>(
+                            `/api/new-product-launch/submissions/${selectedId}/rows`,
+                            { data: { row_indices: Array.from(checkedIndices) } },
+                          );
+                          setDeleteMsg({ text: data.detail || `Deleted ${data.deleted_count} row(s)`, type: "success" });
+                          setCheckedIndices(new Set());
+                          // Reload sheet rows to show remaining rows
+                          const refresh = await api.get<{ rows: SheetRow[] }>(`/api/new-product-launch/submissions/${selectedId}/rows`);
+                          setSheetRows(refresh.data.rows || []);
+                          // Refresh submission list
+                          cacheInvalidate(logCacheKey);
+                          reload(true);
+                        } catch (e: unknown) {
+                          const err = e as { response?: { data?: { detail?: string } } };
+                          setDeleteMsg({ text: err?.response?.data?.detail || "Delete failed", type: "danger" });
+                        } finally {
+                          setDeleting(false);
+                        }
+                      }}
+                    >
+                      {deleting ? <Loader2 size={13} className="npl-history-spin" /> : <Trash2 size={13} />}
+                      {deleting ? "Deleting…" : `Delete ${checkedIndices.size > 0 ? checkedIndices.size : ""} row${checkedIndices.size !== 1 ? "s" : ""}`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -981,6 +981,102 @@ def gen_sub_id(sub_type: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────
+# ROW-LEVEL SHEET OPERATIONS  (position-safe, duplicate-aware)
+# ──────────────────────────────────────────────────────────────────
+
+def get_submission_rows_with_indices(submission_id: str) -> list[dict]:
+    """
+    Return all rows in Submission_Log that belong to submission_id,
+    each annotated with '_sheet_row_index' (1-based, header = row 1).
+    Using row positions instead of values makes duplicate-row deletion safe.
+    """
+    sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
+    data = sheet.get_all_values()
+    if len(data) <= 1:
+        return []
+    headers = data[0]
+    sid_col = next((i for i, h in enumerate(headers) if h == "Submission_ID"), None)
+    if sid_col is None:
+        return []
+    result = []
+    for sheet_row_idx, row in enumerate(data[1:], start=2):  # row 1 = header
+        if len(row) > sid_col and row[sid_col] == submission_id:
+            row_dict = dict(zip(headers, row))
+            row_dict["_sheet_row_index"] = sheet_row_idx
+            result.append(row_dict)
+    return result
+
+
+def delete_submission_rows_by_index(
+    submission_id: str,
+    row_indices: list[int],
+) -> int:
+    """
+    Delete exactly the specified 1-based sheet row indices from Submission_Log.
+    Validates that every requested index actually belongs to submission_id before
+    deleting.  Rows are deleted in reverse order so earlier indices stay valid.
+
+    Returns the count of rows actually deleted.
+    """
+    import gspread.utils as gu
+
+    sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
+    data = sheet.get_all_values()
+    if len(data) <= 1:
+        return 0
+
+    headers = data[0]
+    sid_col = next((i for i, h in enumerate(headers) if h == "Submission_ID"), None)
+    if sid_col is None:
+        return 0
+
+    # Build the set of valid row indices for this submission (1-based, skip header)
+    valid_indices: set[int] = set()
+    for sheet_row_idx, row in enumerate(data[1:], start=2):
+        if len(row) > sid_col and row[sid_col] == submission_id:
+            valid_indices.add(sheet_row_idx)
+
+    # Filter to only indices that belong to this submission
+    to_delete = sorted(set(row_indices) & valid_indices, reverse=True)
+    if not to_delete:
+        return 0
+
+    # Use Sheets API batchUpdate with DeleteDimensionRequest (0-based)
+    spreadsheet_id = SPREADSHEET_ID
+    client = _get_client()
+    sh = client.open_by_key(spreadsheet_id)
+    ws = sh.worksheet(LOG_SHEET_NAME)
+
+    requests = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "ROWS",
+                    "startIndex": idx - 1,   # 0-based inclusive
+                    "endIndex": idx,          # 0-based exclusive
+                }
+            }
+        }
+        for idx in to_delete   # already sorted descending
+    ]
+    sh.batch_update({"requests": requests})
+
+    # Invalidate caches
+    from planning_suite.services.npl_sheet_reads import invalidate_npl_sheet_cache
+    invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
+    try:
+        from planning_suite.services.api_cache import CacheNS, cache_invalidate
+        cache_invalidate(CacheNS.NPL_WIZARD)
+    except Exception:
+        pass
+
+    return len(to_delete)
+
+
+
+
+# ──────────────────────────────────────────────────────────────────
 # DUPLICATE  DETECTION
 # ──────────────────────────────────────────────────────────────────
 def check_duplicates_city(df_log: pd.DataFrame, sub_type: str,

@@ -1215,6 +1215,85 @@ def sync_submission_to_new_product_launch(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+@router.get("/submissions/{submission_id}/rows")
+def get_submission_rows(
+    submission_id: str,
+    current_user: dict = Depends(require_write),
+):
+    """
+    Return all Submission_Log rows for this submission with their 1-based
+    sheet row index attached as _sheet_row_index.  Needed for position-safe
+    deletion when duplicate rows exist.
+    """
+    from planning_suite.features.new_product_launch import get_submission_rows_with_indices
+    try:
+        rows = get_submission_rows_with_indices(submission_id)
+        return {"submission_id": submission_id, "rows": rows}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class DeleteRowsBody(BaseModel):
+    row_indices: List[int]
+
+
+@router.delete("/submissions/{submission_id}/rows")
+def delete_submission_rows(
+    submission_id: str,
+    body: DeleteRowsBody,
+    current_user: dict = Depends(require_write),
+    db: Database = Depends(get_db),
+):
+    """
+    Delete exactly the specified sheet row indices (1-based) from Submission_Log.
+    Only rows that genuinely belong to submission_id are removed.
+    If all rows for the submission are deleted, the DB record status is updated to 'Deleted'.
+    Requires write permission.
+    """
+    from planning_suite.features.new_product_launch import (
+        delete_submission_rows_by_index,
+        get_submission_rows_with_indices,
+    )
+    from planning_suite.services.api_cache import CacheNS, cache_invalidate
+
+    if not body.row_indices:
+        raise HTTPException(status_code=400, detail="row_indices must not be empty")
+
+    try:
+        deleted_count = delete_submission_rows_by_index(submission_id, body.row_indices)
+
+        # Check if any rows remain for this submission — if none, mark DB as Deleted
+        remaining = get_submission_rows_with_indices(submission_id)
+        username = (
+            current_user.get("email")
+            or current_user.get("username")
+            or current_user.get("full_name")
+            or ""
+        )
+        if not remaining:
+            try:
+                db.update_npl_submission_status(submission_id, "Deleted", "All rows deleted from sheet")
+                logger.info(
+                    "[NPL] submission %s fully deleted from sheet by %s", submission_id, username
+                )
+            except Exception as db_exc:
+                logger.warning("[NPL] Could not update DB status to Deleted: %s", db_exc)
+
+        cache_invalidate(CacheNS.NPL_WIZARD)
+        logger.info(
+            "[NPL] %d row(s) deleted from Submission_Log for %s by %s",
+            deleted_count, submission_id, username,
+        )
+        return {
+            "detail": f"Deleted {deleted_count} row(s) from Submission_Log",
+            "deleted_count": deleted_count,
+            "submission_fully_deleted": not remaining,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 def _fire_step_fail(step_name: str, error: str, current_user: dict, sub_type: str = "New Launch") -> None:
     """Fire a step-failure email in the background (best-effort, never raises)."""
     try:

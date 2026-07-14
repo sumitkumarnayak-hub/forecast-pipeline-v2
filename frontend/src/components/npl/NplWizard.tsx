@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useNplBootstrap } from "@/context/NplContext";
-import { ChevronRight, Download, Mail, Upload } from "lucide-react";
+import { ChevronRight, Download, Info, Mail, Upload } from "lucide-react";
 
 const BASE_STAGES = ["upload", "split", "dates", "confirm"] as const;
 const REPLACEMENT_STAGES = ["setup", "upload", "split", "dates", "confirm"] as const;
@@ -519,22 +519,42 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const finishReplacementSetup = async () => {
-    if (!oldProductName || !newProductName || !selectedCities.length) {
-      setMsg({ text: "Select old/new products and at least one city", type: "warning" });
+    const trimmedNewProductName = newProductName.trim();
+    const trimmedNewCategory = newCategory.trim();
+
+    if (!oldProductName || !trimmedNewProductName || !trimmedNewCategory || !selectedCities.length) {
+      setMsg({ text: "Select old product, type new product & sub-category, and select at least one city", type: "warning" });
       return;
     }
     try {
       const oPid = allProducts.find(p => p.product_name === oldProductName && p.category === oldCategory)?.product_id
         || await resolveProductId(oldCategory, oldProductName);
-      const nPid = allProducts.find(p => p.product_name === newProductName && p.category === newCategory)?.product_id
-        || await resolveProductId(newCategory, newProductName);
+
+      const matchedNewProduct = allProducts.find(p => 
+        (p.product_id.toLowerCase() === trimmedNewProductName.toLowerCase() || p.product_name.toLowerCase() === trimmedNewProductName.toLowerCase()) &&
+        p.category.toLowerCase() === trimmedNewCategory.toLowerCase()
+      );
+
+      let nPid = "";
+      if (matchedNewProduct) {
+        nPid = matchedNewProduct.product_id;
+        setNewProductName(matchedNewProduct.product_name);
+      } else {
+        const resolved = await resolveProductId(trimmedNewCategory, trimmedNewProductName);
+        if (resolved) {
+          nPid = resolved;
+        } else {
+          nPid = trimmedNewProductName;
+        }
+      }
+
       setOldPid(oPid);
       setNewPid(nPid);
-      setCategory(newCategory);
+      setCategory(trimmedNewCategory);
       setStage("upload");
       setMsg({ text: "", type: "" });
     } catch (err) {
-      logError("finishReplacementSetup", err, { oldCategory, newCategory, oldProductName, newProductName });
+      logError("finishReplacementSetup", err, { oldCategory, newCategory: trimmedNewCategory, oldProductName, newProductName: trimmedNewProductName });
       setMsg({ text: extractErrorMessage(err, "Failed to resolve product IDs"), type: "danger" });
     }
   };
@@ -573,7 +593,13 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         </div>
       )}
       <h4 style={{ margin: "0 0 0.25rem" }}>{title}</h4>
-      <p className="text-xs text-muted mb-4">{description}</p>
+      <div style={{ background: "var(--indigo-dim, rgba(99,102,241,0.1))", border: "1px solid rgba(99,102,241,0.3)", borderRadius: "12px", padding: "0.7rem 1rem", marginBottom: "1rem", display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <Info size={14} style={{ color: "var(--indigo, #6366f1)", marginTop: 2, flexShrink: 0 }} />
+        <div style={{ fontSize: "0.78rem" }}>
+          <strong style={{ color: "var(--text-primary)" }}>About this Tab - </strong>
+          <span style={{ color: "var(--text-secondary)" }}>{description}</span>
+        </div>
+      </div>
       {nplLoading && !context && (
         <div className="alert alert-info mb-3 text-sm flex items-center gap-2">
           <span className="spinner" style={{ width: 14, height: 14 }} />
@@ -633,18 +659,22 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </div>
             <div>
               <p className="text-xs font-semibold mb-2">New SKU (replacement)</p>
-              <select className="form-input text-sm mb-2" value={newCategory} onChange={e => setNewCategory(e.target.value)} disabled={categorySelectDisabled}>
-                {!newCategory && <option value="">Select category</option>}
-                {categoryOptions.map(c => (
-                  <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
-                ))}
-              </select>
-              <select className="form-input text-sm" value={newProductName} onChange={e => setNewProductName(e.target.value)} disabled={readOnly || !newCategory}>
-                <option value="">{newProducts.length ? "Select product" : "Loading products…"}</option>
-                {newProducts.map(p => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
+              <input
+                type="text"
+                placeholder="Enter sub-category"
+                className="form-input text-sm mb-2"
+                value={newCategory}
+                onChange={e => setNewCategory(e.target.value)}
+                disabled={readOnly}
+              />
+              <input
+                type="text"
+                placeholder="Enter product name / ID"
+                className="form-input text-sm"
+                value={newProductName}
+                onChange={e => setNewProductName(e.target.value)}
+                disabled={readOnly}
+              />
             </div>
           </div>
           <div className="form-group mb-3" style={{ maxWidth: 360 }}>
