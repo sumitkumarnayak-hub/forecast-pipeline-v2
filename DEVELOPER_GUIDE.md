@@ -70,7 +70,85 @@ To build a premium visual experience, the frontend client matches modern UI/UX d
 
 ---
 
-## 4. Production Deployment Workflow
+## 4. API Reference Manual
+
+Requests from the Client Browser are intercepted by the Next.js API route handlers acting as a BFF (Backend-For-Frontend) proxy before being forwarded to the FastAPI backend microservice.
+
+### Next.js BFF Proxy API Routes
+All routes under `/api/*` (except specific local email routes) are handled dynamically by:
+* **Proxy Handler (`frontend/src/app/api/[...path]/route.ts`)**:
+  * **Type**: Next.js Node.js Edge Route (Proxy forwarding).
+  * **Method**: `GET` | `POST` | `PUT` | `PATCH` | `DELETE`
+  * **Purpose**: Rewrites request host header, forwards tokens, and maps the cookie domain from `ps_auth` to client domain to bypass browser SameSite/Secure locks in proxy environments.
+* **Email Sender (`POST /api/send-email`)**:
+  * **Type**: Next.js Serverless Route.
+  * **Payload**: `{ "to": "email@example.com", "subject": "Alert", "html": "HTML String", "secret": "AUTH_SECRET_KEY" }`
+  * **Response**: `{ "ok": true, "messageId": "msg-id" }`
+  * **Purpose**: Dispatches SMTP alert emails directly from the frontend node runtime.
+
+---
+
+### FastAPI Backend REST API Endpoints
+FastAPI maps endpoints under self-contained directories in `backend/features/`:
+
+#### 1. Authentication Feature (`features/auth/`)
+* **`POST /api/auth/login`**:
+  * **Parameters**: Body: `{ "username": "user", "password": "pwd", "remember_me": true }`
+  * **Returns**: `{ "token": "JWT_STRING", "user": { "id": 1, "username": "...", "role": "admin" } }`
+  * **Purpose**: Verifies login, constructs JWT, and writes a Secure HttpOnly cookie `ps_auth` to the client.
+* **`GET /api/auth/me`**:
+  * **Parameters**: None (reads JWT cookie).
+  * **Returns**: User details dictionary + preferences.
+  * **Purpose**: Returns the logged-in user profile structure.
+* **`POST /api/auth/logout`**:
+  * **Parameters**: None.
+  * **Returns**: `{ "detail": "Logged out successfully" }` (Sets cookie max-age to 0).
+
+#### 2. Product Launch Feature (`features/product_launch/`)
+* **`GET /api/new-product-launch/wizard/context`**:
+  * **Parameters**: None (Requires Auth).
+  * **Returns**: `{ "categories": ["Groceries", "Beverages"], "cities": ["Mumbai", "Delhi"], "earliest_launch_date": "YYYY-MM-DD" }`
+  * **Purpose**: Bootstrap categories and active cities dropdowns in the launch wizard UI.
+* **`POST /api/new-product-launch/upload`**:
+  * **Parameters**: Multipart file upload (`file: UploadFile`).
+  * **Returns**: `{ "success": true, "submission_id": "SUB-UUID", "rows_added": 12 }`
+  * **Purpose**: Validates upload Excel format structure, triggers Pandera validations, and returns success logs.
+* **`GET /api/new-product-launch/submissions/{id}/rows`**:
+  * **Parameters**: Path parameter `id` (Submission ID key).
+  * **Returns**: `{ "rows": SheetRow[], "columns": ["Submission ID", "SKU Name", "City", "Week", ...] }`
+  * **Purpose**: Loads active worksheet rows from `Submission_Log` matching the selected ID.
+* **`DELETE /api/new-product-launch/submissions/{id}/rows`**:
+  * **Parameters**: Path parameter `id`, and JSON Body: `{ "rows": [12, 14], "delete_all": false }` containing row indices.
+  * **Returns**: `{ "success": true, "rows_deleted": 2 }`
+  * **Purpose**: Deletes target rows from Google Sheets, invalidates cache, and updates action audits.
+
+#### 3. Autopilot Feature (`features/autopilot/`)
+* **`POST /api/autopilot/run`**:
+  * **Parameters**: Query: `from_step` (Integer, defaults to 0).
+  * **Returns**: `{ "task_id": "UUID-STRING", "detail": "Auto-Pilot pipeline started" }`
+  * **Purpose**: Triggers a background thread running the 6-step weekly forecasting pipeline.
+* **`GET /api/autopilot/status/{task_id}`**:
+  * **Parameters**: Path parameter `task_id`.
+  * **Returns**: `{ "task_id": "...", "status": "running", "current_step": "run_engine", "steps": [...] }`
+  * **Purpose**: Check the current execution logs state of the autopilot task.
+* **`GET /api/autopilot/stream/{task_id}`**:
+  * **Parameters**: Path parameter `task_id`.
+  * **Returns**: Server-Sent Events (SSE) data stream (`text/event-stream`).
+  * **Purpose**: Streams real-time pipeline console logs and progress updates.
+
+#### 4. Baseline Feature (`features/baseline/`)
+* **`GET /api/baseline/status`**:
+  * **Parameters**: None.
+  * **Returns**: `{ "approved": true, "latest_run": BaselineRun, "active_dataset": DatasetStatus }`
+  * **Purpose**: Retrieves baseline approval states.
+* **`POST /api/baseline/approve`**:
+  * **Parameters**: None (Admin authorization required).
+  * **Returns**: `{ "detail": "Baseline approved — Final Plan unlocked." }`
+  * **Purpose**: Locks baseline overrides on sheets and enables final plan adjustments.
+
+---
+
+## 5. Production Deployment Workflow
 
 ### Backend Deployments (Render / Space Docker Build)
 The backend container builds using the root [`Dockerfile`](file:///c:/Users/sumitkumar.nayak/Desktop/forecast-pipeline-v2/Dockerfile):
