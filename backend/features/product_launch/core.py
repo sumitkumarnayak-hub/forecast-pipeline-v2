@@ -1339,6 +1339,9 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
         "Launch Date":  "Start Date",
     })
 
+    if "Hub" not in df.columns:
+        df["Hub"] = ""
+
     # Convert Start Date to string (handles date objects and strings)
     if "Start Date" in df.columns:
         df["Start Date"] = df["Start Date"].apply(

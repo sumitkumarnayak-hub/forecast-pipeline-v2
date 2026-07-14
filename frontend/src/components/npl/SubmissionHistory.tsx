@@ -635,8 +635,7 @@ export default function SubmissionHistory() {
                 flexDirection: "column",
                 gap: "1rem",
               }}>
-
-                {/* ── Pending: Approve + Reject side-by-side ── */}
+                {/* ── Pending: Approve + Withdraw ── */}
                 {isPending && canApprove && (
                   <div>
                     <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Review Actions</p>
@@ -682,41 +681,43 @@ export default function SubmissionHistory() {
                         Withdraw
                       </button>
                     </div>
+                  </div>
+                )}
 
-                    {/* Rejection box */}
-                    <div style={{
-                      marginTop: "0.85rem", padding: "1rem",
-                      background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.2)",
-                      borderRadius: "10px",
-                    }}>
-                      <p style={{ margin: "0 0 0.5rem", fontSize: "0.72rem", fontWeight: 700, color: "#ef4444", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                        Reject Submission
-                      </p>
-                      <textarea
-                        rows={2}
-                        className="form-input text-sm"
-                        placeholder="Enter rejection reason (required to reject)…"
-                        value={rejectReason}
-                        onChange={e => setRejectReason(e.target.value)}
-                        style={{ width: "100%", resize: "vertical", fontSize: "0.78rem", marginBottom: "0.5rem", boxSizing: "border-box" }}
-                      />
-                      <button
-                        type="button"
-                        disabled={!rejectReason.trim() || !canAct}
-                        onClick={() => patchStatus("Rejected", rejectReason)}
-                        style={{
-                          display: "flex", alignItems: "center", gap: 6,
-                          padding: "0.55rem 1.1rem", borderRadius: "8px", border: "none",
-                          cursor: rejectReason.trim() && canAct ? "pointer" : "not-allowed",
-                          background: rejectReason.trim() ? "#ef4444" : "rgba(239,68,68,0.3)",
-                          color: "#fff", fontWeight: 700, fontSize: "0.78rem",
-                          transition: "background 0.15s",
-                        }}
-                      >
-                        {actingStatus === "Rejected" ? <Loader2 size={13} className="npl-history-spin" /> : <XCircle size={13} />}
-                        Reject
-                      </button>
-                    </div>
+                {/* ── Reject Box (Visible for Pending or Approved) ── */}
+                {(isPending || isApproved) && canApprove && (
+                  <div style={{
+                    marginTop: "0.85rem", padding: "1rem",
+                    background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.2)",
+                    borderRadius: "10px",
+                  }}>
+                    <p style={{ margin: "0 0 0.5rem", fontSize: "0.72rem", fontWeight: 700, color: "#ef4444", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      Reject Submission
+                    </p>
+                    <textarea
+                      rows={2}
+                      className="form-input text-sm"
+                      placeholder="Enter rejection reason (required to reject)?"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                      style={{ width: "100%", resize: "vertical", fontSize: "0.78rem", marginBottom: "0.5rem", boxSizing: "border-box" }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!rejectReason.trim() || !canAct}
+                      onClick={() => patchStatus("Rejected", rejectReason)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "0.55rem 1.1rem", borderRadius: "8px", border: "none",
+                        cursor: rejectReason.trim() && canAct ? "pointer" : "not-allowed",
+                        background: rejectReason.trim() ? "#ef4444" : "rgba(239,68,68,0.3)",
+                        color: "#fff", fontWeight: 700, fontSize: "0.78rem",
+                        transition: "background 0.15s",
+                      }}
+                    >
+                      {actingStatus === "Rejected" ? <Loader2 size={13} className="npl-history-spin" /> : <XCircle size={13} />}
+                      Reject
+                    </button>
                   </div>
                 )}
 
@@ -763,8 +764,8 @@ export default function SubmissionHistory() {
                   </div>
                 )}
 
-                {/* ── Rejected / Voided: Delete rows ── */}
-                {(isRejected || isVoided) && (
+                {/* ── Rejected / Voided / Approved: Delete rows ── */}
+                {(isRejected || isVoided || isApproved) && (
                   <div>
                     <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Sheet Actions</p>
                     <button
