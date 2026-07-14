@@ -123,20 +123,28 @@ def get_google_credentials_path() -> str:
             return _cached_path
 
     if configured:
-        raise FileNotFoundError(
-            f"Google credentials file not found: {configured}. "
-            "Set GOOGLE_CREDENTIALS_JSON on Render or fix GOOGLE_CREDENTIALS_PATH."
+        logger.warning(
+            "Google credentials file not found: %s. "
+            "Set GOOGLE_CREDENTIALS_JSON or fix GOOGLE_CREDENTIALS_PATH.",
+            configured
         )
-    raise KeyError(
-        "Google credentials not configured. Set GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH."
-    )
+        return ""
+    logger.warning("Google credentials not configured. Set GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH.")
+    return ""
 
 
 def load_service_account_credentials(scopes: list[str]):
     """Build oauth2client credentials from resolved credentials file."""
     from oauth2client.service_account import ServiceAccountCredentials
 
+    path = get_google_credentials_path()
+    if not path or not Path(path).is_file():
+        raise ValueError(
+            "Google credentials are not configured or the path is invalid. "
+            "Please check GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH env variables."
+        )
+
     return ServiceAccountCredentials.from_json_keyfile_name(
-        get_google_credentials_path(),
+        path,
         scopes,
     )

@@ -16,7 +16,12 @@ load_dotenv(BASE_DIR / ".env")
 def _env_path(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
-        raise KeyError(f"Configuration path environment variable '{name}' must be set in your .env file.")
+        import logging
+        logging.getLogger("planning_suite.config").warning(
+            "Configuration environment variable '%s' is not set. Google Sheets features for this worksheet will fail.",
+            name
+        )
+        return ""
     return value
 
 
