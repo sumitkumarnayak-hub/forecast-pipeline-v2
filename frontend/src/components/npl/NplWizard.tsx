@@ -70,6 +70,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const isReplacement = subType === "Replacement";
   const isExpansion = subType === "Expansion";
 
+  const [stage, setStage] = useState<WizardStage>(isReplacement ? "setup" : "upload");
+  const [msg, setMsg] = useState({ text: "", type: "" });
+  const [busy, setBusy] = useState("");
+  const [stepState, setStepState] = useState<{ step: string; status: "idle" | "loading" | "success" | "error"; message: string }>({ step: "", status: "idle", message: "" });
+
+  const [category, setCategory] = useState("");
+  const [planLevel, setPlanLevel] = useState<"city" | "hub" | "">("");
+  const [selectedCities, setSelectedCities] = useState<string[]>([]);
+
   const stages = useMemo(() => {
     if (isReplacement) {
       return planLevel === "city"
@@ -80,15 +89,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       ? (["upload", "dates", "confirm"] as const)
       : (["upload", "split", "dates", "confirm"] as const);
   }, [isReplacement, planLevel]);
-
-  const [stage, setStage] = useState<WizardStage>(isReplacement ? "setup" : "upload");
-  const [msg, setMsg] = useState({ text: "", type: "" });
-  const [busy, setBusy] = useState("");
-  const [stepState, setStepState] = useState<{ step: string; status: "idle" | "loading" | "success" | "error"; message: string }>({ step: "", status: "idle", message: "" });
-
-  const [category, setCategory] = useState("");
-  const [planLevel, setPlanLevel] = useState<"city" | "hub" | "">("");
-  const [selectedCities, setSelectedCities] = useState<string[]>([]);
 
   // --- Hub catalog vs. hub selection --------------------------------------
   // These used to be conflated into a single `cityHubs` object, which caused
