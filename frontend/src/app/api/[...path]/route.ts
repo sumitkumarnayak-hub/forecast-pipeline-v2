@@ -9,9 +9,21 @@ const PRODUCTION_BACKEND_URL = "https://sumitnayak210106-planning.hf.space";
 
 function resolveBackendUrl(): string {
   const fromEnv = process.env.BACKEND_URL?.trim() || process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (fromEnv) return fromEnv;
-  if (process.env.VERCEL) return PRODUCTION_BACKEND_URL;
-  return "http://localhost:8000";
+  let url = fromEnv;
+  if (!url) {
+    if (process.env.VERCEL) {
+      url = PRODUCTION_BACKEND_URL;
+    } else {
+      url = "http://localhost:8000";
+    }
+  }
+  
+  // Clean URL to handle trailing slashes or duplicate /api prefixes from user config
+  url = url.replace(/\/+$/, "");
+  if (url.endsWith("/api")) {
+    url = url.slice(0, -4);
+  }
+  return url;
 }
 
 const BACKEND = resolveBackendUrl();
