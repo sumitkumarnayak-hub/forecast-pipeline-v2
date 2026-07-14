@@ -10,11 +10,10 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# ── Make sure src/ is importable ──────────────────────────────────────────────
+# ── Make sure backend/ is importable ──────────────────────────────────────────
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-SRC_DIR = BACKEND_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 # ── Load .env before anything else ────────────────────────────────────────────
 from dotenv import load_dotenv

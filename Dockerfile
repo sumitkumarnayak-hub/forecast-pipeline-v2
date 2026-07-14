@@ -21,7 +21,8 @@ COPY backend/requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY backend/app ./app
-COPY backend/src ./src
+COPY backend/core ./core
+COPY backend/features ./features
 COPY backend/scripts ./scripts
 
 # Writable artifact dirs (synced from Google Drive at startup when STORAGE_BACKEND=drive)
