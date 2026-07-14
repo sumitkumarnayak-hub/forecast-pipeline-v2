@@ -180,7 +180,7 @@ class Database:
                 conn,
                 password="product123",
                 full_name="Product User",
-                email="product@company.com",
+                email="product@licious.com",
                 role="product",
             )
 

@@ -5,7 +5,7 @@ import os
 
 from fastapi import Response
 
-AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "ps_access_token")
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "ps_auth").strip() or "ps_auth"
 IS_PRODUCTION = os.getenv("APP_ENV", "development").lower() == "production"
 COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true" if IS_PRODUCTION else "false").lower() == "true"
 COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax")

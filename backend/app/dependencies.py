@@ -74,7 +74,33 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    return decode_token(token)
+    payload = decode_token(token)
+    
+    # Query database to verify user still exists (resolves session mismatch after DB reset/restart)
+    db = get_shared_database()
+    try:
+        user_id = int(payload.get("sub", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session token sub claim",
+        )
+        
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User session invalid or user not found in database",
+        )
+        
+    # Return backward-compatible session dictionary
+    return {
+        "sub": str(user["id"]),
+        "role": user["role"],
+        "full_name": user.get("full_name", ""),
+        "email": user.get("email", ""),
+        "exp": payload.get("exp"),
+    }
 
 
 def require_write(user: dict = Depends(get_current_user)) -> dict:
