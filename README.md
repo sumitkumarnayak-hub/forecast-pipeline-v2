@@ -1,3 +1,13 @@
+---
+title: Planning Suite API
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Demand Planning & Forecasting Suite (Monorepo)
 
 A production-grade web application for forecasting pipelines, manual baseline operations, auto-pilot synchronization, and new product/hub launches. 
