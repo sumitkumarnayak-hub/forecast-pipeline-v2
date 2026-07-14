@@ -30,7 +30,7 @@ if _src not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-from planning_suite.config import (
+from app.config import (
     CLUSTER_MASTER_SHEET_URL,
     DP_LOGICS_SHEET_URL,
     HUB_LEVEL_PLANNING_SHEET_URL,
@@ -42,9 +42,11 @@ from planning_suite.config import (
     DP_LOGICS_FOLDER,
     BASELINE_OUTPUTS_FOLDER,
 )
-from planning_suite.services.google_sheets import GoogleSheetsManager
-from planning_suite.services.helpers import normalize_base_plan_columns
-from planning_suite.services.baseline_io import (
+from core.shared.google_sheets import GoogleSheetsManager
+
+from core.shared.helpers import normalize_base_plan_columns
+
+from features.baseline.io import (
     avl_flag_subcat_cat_df,
     load_percentile_slices_engine,
     load_product_masters_sheets_engine,
@@ -475,7 +477,8 @@ required_cols = ['city_name','Type', 'Hub_name', 'Source_Hub', 'Hub_id', 'Percen
 _apply_hub = os.getenv("BASELINE_APPLY_HUB_CHANGES", "1").strip().lower() not in ("0", "false", "no", "n")
 
 if _apply_hub:
-    from planning_suite.services.hub_launch_sync import load_hub_changes_for_baseline
+    from features.hub_launch.sync import load_hub_changes_for_baseline
+
     hub_changes_df = load_hub_changes_for_baseline(sheets_manager)
     print(f"Hub changes source: pipeline params ({PIPELINE_PARAMS_HUB_CHANGES_TAB})")
 else:

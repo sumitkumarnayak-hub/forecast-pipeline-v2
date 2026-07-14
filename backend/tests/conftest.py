@@ -12,7 +12,7 @@ SRC_DIR = BACKEND_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from app.deps import create_access_token  # noqa: E402
+from app.dependencies import create_access_token  # noqa: E402
 from app.main import app  # noqa: E402
 
 

@@ -11,7 +11,8 @@ load_dotenv(os.path.join(PROJECT_ROOT, "backend/.env"))
 import sys
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend/src"))
 
-from planning_suite.features.new_product_launch import parse_city_upload, parse_hub_upload
+from features.product_launch.core import parse_city_upload, parse_hub_upload
+
 
 def test_validation_edge_cases():
     print("=== Testing Upload Validation Edge Cases ===")

@@ -1,8 +1,10 @@
 import os
 import json
 import pandas as pd
-from planning_suite.services.google_sheets import GoogleSheetsManager
-from planning_suite.services.hub_sync import build_new_hub_sync_preview
+from core.shared.google_sheets import GoogleSheetsManager
+
+from features.final_plan.hub_sync import build_new_hub_sync_preview
+
 
 def run_test():
     from dotenv import load_dotenv

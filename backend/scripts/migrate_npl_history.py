@@ -8,9 +8,12 @@ from pathlib import Path
 backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir / "src"))
 
-from planning_suite import config as cfg
-from planning_suite.services.google_sheets import GoogleSheetsManager
-from planning_suite.db.engine import Database
+from app import config as cfg
+
+from core.shared.google_sheets import GoogleSheetsManager
+
+from core.database.engine import Database
+
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("migrate_npl")

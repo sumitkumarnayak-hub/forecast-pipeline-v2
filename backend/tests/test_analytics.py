@@ -8,7 +8,7 @@ import pandas as pd
 
 def test_insights_bootstrap(client, auth_headers):
     with patch(
-        "planning_suite.services.insights_analytics.get_insights_bootstrap",
+        "features.insights.analytics.get_insights_bootstrap",
         return_value={
             "empty": False,
             "weeks": ["2026-W01"],
@@ -32,7 +32,7 @@ def test_insights_view_executive(client, auth_headers):
         "city_leaderboard": [],
     }
     with patch(
-        "planning_suite.services.insights_analytics.build_insights_view",
+        "features.insights.analytics.build_insights_view",
         return_value=mock_payload,
     ):
         resp = client.get(
@@ -45,7 +45,8 @@ def test_insights_view_executive(client, auth_headers):
 
 def test_revenue_trends_chart_x_keys_align():
     """Chart x_values must match series point x keys (frontend joins on strict equality)."""
-    from planning_suite.services.dashboard_revenue_trends import build_revenue_trends
+    from features.dashboard.revenue_trends import build_revenue_trends
+
 
     try:
         payload = build_revenue_trends(dod_view="City")
@@ -65,7 +66,7 @@ def test_revenue_trends_chart_x_keys_align():
 
 def test_reports_city_revenue_trends(client, auth_headers):
     with patch(
-        "planning_suite.services.dashboard_revenue_trends.build_revenue_trends",
+        "features.dashboard.revenue_trends.build_revenue_trends",
         return_value={"day_on_day": {"empty": True}, "week_on_week": {"empty": True}},
     ):
         resp = client.get("/api/insights/reports/city-revenue-trends", headers=auth_headers)
@@ -83,7 +84,7 @@ def test_reports_actual_vs_plan(client, auth_headers):
             "revenue": [900],
         }
     )
-    with patch("planning_suite.services.insights_analytics.load_6w_insights", return_value=df):
+    with patch("features.insights.analytics.load_6w_insights", return_value=df):
         resp = client.get(
             "/api/insights/reports/actual-vs-plan?granularity=city_category",
             headers=auth_headers,

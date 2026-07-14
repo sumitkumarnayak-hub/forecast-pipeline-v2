@@ -20,12 +20,12 @@ if str(SRC_DIR) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(BACKEND_DIR / ".env")
 
-# Resolve Google credentials from GOOGLE_CREDENTIALS_JSON before planning_suite.config loads.
-from planning_suite.google_credentials import get_google_credentials_path
+# Resolve Google credentials from GOOGLE_CREDENTIALS_JSON before app.config loads.
+from core.shared.google_credentials import get_google_credentials_path
 
 get_google_credentials_path()
 
-from app.logging_config import setup_logging
+from app.logging import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -53,8 +53,18 @@ from fastapi.responses import JSONResponse
 
 from app.middleware import request_context_middleware
 from app.production import public_error_detail, validate_production_environment
-from app.routers import auth, dashboard, master_data, baseline, autopilot
-from app.routers import final_plan, new_product_launch, insights, settings, validation, demo_filter
+from features.auth import router as auth
+from features.dashboard import router as dashboard
+from features.master_data import router as master_data
+from features.baseline import router as baseline
+from features.autopilot import router as autopilot
+from features.final_plan import router as final_plan
+from features.product_launch import router as new_product_launch
+from features.insights import router as insights
+from features.settings import router as settings
+from features.validation import router as validation
+from features.shared import demo_filter_router as demo_filter
+
 
 
 def _cors_origins() -> list[str]:
@@ -69,7 +79,8 @@ def _cors_origins() -> list[str]:
 async def lifespan(app: FastAPI):
     try:
         validate_production_environment()
-        from planning_suite.db.engine import get_shared_database
+        from core.database.engine import get_shared_database
+
         db = get_shared_database()
         db.init_database()
         logger.info("Database initialised")
@@ -77,8 +88,10 @@ async def lifespan(app: FastAPI):
         logger.warning("DB init warning: %s", exc)
 
     try:
-        from planning_suite.storage.sync import pull_startup_artifacts
-        from planning_suite.storage.factory import storage_backend_name
+        from core.storage.sync import pull_startup_artifacts
+
+        from core.storage.factory import storage_backend_name
+
 
         if storage_backend_name() != "local":
             summary = pull_startup_artifacts(skip_existing=True)
@@ -115,14 +128,16 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        from planning_suite.services.cache_warmup import start_cache_warmup
+        from core.shared.cache_warmup import start_cache_warmup
+
 
         start_cache_warmup()
     except Exception as exc:
         logger.warning("Cache warmup warning: %s", exc)
 
     try:
-        from planning_suite.services.ff_input_watcher import start_ff_input_watcher
+        from features.product_launch.watcher import start_ff_input_watcher
+
 
         start_ff_input_watcher(interval_seconds=45)
         logger.info("FF Input change watcher started (45s interval)")
@@ -206,7 +221,8 @@ def health():
 def health_ready():
     """Readiness probe — verifies database connectivity."""
     from sqlalchemy import text
-    from planning_suite.db.engine import get_shared_database
+    from core.database.engine import get_shared_database
+
 
     try:
         db = get_shared_database()
@@ -225,7 +241,8 @@ def health_ready():
 @app.get("/api/health/storage")
 def health_storage():
     """Storage diagnostics — no secrets, for post-deploy troubleshooting."""
-    from planning_suite.services.storage_status import get_storage_status
+    from core.shared.storage_status import get_storage_status
+
 
     status = get_storage_status(check_remote=True)
     ok = not status.get("missing_artifacts") and not status.get("warning")

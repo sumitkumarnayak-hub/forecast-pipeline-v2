@@ -7,7 +7,7 @@ import time
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.logging_config import new_request_id, request_id_var
+from app.logging import new_request_id, request_id_var
 
 logger = logging.getLogger("planning_suite.http")
 

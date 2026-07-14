@@ -9,7 +9,7 @@ import pandas as pd
 
 def test_validation_bootstrap(client, auth_headers):
     with patch(
-        "planning_suite.services.validation_service.get_validation_bootstrap",
+        "features.validation.service.get_validation_bootstrap",
         return_value={"logics": {"validation_version": "1"}, "outputs": {}, "history_count": 0},
     ):
         resp = client.get("/api/validation/bootstrap", headers=auth_headers)
@@ -44,7 +44,7 @@ def test_validate_input_raw_csv(client, auth_headers):
 
 def test_validate_master_ph(client, auth_headers):
     with patch(
-        "planning_suite.services.validation_service.validate_master_by_id",
+        "features.validation.service.validate_master_by_id",
         return_value={"master_id": "product_hub_master", "valid": True, "error_count": 0, "errors": []},
     ):
         resp = client.post(

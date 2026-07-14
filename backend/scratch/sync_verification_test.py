@@ -11,10 +11,13 @@ import sys
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend/src"))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend"))
 
-from planning_suite import config as cfg
-from planning_suite.features.new_product_launch import _open_sheet, parse_city_upload, load_hub_salience, split_city_to_hubs
-from planning_suite.services import npl_wizard as wiz
-from app.routers.new_product_launch import _get_product_master_details_map, _build_hub_plan_row_dynamic
+from app import config as cfg
+
+from features.product_launch.core import _open_sheet, parse_city_upload, load_hub_salience, split_city_to_hubs
+
+from features.product_launch import wizard as wiz
+
+from features.product_launch.router import _get_product_master_details_map, _build_hub_plan_row_dynamic
 
 def execute_real_sync_hub_level():
     print("=== Executing Real Hub Level Sync ===")

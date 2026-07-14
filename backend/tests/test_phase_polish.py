@@ -25,7 +25,7 @@ def test_new_hub_sync_preview_empty(client, auth_headers, monkeypatch):
             return pd.DataFrame()
 
     monkeypatch.setattr(
-        "planning_suite.services.sheets_session.get_sheets_manager",
+        "core.shared.sheets_session.get_sheets_manager",
         lambda: FakeGsm(),
     )
     resp = client.post("/api/master-data/new-hub-sync/preview", headers=auth_headers)
@@ -44,7 +44,7 @@ def test_npl_product_ids_endpoint(client, auth_headers, monkeypatch):
         }
     )
     monkeypatch.setattr(
-        "planning_suite.services.npl_wizard.load_product_master",
+        "features.product_launch.wizard.load_product_master",
         lambda: fake,
     )
     resp = client.get("/api/new-product-launch/masters/product-ids", headers=auth_headers)

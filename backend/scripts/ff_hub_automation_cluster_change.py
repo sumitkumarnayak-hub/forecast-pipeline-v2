@@ -45,7 +45,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
-from planning_suite.config.settings import (
+from app.config.settings import (
     DEMAND_PLANNING_MASTERS_SHEET_URL,
     DP_LOGICS_SHEET_URL,
     EA_TRACKER_SHEET_URL,
@@ -61,7 +61,7 @@ def _ui_step(msg):
     """Lightweight progress logger visible in terminal/Streamlit script output."""
     print(f"[UI STEP] {msg}", flush=True)
 
-# ── Constants (from .env via planning_suite.config) ───────────────────────────
+# ── Constants (from .env via app.config) ───────────────────────────
 _CREDS = GOOGLE_CREDENTIALS_PATH
 _DPM_KEY = sheet_id_from_url(DEMAND_PLANNING_MASTERS_SHEET_URL)
 _DP_LOGICS_KEY = sheet_id_from_url(DP_LOGICS_SHEET_URL)

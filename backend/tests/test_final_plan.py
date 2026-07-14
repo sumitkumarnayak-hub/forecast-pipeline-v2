@@ -16,18 +16,18 @@ def test_final_plan_bootstrap(client, auth_headers):
         "inv_logic_files": [],
         "checks": [],
     }
-    with patch("planning_suite.services.pipeline_state.is_baseline_approved", return_value=True):
-        with patch("planning_suite.services.final_plan_inputs.get_inputs_status", return_value=mock_inputs):
+    with patch("core.shared.pipeline_state.is_baseline_approved", return_value=True):
+        with patch("features.final_plan.inputs.get_inputs_status", return_value=mock_inputs):
             with patch(
-                "planning_suite.services.final_plan_inputs.load_city_mapping_preview",
+                "features.final_plan.inputs.load_city_mapping_preview",
                 return_value={"available": False, "rows": [], "columns": []},
             ):
                 with patch(
-                    "planning_suite.services.final_plan_engine.load_hub_suggestions_preview",
+                    "features.final_plan.engine.load_hub_suggestions_preview",
                     return_value={"rows": [], "columns": []},
                 ):
                     with patch(
-                        "planning_suite.services.final_plan_engine.get_latest_output_preview",
+                        "features.final_plan.engine.get_latest_output_preview",
                         return_value={"available": False},
                     ):
                         resp = client.get("/api/final-plan/bootstrap", headers=auth_headers)
@@ -41,7 +41,7 @@ def test_final_plan_bootstrap(client, auth_headers):
 
 def test_final_plan_inputs_status(client, auth_headers):
     with patch(
-        "planning_suite.services.final_plan_inputs.get_inputs_status",
+        "features.final_plan.inputs.get_inputs_status",
         return_value={"ready": True, "checks": []},
     ):
         resp = client.get("/api/final-plan/inputs-status", headers=auth_headers)
@@ -51,7 +51,7 @@ def test_final_plan_inputs_status(client, auth_headers):
 
 def test_sync_city_mapping(client, auth_headers):
     with patch(
-        "planning_suite.services.final_plan_inputs.sync_city_mapping_to_folder",
+        "features.final_plan.inputs.sync_city_mapping_to_folder",
         return_value={"detail": "Saved 10 rows", "rows": 10},
     ):
         resp = client.post("/api/final-plan/sync-city-mapping", headers=auth_headers)
@@ -66,7 +66,7 @@ def test_upload_festive_input(client, auth_headers):
     buf.seek(0)
 
     with patch(
-        "planning_suite.services.final_plan_inputs.save_uploaded_input",
+        "features.final_plan.inputs.save_uploaded_input",
         return_value={"detail": "Saved Festive.xlsx (1 rows)", "rows": 1},
     ) as mock_save:
         resp = client.post(
@@ -80,9 +80,9 @@ def test_upload_festive_input(client, auth_headers):
 
 
 def test_run_final_plan_blocks_when_inputs_missing(client, auth_headers):
-    with patch("planning_suite.services.pipeline_state.is_baseline_approved", return_value=True):
+    with patch("core.shared.pipeline_state.is_baseline_approved", return_value=True):
         with patch(
-            "planning_suite.services.final_plan_inputs.get_inputs_status",
+            "features.final_plan.inputs.get_inputs_status",
             return_value={"ready": False, "inv_logic_ok": False, "checks": [{"label": "Festive.xlsx", "required": True, "exists": False}]},
         ):
             resp = client.post("/api/final-plan/run", headers=auth_headers)

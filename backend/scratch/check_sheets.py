@@ -22,8 +22,10 @@ try:
 except Exception as e:
     print("Could not delete temp file:", e)
 
-from planning_suite import config as cfg
-from planning_suite.features.new_product_launch import _get_client
+from app import config as cfg
+
+from features.product_launch.core import _get_client
+
 
 print(f"NEW_PRODUCT_LAUNCH_SHEET_URL: {cfg.NEW_PRODUCT_LAUNCH_SHEET_URL}")
 print(f"NEW_PRODUCT_LAUNCH_SHEET_KEY: {cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY}")

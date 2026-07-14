@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from planning_suite.features.new_product_launch import WEEKDAYS, validate_npl_upload
+from features.product_launch.core import WEEKDAYS, validate_npl_upload
+
 
 
 def test_validate_npl_upload_city_schema():
@@ -41,8 +42,9 @@ def test_validate_npl_upload_rejects_empty():
 
 
 def test_npl_categories_endpoint(client, auth_headers, monkeypatch):
-    from planning_suite.services.api_cache import CacheNS, cache_invalidate
-    import planning_suite.services.npl_wizard as wiz
+    from core.shared.api_cache import CacheNS, cache_invalidate
+
+    import features.product_launch.wizard as wiz
 
     cache_invalidate(CacheNS.NPL_WIZARD, "categories")
     monkeypatch.setattr(wiz, "list_categories", lambda: ["A", "B"])
@@ -64,7 +66,7 @@ def test_npl_auto_sync_dry_run(client, auth_headers):
         error = ""
 
     with patch(
-        "planning_suite.automation.new_product_launch_sync.run_new_product_launch_sync_cli",
+        "features.product_launch.auto_sync.run_new_product_launch_sync_cli",
         return_value=FakeResult(),
     ):
         resp = client.post(

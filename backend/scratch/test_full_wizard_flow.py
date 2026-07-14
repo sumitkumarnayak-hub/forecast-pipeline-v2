@@ -12,10 +12,14 @@ import sys
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend/src"))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend"))
 
-from planning_suite.features.new_product_launch import parse_city_upload, parse_hub_upload
-from planning_suite.services.npl_wizard import check_duplicates
-from planning_suite.services import npl_wizard as wiz
-from planning_suite.features.new_product_launch import load_salience_source, get_cities_from_salience, get_hubs_for_city
+from features.product_launch.core import parse_city_upload, parse_hub_upload
+
+from features.product_launch.wizard import check_duplicates
+
+from features.product_launch import wizard as wiz
+
+from features.product_launch.core import load_salience_source, get_cities_from_salience, get_hubs_for_city
+
 
 def test_full_pipeline_flow():
     print("=== Testing Full Wizard Flow (Step 1 to Step 4) ===")
@@ -48,9 +52,11 @@ def test_full_pipeline_flow():
     # STEP 2: Hub Split generation (Derived from Hub Salience Suggestions)
     # -------------------------------------------------------------
     t0 = time.perf_counter()
-    from planning_suite.features.new_product_launch import load_hub_salience
+    from features.product_launch.core import load_hub_salience
+
     salience_df = load_hub_salience()
-    from planning_suite.features.new_product_launch import split_city_to_hubs
+    from features.product_launch.core import split_city_to_hubs
+
     hub_split_df, zero_sal_info = split_city_to_hubs(parsed_df, salience_df)
     t_step2 = (time.perf_counter() - t0) * 1000
     print(f"Step 2: Hub Allocation Split generated in {t_step2:.2f}ms")
@@ -72,7 +78,7 @@ def test_full_pipeline_flow():
     # -------------------------------------------------------------
     t0 = time.perf_counter()
     # Call the exact backend route builder logic we just resolved
-    from app.routers.new_product_launch import _get_product_master_details_map, _build_city_plan_row_dynamic
+    from features.product_launch.router import _get_product_master_details_map, _build_city_plan_row_dynamic
     pm_details_map = _get_product_master_details_map()
     
     rows_with_dates = wiz.apply_launch_dates(hub_rows, launch_date)

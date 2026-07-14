@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv("C:/Users/sumitkumar.nayak/Desktop/forecast-pipeline-v2/backend/.env")
 
-from planning_suite.services.google_sheets import GoogleSheetsManager
-from planning_suite.config import DPM_SHEET_KEY
+from core.shared.google_sheets import GoogleSheetsManager
+
+from app.config import DPM_SHEET_KEY
 
 def run_sync():
     print("Loading preview output data...")

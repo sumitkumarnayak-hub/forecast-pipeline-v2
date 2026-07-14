@@ -6,7 +6,7 @@ Run from the repository root (recommended for task schedulers):
 
     python scripts/run_optimized_autopilot.py
 
-See also: planning_suite.automation.optimized_autopilot
+See also: features.autopilot.optimized
 """
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from planning_suite.automation.optimized_autopilot import main
+from features.autopilot.optimized import main
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

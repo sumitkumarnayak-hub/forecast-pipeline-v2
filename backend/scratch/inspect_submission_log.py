@@ -8,8 +8,10 @@ sys.path.insert(0, str(backend_dir / "src"))
 from dotenv import load_dotenv
 load_dotenv(backend_dir / ".env")
 
-from planning_suite import config as cfg
-from planning_suite.features.new_product_launch import _open_sheet
+from app import config as cfg
+
+from features.product_launch.core import _open_sheet
+
 
 try:
     log_sheet = _open_sheet(cfg.HUB_LEVEL_PLANNING_SHEET_KEY, "Submission_Log")

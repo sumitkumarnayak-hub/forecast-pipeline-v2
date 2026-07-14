@@ -9,7 +9,8 @@ sys.path.insert(0, str(backend_dir / "src"))
 from dotenv import load_dotenv
 load_dotenv(backend_dir / ".env")
 
-from planning_suite import google_credentials as gc
+from core.shared import google_credentials as gc
+
 
 print("--- ENV VARS ---")
 print("GOOGLE_CREDENTIALS_PATH in env:", os.getenv("GOOGLE_CREDENTIALS_PATH"))

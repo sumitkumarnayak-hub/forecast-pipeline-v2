@@ -6,7 +6,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from planning_suite.services import baseline_wave_ops as wave
+from features.baseline import wave_ops as wave
+
 
 
 def test_get_bulk_week_plan_returns_ten_weeks():
@@ -54,7 +55,7 @@ def test_api_bulk_plan_endpoint(client, auth_headers):
 
 def test_api_hub_suggestion_error_handling(client, auth_headers):
     with patch(
-        "app.routers.baseline.wave.load_hub_suggestion_for_approve",
+        "features.baseline.router.wave.load_hub_suggestion_for_approve",
         side_effect=ValueError("empty"),
     ):
         resp = client.get("/api/baseline/approve/hub-suggestion", headers=auth_headers)
@@ -70,7 +71,7 @@ def test_api_review_comparison_unknown_view(client, auth_headers):
     assert resp.status_code == 400
 
 
-@patch("app.routers.baseline.wave.fetch_previous_baseline")
+@patch("features.baseline.router.wave.fetch_previous_baseline")
 def test_api_fetch_previous_baseline(mock_fetch, client, auth_headers):
     mock_fetch.return_value = {"rows": 10, "target_week": 28}
     resp = client.post(

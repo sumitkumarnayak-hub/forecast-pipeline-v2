@@ -8,8 +8,9 @@ sys.path.insert(0, str(backend_dir / "src"))
 from dotenv import load_dotenv
 load_dotenv(backend_dir / ".env")
 
-from planning_suite.config import CLUSTER_MASTER_SHEET_KEY
-from planning_suite.features.new_product_launch import _open_sheet
+from app.config import CLUSTER_MASTER_SHEET_KEY
+from features.product_launch.core import _open_sheet
+
 
 try:
     client = _open_sheet(CLUSTER_MASTER_SHEET_KEY, "P-L Master").spreadsheet

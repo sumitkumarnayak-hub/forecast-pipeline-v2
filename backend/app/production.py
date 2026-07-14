@@ -17,7 +17,7 @@ def validate_production_environment() -> list[str]:
     if not is_production():
         return warnings
 
-    from planning_suite.config import get_auth_secret
+    from app.config import get_auth_secret
 
     get_auth_secret()
 
@@ -35,8 +35,9 @@ def validate_production_environment() -> list[str]:
     if not cookie_secure:
         warnings.append("AUTH_COOKIE_SECURE should be true in production (HTTPS)")
 
-    from planning_suite.cloud_paths import is_cloud_deploy
-    from planning_suite.storage.factory import storage_backend_name
+    from core.shared.cloud_paths import is_cloud_deploy
+    from core.storage.factory import storage_backend_name
+
 
     if is_cloud_deploy():
         backend = storage_backend_name()

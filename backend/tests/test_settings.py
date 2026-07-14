@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 def test_settings_bootstrap(client, auth_headers):
     with patch(
-        "planning_suite.services.settings_service.get_settings_bootstrap",
+        "features.settings.service.get_settings_bootstrap",
         return_value={
             "profile": {"username": "admin", "role": "admin"},
             "preferences": {"preview_rows": 100},
@@ -26,11 +26,11 @@ def test_settings_bootstrap(client, auth_headers):
 
 def test_update_preferences(client, auth_headers):
     with patch.object(
-        __import__("planning_suite.db.engine", fromlist=["Database"]).Database,
+        __import__("core.database.engine", fromlist=["Database"]).Database,
         "get_user_preferences",
         return_value={"email_notifications": True, "auto_sync_masters": False, "preview_rows": 100},
     ), patch.object(
-        __import__("planning_suite.db.engine", fromlist=["Database"]).Database,
+        __import__("core.database.engine", fromlist=["Database"]).Database,
         "save_user_preferences",
     ) as mock_save:
         resp = client.post(
@@ -44,7 +44,7 @@ def test_update_preferences(client, auth_headers):
 
 def test_session_system_details(client, auth_headers):
     with patch(
-        "planning_suite.services.settings_service.save_session_system_details",
+        "features.settings.service.save_session_system_details",
         return_value={"saved": True, "session_id": "abc123…", "system_details": {"client_browser_user_agent": "test"}},
     ):
         resp = client.post(
@@ -58,7 +58,7 @@ def test_session_system_details(client, auth_headers):
 
 def test_email_log_admin(client, auth_headers):
     with patch(
-        "planning_suite.services.settings_service._email_log_rows",
+        "features.settings.service._email_log_rows",
         return_value=[{"id": 1, "status": "sent", "subject": "Test"}],
     ):
         resp = client.get("/api/settings/email-log", headers=auth_headers)
@@ -68,7 +68,7 @@ def test_email_log_admin(client, auth_headers):
 
 def test_test_email_success(client, auth_headers):
     with patch(
-        "planning_suite.services.email_service.send_test_email",
+        "core.shared.email.send_test_email",
         return_value={"ok": True, "status": "sent", "recipients": ["a@b.com"]},
     ):
         resp = client.post(
@@ -82,7 +82,7 @@ def test_test_email_success(client, auth_headers):
 
 def test_test_email_send_failure(client, auth_headers):
     with patch(
-        "planning_suite.services.email_service.send_test_email",
+        "core.shared.email.send_test_email",
         return_value={"ok": False, "status": "failed", "error": "SMTP timeout"},
     ):
         resp = client.post(

@@ -26,7 +26,8 @@ os.chdir(BACKEND_DIR.parent)
 
 
 def _drive_folder_label() -> str:
-    from planning_suite import config
+    from app import config as config
+
 
     if config.get_pipeline_drive_folder_url():
         return config.get_pipeline_drive_folder_url()
@@ -43,15 +44,19 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List files that would be synced (no upload)")
     args = parser.parse_args()
 
-    from planning_suite import config
-    from planning_suite.storage.factory import reset_storage_cache, get_storage, storage_backend_name
-    from planning_suite.storage.sync import pull_all_artifacts, push_all_artifacts
+    from app import config as config
+
+    from core.storage.factory import reset_storage_cache, get_storage, storage_backend_name
+
+    from core.storage.sync import pull_all_artifacts, push_all_artifacts
+
 
     reset_storage_cache()
     backend_name = storage_backend_name()
 
     if args.dry_run:
-        from planning_suite.storage.artifacts import iter_artifact_specs
+        from core.storage.artifacts import iter_artifact_specs
+
 
         specs = iter_artifact_specs()
         total = sum(Path(p).stat().st_size for _, p in specs)

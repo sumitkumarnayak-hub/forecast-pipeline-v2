@@ -9,8 +9,10 @@ sys.path.insert(0, str(backend_dir / "src"))
 from dotenv import load_dotenv
 load_dotenv(backend_dir / ".env")
 
-from planning_suite import config as cfg
-from planning_suite.features.new_product_launch import _get_client
+from app import config as cfg
+
+from features.product_launch.core import _get_client
+
 
 try:
     client = _get_client()
