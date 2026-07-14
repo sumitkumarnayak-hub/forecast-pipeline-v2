@@ -1246,7 +1246,8 @@ def preview_submission_sync(
     if not can_approve(current_user.get("role", "")):
         raise HTTPException(status_code=403, detail="Admin approval required")
     try:
-        return _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
+        owner_email = current_user.get("email") or current_user.get("username")
+        return _prepare_new_product_launch_sync(submission_id, include_existing_check=True, owner_email=owner_email)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1262,7 +1263,8 @@ def sync_submission_to_new_product_launch(
     if not can_approve(current_user.get("role", "")):
         raise HTTPException(status_code=403, detail="Admin approval required")
     try:
-        return _append_approved_to_new_product_launch(submission_id)
+        owner_email = current_user.get("email") or current_user.get("username") or "Demand Planning"
+        return _append_approved_to_new_product_launch(submission_id, owner_email=owner_email)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1288,6 +1290,7 @@ def get_submission_rows(
 
 class DeleteRowsBody(BaseModel):
     row_indices: List[int]
+    reason: str
 
 
 @router.delete("/submissions/{submission_id}/rows")
@@ -1298,9 +1301,8 @@ def delete_submission_rows(
     db: Database = Depends(get_db),
 ):
     """
-    Delete exactly the specified sheet row indices (1-based) from Submission_Log.
-    Only rows that genuinely belong to submission_id are removed.
-    If all rows for the submission are deleted, the DB record status is updated to 'Deleted'.
+    Delete exactly the specified sheet row indices (1-based) from Submission_Log, Launch_Output,
+    and City_Plan / Hub_Plan sheets if approved.
     Requires write permission.
     """
     from features.product_launch.core import (
@@ -1312,9 +1314,11 @@ def delete_submission_rows(
 
     if not body.row_indices:
         raise HTTPException(status_code=400, detail="row_indices must not be empty")
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="reason must not be empty")
 
     try:
-        deleted_count = delete_submission_rows_by_index(submission_id, body.row_indices)
+        deleted_count = delete_submission_rows_by_index(submission_id, body.row_indices, reason=body.reason)
 
         # Check if any rows remain for this submission — if none, mark DB as Deleted
         remaining = get_submission_rows_with_indices(submission_id)
@@ -1326,9 +1330,10 @@ def delete_submission_rows(
         )
         if not remaining:
             try:
-                db.update_npl_submission_status(submission_id, "Deleted", "All rows deleted from sheet")
+                db.update_npl_submission_status(submission_id, "Deleted", body.reason)
                 logger.info(
-                    "[NPL] submission %s fully deleted from sheet by %s", submission_id, username
+                    "[NPL] submission %s fully deleted from sheet by %s (Reason: %s)",
+                    submission_id, username, body.reason
                 )
             except Exception as db_exc:
                 logger.warning("[NPL] Could not update DB status to Deleted: %s", db_exc)
@@ -1568,7 +1573,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
     for h in headers:
         h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
         if h_norm in ("owner", "owner name"):
-            row.append("Demand Planning")
+            owner = source.get("_owner_email") or source.get("Submitted_By") or "Demand Planning"
+            row.append(owner)
         elif h_norm == "type":
             row.append(source.get("Submission_Type", "New Launch"))
         elif h_norm == "channel":
@@ -1630,7 +1636,7 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
     return row
 
 
-def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_check: bool) -> dict:
+def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_check: bool, owner_email: str | None = None) -> dict:
     """Build the exact City_Plan or Hub_Plan rows for preview or sync."""
     from datetime import datetime
     from app import config as cfg
@@ -1730,7 +1736,7 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
             "Fri": source.get("Fri", 0),
             "Sat": source.get("Sat", 0),
             "Sun": source.get("Sun", 0),
-            "_owner_email": source.get("_owner_email", ""),
+            "_owner_email": owner_email or source.get("Submitted_By") or source.get("_owner_email", ""),
         }
 
         if target_worksheet == "Hub_Plan":
@@ -1763,14 +1769,14 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
     }
 
 
-def _append_approved_to_new_product_launch(submission_id: str) -> dict:
+def _append_approved_to_new_product_launch(submission_id: str, owner_email: str | None = None) -> dict:
     """Append approved Submission_Log rows to the env-configured NPL City_Plan or Hub_Plan sheet."""
     from app import config as cfg
 
     from features.product_launch.core import _open_sheet
 
 
-    prepared = _prepare_new_product_launch_sync(submission_id, include_existing_check=True)
+    prepared = _prepare_new_product_launch_sync(submission_id, include_existing_check=True, owner_email=owner_email)
     values = prepared.pop("values", [])
     target_worksheet = prepared["worksheet"]
     header_row_idx = prepared.get("header_row_idx", 1)
@@ -1806,7 +1812,8 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
     for h in headers:
         h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
         if h_norm in ("owner", "owner name"):
-            row.append("Demand Planning")
+            owner = source.get("_owner_email") or source.get("Submitted_By") or "Demand Planning"
+            row.append(owner)
         elif h_norm == "type":
             row.append(source.get("Submission_Type", "New Launch"))
         elif h_norm == "channel":

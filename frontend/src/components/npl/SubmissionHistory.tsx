@@ -168,6 +168,7 @@ export default function SubmissionHistory() {
   const [checkedIndices, setCheckedIndices] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState({ text: "", type: "" });
+  const [deleteReason, setDeleteReason] = useState("");
 
   // Note / message
   const [noteText, setNoteText] = useState("");
@@ -613,6 +614,7 @@ export default function SubmissionHistory() {
             const openDeleteModal = async () => {
               setDeleteMsg({ text: "", type: "" });
               setCheckedIndices(new Set());
+              setDeleteReason("");
               setDeleteModalOpen(true);
               setSheetRowsLoading(true);
               try {
@@ -942,6 +944,21 @@ export default function SubmissionHistory() {
                       </table>
                     </div>
                   )}
+                  {sheetRows.length > 0 && (
+                    <div style={{ marginTop: "1rem" }}>
+                      <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "0.35rem" }}>
+                        Reason for deletion <span style={{ color: "#ef4444" }}>*</span>
+                      </label>
+                      <textarea
+                        rows={2}
+                        className="form-input text-xs"
+                        placeholder="Provide a clear reason for deleting these rows..."
+                        value={deleteReason}
+                        onChange={e => setDeleteReason(e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", borderRadius: "6px" }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Footer */}
@@ -957,14 +974,14 @@ export default function SubmissionHistory() {
                       type="button"
                       className="btn btn-danger btn-sm"
                       style={{ display: "flex", alignItems: "center", gap: 6 }}
-                      disabled={checkedIndices.size === 0 || deleting}
+                      disabled={checkedIndices.size === 0 || deleting || !deleteReason.trim()}
                       onClick={async () => {
                         setDeleting(true);
                         setDeleteMsg({ text: "", type: "" });
                         try {
                           const { data } = await api.delete<{ detail: string; deleted_count: number; submission_fully_deleted: boolean }>(
                             `/api/new-product-launch/submissions/${selectedId}/rows`,
-                            { data: { row_indices: Array.from(checkedIndices) } },
+                            { data: { row_indices: Array.from(checkedIndices), reason: deleteReason } },
                           );
                           setDeleteMsg({ text: data.detail || `Deleted ${data.deleted_count} row(s)`, type: "success" });
                           setCheckedIndices(new Set());

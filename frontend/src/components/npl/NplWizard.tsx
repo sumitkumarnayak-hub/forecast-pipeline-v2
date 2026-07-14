@@ -69,7 +69,17 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const cities = context?.cities ?? [];
   const isReplacement = subType === "Replacement";
   const isExpansion = subType === "Expansion";
-  const stages = isReplacement ? REPLACEMENT_STAGES : BASE_STAGES;
+
+  const stages = useMemo(() => {
+    if (isReplacement) {
+      return planLevel === "city"
+        ? (["setup", "upload", "dates", "confirm"] as const)
+        : (["setup", "upload", "split", "dates", "confirm"] as const);
+    }
+    return planLevel === "city"
+      ? (["upload", "dates", "confirm"] as const)
+      : (["upload", "split", "dates", "confirm"] as const);
+  }, [isReplacement, planLevel]);
 
   const [stage, setStage] = useState<WizardStage>(isReplacement ? "setup" : "upload");
   const [msg, setMsg] = useState({ text: "", type: "" });
@@ -220,7 +230,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   }, []);
 
   useEffect(() => {
-    if (!selectedCities.length) return;
+    if (!selectedCities.length || planLevel !== "hub") return;
     selectedCities.forEach(city => {
       const loadState = hubLoadStateRef.current[city];
       const isCachedForCurrentCategory = loadState?.category === hubCategory && (availableHubs[city]?.length ?? 0) > 0;
@@ -231,7 +241,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     // availableHubs / hubsLoading are read for the cache/in-flight guard only;
     // including them here would re-run this effect on every fetch completion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCities, hubCategory, fetchHubsForCity]);
+  }, [selectedCities, hubCategory, planLevel, fetchHubsForCity]);
 
   const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : newLaunchPid;
   const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : newLaunchName;
@@ -298,19 +308,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       );
 
       if (planLevel === "city") {
-        setStepState({ step: "split", status: "loading", message: "Calculating hub split from salience data..." });
-        const split = await api.post("/api/new-product-launch/wizard/split-city", {
-          city_rows: data.rows,
-          forced_hubs: Object.keys(forcedHubs).length ? forcedHubs : null,
-        });
-        setHubRows(split.data.hub_rows || []);
-        setHubColumns(split.data.columns || []);
-        setZeroSal(split.data.zero_salience || {});
+        setHubRows(data.rows || []);
+        setHubColumns(data.columns || []);
+        setStage("dates");
       } else {
         setHubRows(data.rows || []);
         setHubColumns(data.columns || []);
+        setStage("split");
       }
-      setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
       const errorMsg = extractErrorMessage(err, "Upload failed");
@@ -559,7 +564,16 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     }
   };
 
-  const labels = stageLabels(subType);
+  const labels = useMemo(() => {
+    if (isReplacement) {
+      return planLevel === "city"
+        ? ["1 · Old & New SKU", "2 · Upload", "3 · Launch Date", "4 · Confirm"]
+        : ["1 · Old & New SKU", "2 · Upload", "3 · Hub Split", "4 · Launch Date", "5 · Confirm"];
+    }
+    return planLevel === "city"
+      ? ["1 · Upload", "2 · Launch Date", "3 · Confirm"]
+      : ["1 · Upload", "2 · Hub Split", "3 · Launch Date", "4 · Confirm"];
+  }, [isReplacement, planLevel]);
   const categoryOptions =
     categories.length > 0
       ? categories
@@ -786,7 +800,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               )}
             </div>
           </div>
-          {selectedCities.length > 0 && (
+          {selectedCities.length > 0 && planLevel === "hub" && (
             <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
               <p className="text-xs font-semibold mb-2">Hub multiselect per city (optional — forces split)</p>
               {selectedCities.map(city => {

@@ -1024,15 +1024,14 @@ def get_submission_rows_with_indices(submission_id: str) -> list[dict]:
 def delete_submission_rows_by_index(
     submission_id: str,
     row_indices: list[int],
+    reason: str = "",
 ) -> int:
     """
-    Delete exactly the specified 1-based sheet row indices from Submission_Log.
-    Validates that every requested index actually belongs to submission_id before
-    deleting.  Rows are deleted in reverse order so earlier indices stay valid.
-
-    Returns the count of rows actually deleted.
+    Delete exactly the specified 1-based sheet row indices from Submission_Log,
+    and clean up matching rows from Launch_Output, City_Plan, and Hub_Plan.
     """
     import gspread.utils as gu
+    from app import config as cfg
 
     sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
     data = sheet.get_all_values()
@@ -1041,6 +1040,11 @@ def delete_submission_rows_by_index(
 
     headers = data[0]
     sid_col = next((i for i, h in enumerate(headers) if h == "Submission_ID"), None)
+    pid_col = next((i for i, h in enumerate(headers) if h == "Product ID"), None)
+    city_col = next((i for i, h in enumerate(headers) if h == "City"), None)
+    hub_col = next((i for i, h in enumerate(headers) if h == "Hub"), None)
+    status_col = next((i for i, h in enumerate(headers) if h == "Status"), None)
+
     if sid_col is None:
         return 0
 
@@ -1055,10 +1059,24 @@ def delete_submission_rows_by_index(
     if not to_delete:
         return 0
 
-    # Use Sheets API batchUpdate with DeleteDimensionRequest (0-based)
-    spreadsheet_id = SPREADSHEET_ID
+    # Gather rows details to delete from other sheets
+    deleted_items = []
+    for idx in to_delete:
+        row_vals = data[idx - 1]
+        pid = row_vals[pid_col] if pid_col is not None and len(row_vals) > pid_col else ""
+        city = row_vals[city_col] if city_col is not None and len(row_vals) > city_col else ""
+        hub = row_vals[hub_col] if hub_col is not None and len(row_vals) > hub_col else ""
+        status = row_vals[status_col] if status_col is not None and len(row_vals) > status_col else ""
+        deleted_items.append({
+            "product_id": str(pid).strip(),
+            "city": str(city).strip(),
+            "hub": str(hub).strip(),
+            "status": str(status).strip(),
+        })
+
+    # Use Sheets API batchUpdate with DeleteDimensionRequest (0-based) to delete from Submission_Log
     client = _get_client()
-    sh = client.open_by_key(spreadsheet_id)
+    sh = client.open_by_key(SPREADSHEET_ID)
     ws = sh.worksheet(LOG_SHEET_NAME)
 
     requests = [
@@ -1072,17 +1090,147 @@ def delete_submission_rows_by_index(
                 }
             }
         }
-        for idx in to_delete   # already sorted descending
+        for idx in to_delete
     ]
     sh.batch_update({"requests": requests})
 
+    # Clean up Launch_Output (long format)
+    try:
+        out_sheet = _open_sheet(SPREADSHEET_ID, OUTPUT_SHEET_NAME)
+        out_data = out_sheet.get_all_values()
+        if len(out_data) > 1:
+            out_headers = out_data[0]
+            o_pid_col = next((i for i, h in enumerate(out_headers) if h == "Product ID"), None)
+            o_city_col = next((i for i, h in enumerate(out_headers) if h == "City"), None)
+            o_hub_col = next((i for i, h in enumerate(out_headers) if h == "Hub"), None)
+            
+            out_to_delete = []
+            for sheet_row_idx, row in enumerate(out_data[1:], start=2):
+                r_pid = str(row[o_pid_col]).strip() if o_pid_col is not None and len(row) > o_pid_col else ""
+                r_city = str(row[o_city_col]).strip() if o_city_col is not None and len(row) > o_city_col else ""
+                r_hub = str(row[o_hub_col]).strip() if o_hub_col is not None and len(row) > o_hub_col else ""
+                
+                # Check if this row matches any deleted items
+                for item in deleted_items:
+                    if r_pid == item["product_id"] and r_city == item["city"] and r_hub == item["hub"]:
+                        out_to_delete.append(sheet_row_idx)
+                        break
+            
+            if out_to_delete:
+                out_sh = client.open_by_key(SPREADSHEET_ID)
+                out_ws = out_sh.worksheet(OUTPUT_SHEET_NAME)
+                out_requests = [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": out_ws.id,
+                                "dimension": "ROWS",
+                                "startIndex": idx - 1,
+                                "endIndex": idx,
+                            }
+                        }
+                    }
+                    for idx in sorted(set(out_to_delete), reverse=True)
+                ]
+                out_sh.batch_update({"requests": out_requests})
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("[NPL] Cleanup of Launch_Output failed: %s", exc)
+
+    # Clean up City_Plan and Hub_Plan in NEW_PRODUCT_LAUNCH_SHEET_KEY if they were Approved
+    npl_sheet_key = cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY
+    if npl_sheet_key:
+        # Check and delete from City_Plan
+        try:
+            city_items = [item for item in deleted_items if not item["hub"]]
+            if city_items:
+                city_sheet = _open_sheet(npl_sheet_key, "City_Plan")
+                city_data = city_sheet.get_all_values()
+                if len(city_data) > 1:
+                    city_headers = city_data[0]
+                    c_pid_col = next((i for i, h in enumerate(city_headers) if h in ("Product ID", "SKU", "Product id", "product_id")), None)
+                    c_city_col = next((i for i, h in enumerate(city_headers) if h in ("City", "City Name", "city")), None)
+                    
+                    city_to_delete = []
+                    for sheet_row_idx, row in enumerate(city_data[1:], start=2):
+                        r_pid = str(row[c_pid_col]).strip() if c_pid_col is not None and len(row) > c_pid_col else ""
+                        r_city = str(row[c_city_col]).strip() if c_city_col is not None and len(row) > c_city_col else ""
+                        
+                        for item in city_items:
+                            if r_pid == item["product_id"] and r_city == item["city"]:
+                                city_to_delete.append(sheet_row_idx)
+                                break
+                    
+                    if city_to_delete:
+                        city_sh = client.open_by_key(npl_sheet_key)
+                        city_ws = city_sh.worksheet("City_Plan")
+                        city_requests = [
+                            {
+                                "deleteDimension": {
+                                    "range": {
+                                        "sheetId": city_ws.id,
+                                        "dimension": "ROWS",
+                                        "startIndex": idx - 1,
+                                        "endIndex": idx,
+                                    }
+                                }
+                            }
+                            for idx in sorted(set(city_to_delete), reverse=True)
+                        ]
+                        city_sh.batch_update({"requests": city_requests})
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("[NPL] Cleanup of City_Plan failed: %s", exc)
+
+        # Check and delete from Hub_Plan
+        try:
+            hub_items = [item for item in deleted_items if item["hub"]]
+            if hub_items:
+                hub_sheet = _open_sheet(npl_sheet_key, "Hub_Plan")
+                hub_data = hub_sheet.get_all_values()
+                if len(hub_data) > 1:
+                    hub_headers = hub_data[0]
+                    h_pid_col = next((i for i, h in enumerate(hub_headers) if h in ("Product ID", "SKU", "Product id", "product_id", "Anchor ID")), None)
+                    h_city_col = next((i for i, h in enumerate(hub_headers) if h in ("City", "City Name", "city")), None)
+                    h_hub_col = next((i for i, h in enumerate(hub_headers) if h in ("Hub", "Hub Name", "hub")), None)
+                    
+                    hub_to_delete = []
+                    for sheet_row_idx, row in enumerate(hub_data[1:], start=2):
+                        r_pid = str(row[h_pid_col]).strip() if h_pid_col is not None and len(row) > h_pid_col else ""
+                        r_city = str(row[h_city_col]).strip() if h_city_col is not None and len(row) > h_city_col else ""
+                        r_hub = str(row[h_hub_col]).strip() if h_hub_col is not None and len(row) > h_hub_col else ""
+                        
+                        for item in hub_items:
+                            if r_pid == item["product_id"] and r_city == item["city"] and r_hub == item["hub"]:
+                                hub_to_delete.append(sheet_row_idx)
+                                break
+                    
+                    if hub_to_delete:
+                        hub_sh = client.open_by_key(npl_sheet_key)
+                        hub_ws = hub_sh.worksheet("Hub_Plan")
+                        hub_requests = [
+                            {
+                                "deleteDimension": {
+                                    "range": {
+                                        "sheetId": hub_ws.id,
+                                        "dimension": "ROWS",
+                                        "startIndex": idx - 1,
+                                        "endIndex": idx,
+                                    }
+                                }
+                            }
+                            for idx in sorted(set(hub_to_delete), reverse=True)
+                        ]
+                        hub_sh.batch_update({"requests": hub_requests})
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("[NPL] Cleanup of Hub_Plan failed: %s", exc)
+
     # Invalidate caches
     from features.product_launch.sheet_reads import invalidate_npl_sheet_cache
-
-    invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
     try:
+        invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
         from core.shared.api_cache import CacheNS, cache_invalidate
-
         cache_invalidate(CacheNS.NPL_WIZARD)
     except Exception:
         pass

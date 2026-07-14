@@ -88,11 +88,49 @@ def test_hub_launch():
         print("OK: Hub Launch Auto-Sync Endpoint Passed")
 
 
+def test_product_launch_deletion():
+    print("Testing Product Launch Row Deletion Endpoints...")
+    user_payload = {"id": 1, "role": "admin", "full_name": "Test Admin", "email": "admin@example.com", "sub": "1"}
+    token = create_access_token(user_payload)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # 1. Test DELETE /api/new-product-launch/submissions/SUB123/rows with missing/empty reason -> should return 422 validation error
+    resp = client.request(
+        "DELETE",
+        "/api/new-product-launch/submissions/SUB123/rows",
+        json={"row_indices": [2]},
+        headers=headers
+    )
+    assert resp.status_code == 422, f"Expected 422 validation error for missing reason, got {resp.status_code}: {resp.text}"
+    print("OK: Deletion with missing reason rejected (422)")
+
+    # 2. Test DELETE with empty reason string -> should return 400
+    resp = client.request(
+        "DELETE",
+        "/api/new-product-launch/submissions/SUB123/rows",
+        json={"row_indices": [2], "reason": "   "},
+        headers=headers
+    )
+    assert resp.status_code == 400, f"Expected 400 for empty reason string, got {resp.status_code}: {resp.text}"
+    print("OK: Deletion with empty reason string rejected (400)")
+
+    # 3. Test DELETE with empty row indices -> should return 400
+    resp = client.request(
+        "DELETE",
+        "/api/new-product-launch/submissions/SUB123/rows",
+        json={"row_indices": [], "reason": "Valid reason"},
+        headers=headers
+    )
+    assert resp.status_code == 400, f"Expected 400 for empty row indices, got {resp.status_code}: {resp.text}"
+    print("OK: Deletion with empty row indices rejected (400)")
+
+
 def main():
     try:
         test_auth()
         test_product_launch()
         test_hub_launch()
+        test_product_launch_deletion()
         print("\n==================================================")
         print(" ALL ENDPOINT TESTS PASSED SUCCESSFULLY! ")
         print("==================================================")
