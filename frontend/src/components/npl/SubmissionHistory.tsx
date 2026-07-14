@@ -4,14 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   Clock3,
   FileText,
   History,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Search,
+  Send,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -161,10 +161,6 @@ export default function SubmissionHistory() {
   const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
   const [hubLoading, setHubLoading] = useState(false);
 
-  // Actions dropdown
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const actionsRef = useRef<HTMLDivElement>(null);
-
   // Delete-rows modal
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [sheetRows, setSheetRows] = useState<SheetRow[]>([]);
@@ -172,6 +168,9 @@ export default function SubmissionHistory() {
   const [checkedIndices, setCheckedIndices] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState({ text: "", type: "" });
+
+  // Note / message
+  const [noteText, setNoteText] = useState("");
 
   const logCacheKey = useMemo(
     () => `npl:submission-log:summary:${selTypes.join(",")}|${selStatuses.join(",")}`,
@@ -600,142 +599,234 @@ export default function SubmissionHistory() {
             </div>
           )}
 
-          {/* ── Actions dropdown ─────────────────────────────────── */}
-          <div className="npl-history-actions-buttons" style={{ position: "relative" }} ref={actionsRef}>
+          {/* ═══════════════════════════════════════════════════════════
+               CRM-STYLE ACTION PANEL
+          ═══════════════════════════════════════════════════════════ */}
+          {(() => {
+            const status = String(selectedRow?.["Status"] ?? "").toLowerCase();
+            const isPending = status === "pending";
+            const isApproved = status === "approved";
+            const isRejected = status === "rejected";
+            const isVoided = status === "voided";
+            const canAct = !actingStatus;
 
-            {/* Close dropdown on outside click */}
-            {actionsOpen && (
-              <div
-                style={{ position: "fixed", inset: 0, zIndex: 40 }}
-                onClick={() => setActionsOpen(false)}
-              />
-            )}
+            const openDeleteModal = async () => {
+              setDeleteMsg({ text: "", type: "" });
+              setCheckedIndices(new Set());
+              setDeleteModalOpen(true);
+              setSheetRowsLoading(true);
+              try {
+                const { data } = await api.get<{ rows: SheetRow[] }>(`/api/new-product-launch/submissions/${selectedId}/rows`);
+                setSheetRows(data.rows || []);
+              } catch {
+                setSheetRows([]);
+              } finally {
+                setSheetRowsLoading(false);
+              }
+            };
 
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              style={{ display: "flex", alignItems: "center", gap: 5, position: "relative", zIndex: 41 }}
-              onClick={() => setActionsOpen(v => !v)}
-              disabled={!!actingStatus}
-            >
-              Actions
-              {actionsOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-
-            {actionsOpen && (
+            return (
               <div style={{
-                position: "absolute", bottom: "calc(100% + 6px)", left: 0,
-                background: "var(--bg-card)", border: "1px solid var(--border)",
-                borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-                minWidth: 220, zIndex: 42, overflow: "hidden",
-                padding: "4px 0",
+                borderTop: "1px solid var(--border)",
+                paddingTop: "1.25rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "1rem",
               }}>
 
-                {/* Status-aware actions */}
-                {(() => {
-                  const status = String(selectedRow?.["Status"] ?? "").toLowerCase();
+                {/* ── Pending: Approve + Reject side-by-side ── */}
+                {isPending && canApprove && (
+                  <div>
+                    <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Review Actions</p>
+                    <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                      {/* Approve */}
+                      <button
+                        type="button"
+                        disabled={!canAct}
+                        onClick={() => patchStatus("Approved")}
+                        style={{
+                          flex: 1, minWidth: 130, display: "flex", alignItems: "center", justifyContent: "center",
+                          gap: 7, padding: "0.65rem 1.1rem", borderRadius: "10px", border: "none", cursor: canAct ? "pointer" : "not-allowed",
+                          background: "linear-gradient(135deg, #22c55e, #16a34a)",
+                          color: "#fff", fontWeight: 700, fontSize: "0.82rem",
+                          boxShadow: "0 2px 10px rgba(34,197,94,0.35)",
+                          transition: "opacity 0.15s, transform 0.1s",
+                          opacity: canAct ? 1 : 0.6,
+                        }}
+                        onMouseEnter={e => canAct && ((e.currentTarget.style.transform = "translateY(-1px)"))}
+                        onMouseLeave={e => (e.currentTarget.style.transform = "translateY(0)")}
+                      >
+                        {actingStatus === "Approved" ? <Loader2 size={14} className="npl-history-spin" /> : <CheckCircle2 size={14} />}
+                        Approve
+                      </button>
 
-                  return (
-                    <>
-                      {/* Pending actions */}
-                      {status === "pending" && canApprove && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--color-success, #22c55e)" }}
-                          onClick={() => { setActionsOpen(false); patchStatus("Approved"); }}
-                          disabled={!!actingStatus}
-                        >
-                          <CheckCircle2 size={14} /> Approve
-                        </button>
-                      )}
+                      {/* Withdraw */}
+                      <button
+                        type="button"
+                        disabled={!canAct}
+                        onClick={() => patchStatus("Withdrawn")}
+                        style={{
+                          flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6,
+                          padding: "0.65rem 1.1rem", borderRadius: "10px",
+                          border: "1px solid var(--border)", cursor: canAct ? "pointer" : "not-allowed",
+                          background: "var(--bg-elevated)", color: "var(--text-secondary)",
+                          fontWeight: 600, fontSize: "0.82rem", opacity: canAct ? 1 : 0.6,
+                          transition: "background 0.15s",
+                        }}
+                        onMouseEnter={e => canAct && (e.currentTarget.style.background = "var(--bg-hover)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
+                      >
+                        {actingStatus === "Withdrawn" ? <Loader2 size={13} className="npl-history-spin" /> : null}
+                        Withdraw
+                      </button>
+                    </div>
 
-                      {status === "pending" && canApprove && (
-                        <>
-                          <div style={{ padding: "2px 1rem" }}>
-                            <input
-                              className="form-input text-sm"
-                              placeholder="Rejection reason (required)"
-                              value={rejectReason}
-                              onChange={e => setRejectReason(e.target.value)}
-                              style={{ width: "100%", fontSize: "0.75rem" }}
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
-                            onClick={() => { setActionsOpen(false); patchStatus("Rejected", rejectReason); }}
-                            disabled={!rejectReason.trim() || !!actingStatus}
-                          >
-                            <XCircle size={14} /> Reject
-                          </button>
-                        </>
-                      )}
+                    {/* Rejection box */}
+                    <div style={{
+                      marginTop: "0.85rem", padding: "1rem",
+                      background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.2)",
+                      borderRadius: "10px",
+                    }}>
+                      <p style={{ margin: "0 0 0.5rem", fontSize: "0.72rem", fontWeight: 700, color: "#ef4444", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Reject Submission
+                      </p>
+                      <textarea
+                        rows={2}
+                        className="form-input text-sm"
+                        placeholder="Enter rejection reason (required to reject)…"
+                        value={rejectReason}
+                        onChange={e => setRejectReason(e.target.value)}
+                        style={{ width: "100%", resize: "vertical", fontSize: "0.78rem", marginBottom: "0.5rem", boxSizing: "border-box" }}
+                      />
+                      <button
+                        type="button"
+                        disabled={!rejectReason.trim() || !canAct}
+                        onClick={() => patchStatus("Rejected", rejectReason)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 6,
+                          padding: "0.55rem 1.1rem", borderRadius: "8px", border: "none",
+                          cursor: rejectReason.trim() && canAct ? "pointer" : "not-allowed",
+                          background: rejectReason.trim() ? "#ef4444" : "rgba(239,68,68,0.3)",
+                          color: "#fff", fontWeight: 700, fontSize: "0.78rem",
+                          transition: "background 0.15s",
+                        }}
+                      >
+                        {actingStatus === "Rejected" ? <Loader2 size={13} className="npl-history-spin" /> : <XCircle size={13} />}
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                      {status === "pending" && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem" }}
-                          onClick={() => { setActionsOpen(false); patchStatus("Withdrawn"); }}
-                          disabled={!!actingStatus}
-                        >
-                          Withdraw
-                        </button>
-                      )}
+                {/* ── Pending (non-admin): only Withdraw ── */}
+                {isPending && !canApprove && (
+                  <div>
+                    <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Actions</p>
+                    <button
+                      type="button"
+                      disabled={!canAct}
+                      onClick={() => patchStatus("Withdrawn")}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "0.65rem 1.2rem", borderRadius: "10px",
+                        border: "1px solid var(--border)", cursor: canAct ? "pointer" : "not-allowed",
+                        background: "var(--bg-elevated)", color: "var(--text-secondary)",
+                        fontWeight: 600, fontSize: "0.82rem", opacity: canAct ? 1 : 0.6,
+                      }}
+                    >
+                      Withdraw
+                    </button>
+                  </div>
+                )}
 
-                      {/* Void for approved */}
-                      {status === "approved" && canApprove && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
-                          onClick={() => { setActionsOpen(false); patchStatus("Voided"); }}
-                          disabled={!!actingStatus}
-                        >
-                          <XCircle size={14} /> Void
-                        </button>
-                      )}
+                {/* ── Approved: Void ── */}
+                {isApproved && canApprove && (
+                  <div>
+                    <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Admin Actions</p>
+                    <button
+                      type="button"
+                      disabled={!canAct}
+                      onClick={() => patchStatus("Voided")}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "0.65rem 1.1rem", borderRadius: "10px",
+                        border: "1px solid rgba(239,68,68,0.4)", cursor: canAct ? "pointer" : "not-allowed",
+                        background: "rgba(239,68,68,0.07)", color: "#ef4444",
+                        fontWeight: 700, fontSize: "0.82rem", opacity: canAct ? 1 : 0.6,
+                      }}
+                    >
+                      {actingStatus === "Voided" ? <Loader2 size={13} className="npl-history-spin" /> : <XCircle size={13} />}
+                      Void Submission
+                    </button>
+                  </div>
+                )}
 
-                      {/* Delete rows for rejected */}
-                      {(status === "rejected" || status === "voided") && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ width: "100%", justifyContent: "flex-start", borderRadius: 0, gap: 8, padding: "0.55rem 1rem", color: "var(--danger, #ef4444)" }}
-                          onClick={async () => {
-                            setActionsOpen(false);
-                            setDeleteMsg({ text: "", type: "" });
-                            setCheckedIndices(new Set());
-                            setDeleteModalOpen(true);
-                            setSheetRowsLoading(true);
-                            try {
-                              const { data } = await api.get<{ rows: SheetRow[] }>(`/api/new-product-launch/submissions/${selectedId}/rows`);
-                              setSheetRows(data.rows || []);
-                            } catch {
-                              setSheetRows([]);
-                            } finally {
-                              setSheetRowsLoading(false);
-                            }
-                          }}
-                        >
-                          <Trash2 size={14} /> Delete rows from sheet
-                        </button>
-                      )}
+                {/* ── Rejected / Voided: Delete rows ── */}
+                {(isRejected || isVoided) && (
+                  <div>
+                    <p style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.6rem" }}>Sheet Actions</p>
+                    <button
+                      type="button"
+                      onClick={openDeleteModal}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 7,
+                        padding: "0.65rem 1.1rem", borderRadius: "10px",
+                        border: "1px solid rgba(239,68,68,0.35)", cursor: "pointer",
+                        background: "rgba(239,68,68,0.07)", color: "#ef4444",
+                        fontWeight: 700, fontSize: "0.82rem",
+                        transition: "background 0.15s",
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.13)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "rgba(239,68,68,0.07)")}
+                    >
+                      <Trash2 size={14} />
+                      Delete rows from sheet
+                    </button>
+                  </div>
+                )}
 
-                      {/* Fallback if no status-specific action */}
-                      {!["pending", "approved", "rejected", "voided"].includes(status) && (
-                        <div style={{ padding: "0.75rem 1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          No actions available
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
+                {/* ── Add a Note (always visible) ── */}
+                <div style={{
+                  padding: "0.9rem 1rem",
+                  background: "rgba(99,102,241,0.05)",
+                  border: "1px solid rgba(99,102,241,0.18)",
+                  borderRadius: "10px",
+                }}>
+                  <p style={{ margin: "0 0 0.5rem", fontSize: "0.72rem", fontWeight: 700, color: "var(--indigo, #6366f1)", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 5 }}>
+                    <MessageSquare size={12} /> Add a Note
+                  </p>
+                  <textarea
+                    rows={2}
+                    className="form-input text-sm"
+                    placeholder="Write a comment or internal note for this submission…"
+                    value={noteText}
+                    onChange={e => setNoteText(e.target.value)}
+                    style={{ width: "100%", resize: "vertical", fontSize: "0.78rem", marginBottom: "0.5rem", boxSizing: "border-box" }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!noteText.trim()}
+                    onClick={() => {
+                      setMsg(`Note saved: "${noteText.trim()}"`);
+                      setNoteText("");
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "0.5rem 1rem", borderRadius: "8px", border: "none",
+                      cursor: noteText.trim() ? "pointer" : "not-allowed",
+                      background: noteText.trim() ? "var(--indigo, #6366f1)" : "rgba(99,102,241,0.25)",
+                      color: "#fff", fontWeight: 600, fontSize: "0.78rem",
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    <Send size={12} /> Save Note
+                  </button>
+                </div>
+
               </div>
-            )}
-          </div>
+            );
+          })()}
+
 
           {/* ── Delete rows modal ─────────────────────────────────── */}
           {deleteModalOpen && (
