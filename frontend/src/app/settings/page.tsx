@@ -151,10 +151,26 @@ export default function SettingsPage() {
     if (!hydrated) return;
     setClientInfo(collectClientInfo());
     
-    // Clear page local boot state and reload to avoid showing previous user's info
-    setBoot(null);
-    setPrefs({ email_notifications: true, auto_sync_masters: false, preview_rows: 100 });
-    void loadBootstrap(true);
+    // Read from cache first. If cache is valid and belongs to the current user,
+    // load it instantly to avoid showing the loading spinner, then refresh in background.
+    const cached = readSessionBootstrap<Bootstrap>(BOOTSTRAP_KEY, BOOTSTRAP_TTL_MS);
+    if (cached && cached.profile?.id === user?.id) {
+      setBoot(cached);
+      if (cached.preferences) setPrefs(cached.preferences);
+      setLoading(false);
+      // Fetch in the background to update cache without showing a loading spinner
+      api.get<Bootstrap>("/api/settings/bootstrap")
+        .then(({ data }) => {
+          setBoot(data);
+          if (data.preferences) setPrefs(data.preferences);
+          writeSessionBootstrap(BOOTSTRAP_KEY, data);
+        })
+        .catch(() => {});
+    } else {
+      setBoot(null);
+      setPrefs({ email_notifications: true, auto_sync_masters: false, preview_rows: 100 });
+      void loadBootstrap(true);
+    }
   }, [hydrated, user?.id, loadBootstrap]);
 
   const savePrefs = async () => {

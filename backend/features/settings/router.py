@@ -487,7 +487,7 @@ def update_user_admin(
                 with db.engine.begin() as conn:
                     conn.execute(
                         text("UPDATE email_notification_recipients SET enabled = :enabled WHERE LOWER(email) = :email"),
-                        {"enabled": 1 if is_active_updated else 0, "email": target_email.strip().lower()}
+                        {"enabled": bool(is_active_updated), "email": target_email.strip().lower()}
                     )
             
             if notification_cats is not None:
