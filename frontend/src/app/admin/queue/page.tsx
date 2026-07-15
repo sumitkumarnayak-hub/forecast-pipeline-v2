@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { formatDistanceToNow } from "date-fns";
 
 type JobStatus = "pending" | "processing" | "completed" | "failed";
 
@@ -65,6 +64,15 @@ export default function QueueAdminPage() {
   if (loading && !data) return <div className="p-8">Loading queue status...</div>;
   if (error) return <div className="p-8 text-red-500 font-medium">{error}</div>;
   if (!data) return null;
+
+  const formatRelativeTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const diff = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  };
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -140,7 +148,7 @@ export default function QueueAdminPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-gray-600">
-                      {job.created_at ? formatDistanceToNow(new Date(job.created_at), { addSuffix: true }) : '-'}
+                      {job.created_at ? formatRelativeTime(job.created_at) : '-'}
                     </td>
                     <td className="px-6 py-4">
                       {job.retries > 0 ? (
