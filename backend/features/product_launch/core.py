@@ -1082,7 +1082,7 @@ def delete_submission_rows_by_index(
     sh = client.open_by_key(SPREADSHEET_ID)
     ws = sh.worksheet(LOG_SHEET_NAME)
 
-    from gspread.models import Cell
+    from gspread.cell import Cell
     cell_list = []
     for idx in to_delete:
         if status_col is not None:
