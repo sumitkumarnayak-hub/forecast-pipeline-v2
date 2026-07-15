@@ -144,8 +144,8 @@ async def lifespan(app: FastAPI):
         from features.product_launch.watcher import start_ff_input_watcher
 
 
-        start_ff_input_watcher(interval_seconds=45)
-        logger.info("FF Input change watcher started (45s interval)")
+        start_ff_input_watcher(interval_seconds=20)
+        logger.info("FF Input change watcher started (20s interval)")
     except Exception as exc:
         logger.warning("FF Input watcher startup warning: %s", exc)
 

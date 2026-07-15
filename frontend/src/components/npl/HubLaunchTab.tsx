@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import api from "@/lib/api";
@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   RefreshCw, CheckCircle2, XCircle, AlertTriangle,
   Landmark, Eye, Database, ArrowLeftRight, Bell,
-  ChevronRight, Clock, ChevronDown, ChevronUp,
+  ChevronRight, Clock, ChevronDown, ChevronUp, Plus, X,
 } from "lucide-react";
 
 interface FFRow { [key: string]: string | number; }
@@ -104,28 +104,41 @@ function VersionDiffTable({ version }: { version: VersionEntry }) {
         </tbody>
       </table>
       <div style={{ padding: "5px 10px", background: "rgba(255,255,255,0.02)", borderTop: "1px solid var(--border)", fontSize: "0.63rem", color: "var(--text-muted)", display: "flex", gap: "1rem" }}>
-        {diff.added.length > 0 && <span style={{ color: "#10b981" }}>green {diff.added.length} added</span>}
-        {diff.removed.length > 0 && <span style={{ color: "#ef4444" }}>red {diff.removed.length} removed</span>}
-        {diff.modified.length > 0 && <span style={{ color: "#eab308" }}>yellow {diff.modified.length} modified</span>}
+        {diff.added.length > 0 && <span style={{ color: "#10b981" }}>+{diff.added.length} added</span>}
+        {diff.removed.length > 0 && <span style={{ color: "#ef4444" }}>-{diff.removed.length} removed</span>}
+        {diff.modified.length > 0 && <span style={{ color: "#eab308" }}>~{diff.modified.length} modified</span>}
         {diff.unchanged_count > 0 && <span>{diff.unchanged_count} unchanged</span>}
       </div>
     </div>
   );
 }
 
+// ── Task 4: Version History with batch-5 pagination ──────────────────────────
+const VERSION_BATCH = 5;
+
 function VersionHistoryPanel({ history }: { history: VersionEntry[] }) {
   const [expandedId, setExpandedId] = useState<string|null>(history.length > 0 ? history[0].version_id : null);
-  if (history.length === 0) return <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>No version history yet. Changes to FF Input will appear here automatically.</div>;
+  const [visibleCount, setVisibleCount] = useState(VERSION_BATCH);
+
+  if (history.length === 0) return (
+    <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
+      No version history yet. Changes to FF Input will appear here automatically.
+    </div>
+  );
+
+  const visibleHistory = history.slice(0, visibleCount);
+  const hasMore = visibleCount < history.length;
+
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
-      {history.map((ver, idx) => {
+      {visibleHistory.map((ver, idx) => {
         const isExpanded = expandedId === ver.version_id;
         const isLatest = idx === 0;
         return (
           <div key={ver.version_id} style={{ display: "flex", gap: 0 }}>
             <div style={{ width: 28, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
               <div style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0, marginTop: 14, background: isLatest ? "#a855f7" : "var(--text-muted)", border: isLatest ? "2px solid rgba(168,85,247,0.4)" : "2px solid var(--border)", boxShadow: isLatest ? "0 0 8px rgba(168,85,247,0.4)" : "none" }} />
-              {idx < history.length - 1 && <div style={{ width: 1, flex: 1, background: "var(--border)", margin: "2px 0" }} />}
+              {idx < visibleHistory.length - 1 && <div style={{ width: 1, flex: 1, background: "var(--border)", margin: "2px 0" }} />}
             </div>
             <div style={{ flex: 1, marginBottom: 8, paddingLeft: 8 }}>
               <button type="button" onClick={() => setExpandedId(isExpanded ? null : ver.version_id)} style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", cursor: "pointer", padding: "8px 0 4px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
@@ -142,7 +155,7 @@ function VersionHistoryPanel({ history }: { history: VersionEntry[] }) {
                     {ver.diff.added.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(16,185,129,0.1)", color: "#10b981", fontWeight: 600 }}>+{ver.diff.added.length} added</span>}
                     {ver.diff.removed.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(239,68,68,0.1)", color: "#ef4444", fontWeight: 600 }}>-{ver.diff.removed.length} removed</span>}
                     {ver.diff.modified.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(234,179,8,0.1)", color: "#eab308", fontWeight: 600 }}>~{ver.diff.modified.length} modified</span>}
-                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", padding: "1px 5px" }}>{ver.row_count_before} to {ver.row_count_after} rows</span>
+                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", padding: "1px 5px" }}>{ver.row_count_before} → {ver.row_count_after} rows</span>
                   </div>
                 </div>
                 {isExpanded ? <ChevronUp size={13} style={{ color: "var(--text-muted)", marginTop: 4, flexShrink: 0 }} /> : <ChevronDown size={13} style={{ color: "var(--text-muted)", marginTop: 4, flexShrink: 0 }} />}
@@ -152,10 +165,211 @@ function VersionHistoryPanel({ history }: { history: VersionEntry[] }) {
           </div>
         );
       })}
+
+      {/* Load More / Show Less controls */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4, paddingLeft: 28 }}>
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => setVisibleCount(c => c + VERSION_BATCH)}
+            style={{
+              fontSize: "0.7rem", padding: "4px 12px", borderRadius: "6px",
+              border: "1px solid var(--border)", background: "var(--bg-elevated)",
+              color: "var(--text-secondary)", cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 4,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
+          >
+            <ChevronDown size={11} />
+            Load {Math.min(VERSION_BATCH, history.length - visibleCount)} more
+            <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>({history.length - visibleCount} remaining)</span>
+          </button>
+        )}
+        {visibleCount > VERSION_BATCH && (
+          <button
+            type="button"
+            onClick={() => setVisibleCount(VERSION_BATCH)}
+            style={{
+              fontSize: "0.7rem", padding: "4px 10px", borderRadius: "6px",
+              border: "1px solid var(--border)", background: "transparent",
+              color: "var(--text-muted)", cursor: "pointer",
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+          >
+            Collapse
+          </button>
+        )}
+        {!hasMore && history.length > VERSION_BATCH && (
+          <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>All {history.length} versions shown</span>
+        )}
+      </div>
     </div>
   );
 }
 
+// ── Task 2: Add Hub Modal ─────────────────────────────────────────────────────
+interface AddHubModalProps {
+  headers: string[];
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
+  const [form, setForm] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    headers.forEach(h => { init[h] = ""; });
+    return init;
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  // Identify required fields (hub_name / source_hub)
+  const hubCol = headers.find(h => h.trim().toLowerCase().replace(/[\s_]/g, "") === "hubname") || "";
+  const srcCol = headers.find(h => h.trim().toLowerCase().replace(/[\s_]/g, "") === "sourcehub") || "";
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (hubCol && !form[hubCol]?.trim()) { setError(`"${hubCol}" is required.`); return; }
+    if (srcCol && !form[srcCol]?.trim()) { setError(`"${srcCol}" is required.`); return; }
+    setError("");
+    setSubmitting(true);
+    try {
+      await api.post("/api/new-product-launch/sync-new-hub/ff-input/append", { row: form });
+      onSuccess();
+      onClose();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      setError(e?.response?.data?.detail || "Failed to add hub. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const isRequired = (h: string) => {
+    const norm = h.trim().toLowerCase().replace(/[\s_]/g, "");
+    return norm === "hubname" || norm === "sourcehub";
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
+    }}>
+      <div style={{
+        background: "var(--bg-card)", border: "1px solid var(--border)",
+        borderRadius: "18px", width: "100%", maxWidth: 520,
+        boxShadow: "0 32px 80px rgba(0,0,0,0.45)",
+        display: "flex", flexDirection: "column", maxHeight: "90vh",
+        animation: "fadeInScale 0.18s ease",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "1.2rem 1.5rem", borderBottom: "1px solid var(--border)",
+          display: "flex", alignItems: "center", gap: 12,
+        }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: "11px",
+            background: "linear-gradient(135deg, rgba(168,85,247,0.2), rgba(99,102,241,0.15))",
+            border: "1px solid rgba(168,85,247,0.3)",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}>
+            <Plus size={17} style={{ color: "#a855f7" }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <p style={{ margin: 0, fontWeight: 700, fontSize: "0.92rem", color: "var(--text-primary)" }}>Add New Hub</p>
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)" }}>Append a new row to the FF Input sheet</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "6px", borderRadius: "8px", transition: "background 0.12s" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <form onSubmit={handleSubmit} style={{ overflowY: "auto", flex: 1 }}>
+          <div style={{ padding: "1.25rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+            {error && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "0.6rem 0.9rem", borderRadius: "8px",
+                background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.25)",
+                fontSize: "0.78rem", color: "#ef4444",
+              }}>
+                <XCircle size={13} />
+                {error}
+              </div>
+            )}
+            {headers.map(header => {
+              const req = isRequired(header);
+              return (
+                <div key={header}>
+                  <label style={{
+                    display: "flex", alignItems: "center", gap: 4,
+                    fontSize: "0.72rem", fontWeight: 600,
+                    color: req ? "var(--text-primary)" : "var(--text-secondary)",
+                    marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}>
+                    {header}
+                    {req && <span style={{ color: "#a855f7", fontSize: "0.75rem" }}>*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    value={form[header] ?? ""}
+                    onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))}
+                    placeholder={req ? `Required — enter ${header}` : `Optional`}
+                    className="form-input"
+                    style={{
+                      width: "100%", boxSizing: "border-box", fontSize: "0.82rem",
+                      borderColor: req && !form[header]?.trim() ? "rgba(168,85,247,0.3)" : undefined,
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            padding: "1rem 1.5rem", borderTop: "1px solid var(--border)",
+            display: "flex", gap: 10, justifyContent: "flex-end",
+          }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onClose} disabled={submitting}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "0.55rem 1.2rem", borderRadius: "8px", border: "none",
+                background: "linear-gradient(135deg, #a855f7, #6366f1)",
+                color: "#fff", fontWeight: 700, fontSize: "0.82rem",
+                cursor: submitting ? "not-allowed" : "pointer",
+                boxShadow: "0 2px 10px rgba(168,85,247,0.35)",
+                opacity: submitting ? 0.7 : 1, transition: "opacity 0.15s",
+              }}
+            >
+              {submitting ? <RefreshCw size={13} className="animate-spin" /> : <Plus size={13} />}
+              {submitting ? "Adding…" : "Add to Sheet"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Main HubLaunchTab ─────────────────────────────────────────────────────────
 export default function HubLaunchTab() {
   const { canWrite } = useAuth();
   const [running, setRunning] = useState(false);
@@ -168,6 +382,8 @@ export default function HubLaunchTab() {
   const [loadingFf, setLoadingFf] = useState(false);
   const [changeStatus, setChangeStatus] = useState<ChangeStatus | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  // Task 2: Add Hub modal state
+  const [showAddHub, setShowAddHub] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchFFInput = useCallback(async (bypass: boolean) => {
@@ -191,7 +407,8 @@ export default function HubLaunchTab() {
   useEffect(() => {
     fetchFFInput(false);
     fetchChangeStatus();
-    pollRef.current = setInterval(fetchChangeStatus, 30_000);
+    // Task 3: Reduced from 30_000ms → 15_000ms
+    pollRef.current = setInterval(fetchChangeStatus, 15_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchFFInput, fetchChangeStatus]);
 
@@ -241,6 +458,15 @@ export default function HubLaunchTab() {
   return (
     <div className="w-full max-w-5xl space-y-4">
 
+      {/* Add Hub Modal — Task 2 */}
+      {showAddHub && ffData && ffData.headers.length > 0 && (
+        <AddHubModal
+          headers={ffData.headers}
+          onClose={() => setShowAddHub(false)}
+          onSuccess={() => fetchFFInput(true)}
+        />
+      )}
+
       {hasChanges && (
         <div style={{ background: "rgba(168,85,247,0.07)", border: "1px solid rgba(168,85,247,0.35)", borderRadius: "12px", padding: "0.9rem 1rem" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
@@ -271,6 +497,7 @@ export default function HubLaunchTab() {
         </div>
       </div>
 
+      {/* FF Input Sheet Table */}
       <div className="card" style={{ borderRadius: "12px", padding: 0, overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.65rem 1rem", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -281,6 +508,34 @@ export default function HubLaunchTab() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {changeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(changeStatus.last_checked_at)}</span>}
             {ffData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(ffData.cache_last_updated)}</span>}
+
+            {/* Task 2: Add Hub CRM button */}
+            {canWrite && ffData && ffData.headers.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAddHub(true)}
+                style={{
+                  fontSize: "0.7rem", padding: "4px 10px", height: "auto",
+                  display: "flex", alignItems: "center", gap: 5,
+                  background: "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))",
+                  border: "1px solid rgba(168,85,247,0.35)", borderRadius: "7px",
+                  color: "#a855f7", fontWeight: 600, cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.25), rgba(99,102,241,0.2))";
+                  e.currentTarget.style.borderColor = "rgba(168,85,247,0.55)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))";
+                  e.currentTarget.style.borderColor = "rgba(168,85,247,0.35)";
+                }}
+              >
+                <Plus size={11} />
+                Add Hub
+              </button>
+            )}
+
             <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.68rem", padding: "2px 8px", height: "auto", display: "flex", alignItems: "center", gap: 3 }} onClick={() => fetchFFInput(true)} disabled={loadingFf}>
               <RefreshCw size={10} className={loadingFf ? "animate-spin" : ""} /> {loadingFf ? "Fetching..." : "Refresh Live"}
             </button>
@@ -300,6 +555,7 @@ export default function HubLaunchTab() {
         )}
       </div>
 
+      {/* Version History — Task 4: batch-5 pagination */}
       <div className="card" style={{ borderRadius: "12px", padding: 0, overflow: "hidden" }}>
         <button type="button" onClick={() => setShowHistory(!showHistory)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 1rem", background: "transparent", border: "none", borderBottom: showHistory ? "1px solid var(--border)" : "none", cursor: "pointer", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

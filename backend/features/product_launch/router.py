@@ -494,6 +494,7 @@ def npl_ff_input_change_status(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+
 @router.post("/sync-new-hub/dismiss-changes")
 def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
     """
@@ -506,6 +507,84 @@ def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
         dismiss_changes()
         return {"ok": True, "message": "Change notification dismissed. History preserved."}
     except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class AppendFFInputRowBody(BaseModel):
+    row: dict  # {header: value} pairs matching FF Input sheet columns
+
+
+@router.post("/sync-new-hub/ff-input/append")
+def npl_append_ff_input_row(
+    body: AppendFFInputRowBody,
+    current_user: dict = Depends(require_write),
+):
+    """
+    Append a new hub row to the FF Input tab of the New Hub Launch sheet.
+    The row dict keys must match the sheet headers (e.g. hub_name, source_hub, etc.).
+    After appending, the FF Input cache is invalidated so the next fetch reflects the new row.
+    """
+    t0 = time.perf_counter()
+    try:
+        from app import config as cfg
+        from core.shared.sheets_session import get_sheets_manager
+        from core.shared import sheets_cache as _sheets_cache
+
+        gsm = get_sheets_manager()
+
+        # Read current FF Input to discover headers and sheet object
+        ff_df = gsm.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=False)
+
+        if ff_df is None or ff_df.empty:
+            raw = gsm.batch_read_worksheets(cfg.NEW_HUB_LAUNCH_SHEET_KEY, [("FF Input", "A:H")])
+            data = raw.get("FF Input") or []
+            if len(data) >= 2:
+                import pandas as pd
+                from core.utils.dataframe import clean_sheet_df
+                ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+
+        # Build the row values aligned to sheet column order
+        headers = list(ff_df.columns) if ff_df is not None and not ff_df.empty else list(body.row.keys())
+        row_values = [str(body.row.get(h, "")).strip() for h in headers]
+
+        # Validate: require at minimum hub_name and source_hub to be non-empty
+        hub_col = next((h for h in headers if h.strip().lower() in ("hub_name", "hub name")), None)
+        src_col = next((h for h in headers if h.strip().lower() in ("source_hub", "source hub")), None)
+        hub_val = str(body.row.get(hub_col or "", "")).strip() if hub_col else ""
+        src_val = str(body.row.get(src_col or "", "")).strip() if src_col else ""
+        if not hub_val or not src_val:
+            raise HTTPException(status_code=400, detail="hub_name and source_hub are required and must be non-empty.")
+
+        # Open the actual Google Sheet worksheet and append
+        ws_name = cfg.SHEETS_CONFIG.get("new_hub_launch", {}).get("worksheets", {}).get("ff_input", "FF Input")
+        ws = gsm._get_worksheet_quiet("new_hub_launch", ws_name)
+        if ws is None:
+            raise HTTPException(status_code=500, detail=f"Could not open FF Input worksheet '{ws_name}'.")
+
+        ws.append_row(row_values, value_input_option="USER_ENTERED")
+
+        # Invalidate cache so next fetch is live
+        try:
+            cache_path = _sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
+            if cache_path.exists():
+                cache_path.unlink()
+        except Exception:
+            pass
+
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[FFInput] Appended new hub row hub=%s source=%s in %dms", hub_val, src_val, elapsed)
+        return {
+            "ok": True,
+            "hub_name": hub_val,
+            "source_hub": src_val,
+            "headers": headers,
+            "elapsed_ms": elapsed,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[FFInput] append failed in %dms: %s", elapsed, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1126,31 +1205,36 @@ def submissions_log(
     db: Database = Depends(get_db),
 ):
     """
-    Get submission log. source=db (default) reads from Supabase npl_submissions (fast).
-    source=sheets reads from Google Sheets Submission_Log (legacy/fallback).
+    Get submission log.
+    - summary view: DB first (fast) → Sheets fallback
+    - detail view (hub-level breakdown per submission): always Sheets
+      because the DB only stores summary-level rows, not per-hub row data.
     """
     t = [x.strip() for x in types.split(",") if x.strip()] if types else None
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
 
-    # Fast DB path (default)
-    if source == "db":
+    # Fast DB path for summary view only (DB has no hub-level row data for detail)
+    if source == "db" and view == "summary":
         try:
             df = db.get_npl_submissions(
                 types=t, statuses=s, product_ids=p, submission_id=submission_id
             )
             if not df.empty:
-                return _format_db_submissions(df, view=view)
-            # Fall through to Sheets if DB is empty (first-time / not yet migrated)
+                logger.debug("[NPL] submissions/log: serving %d rows from DB (summary)", len(df))
+                return _format_db_submissions(df, view="summary")
+            logger.info("[NPL] submissions/log: DB empty, falling back to Sheets (summary)")
         except Exception:
             logger.warning("[NPL] DB submissions query failed, falling back to Sheets", exc_info=True)
 
-    # Sheets fallback
+    # For detail view OR when DB is empty: always read from Sheets
+    # (Sheets has the per-hub row data that detail view needs)
     from core.shared.api_cache import CacheNS, cache_invalidate, cached
 
     from features.product_launch import wizard as wiz
 
-
+    # Use a short TTL for detail (per-submission) requests to keep it fresh
+    ttl = 30.0 if view == "detail" else _NPL_LOG_CACHE_TTL
     cache_key = f"log:{view}:{submission_id or ''}:{types or ''}:{statuses or ''}:{product_ids or ''}"
 
     def _log():
@@ -1159,7 +1243,7 @@ def submissions_log(
             submission_id=submission_id, view=view,
         )
 
-    return cached(CacheNS.NPL_WIZARD, cache_key, _log, ttl=_NPL_LOG_CACHE_TTL)
+    return cached(CacheNS.NPL_WIZARD, cache_key, _log, ttl=ttl)
 
 
 @router.patch("/submissions/{submission_id}/status")

@@ -187,7 +187,8 @@ export default function SubmissionHistory() {
   );
 
   const fetchLog = useCallback(async (): Promise<LogPayload> => {
-    const params: Record<string, string> = { view: "summary" };
+    // Use DB path (source=db) for fast summary fetch — DB is updated on each submit
+    const params: Record<string, string> = { view: "summary", source: "db" };
     if (selTypes.length) params.types = selTypes.join(",");
     if (selStatuses.length) params.statuses = selStatuses.join(",");
     const { data } = await api.get<LogPayload>("/api/new-product-launch/submissions/log", { params });
@@ -199,6 +200,27 @@ export default function SubmissionHistory() {
     fetcher: fetchLog,
     deps: [logCacheKey],
   });
+
+  // Force-refresh from Google Sheets to get the most up-to-date data (bypasses all caches)
+  const [forceRefreshing, setForceRefreshing] = useState(false);
+  const [dataSource, setDataSource] = useState<string>("");
+
+  const forceReloadFromSheets = useCallback(async () => {
+    setForceRefreshing(true);
+    cacheInvalidate(logCacheKey);
+    try {
+      await reload(true);
+    } catch (e) {
+      console.error("[SubmissionHistory] Force refresh failed:", e);
+    } finally {
+      setForceRefreshing(false);
+    }
+  }, [logCacheKey, reload]);
+
+  // Track where the data came from
+  useEffect(() => {
+    if (data) setDataSource((data as LogPayload & { source?: string }).source || "");
+  }, [data]);
 
   const rows = data?.rows ?? [];
   const columns = data?.columns ?? [];
@@ -355,15 +377,29 @@ export default function SubmissionHistory() {
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm npl-history-refresh"
-          onClick={() => reload(true)}
-          disabled={loading || refreshing}
-        >
-          <RefreshCw size={14} className={refreshing ? "npl-history-spin" : ""} />
-          Refresh
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          {dataSource && (
+            <span style={{
+              fontSize: "0.62rem", padding: "2px 7px", borderRadius: "4px",
+              background: dataSource === "db" ? "rgba(59,130,246,0.1)" : "rgba(16,185,129,0.1)",
+              color: dataSource === "db" ? "var(--blue)" : "#10b981",
+              fontWeight: 600, border: "1px solid",
+              borderColor: dataSource === "db" ? "rgba(59,130,246,0.25)" : "rgba(16,185,129,0.25)",
+            }}>
+              {dataSource === "db" ? "⚡ DB" : "📊 Sheets"}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm npl-history-refresh"
+            onClick={() => forceReloadFromSheets()}
+            disabled={loading || refreshing || forceRefreshing}
+            title="Fetch fresh data from Google Sheets (bypasses all caches)"
+          >
+            <RefreshCw size={14} className={(refreshing || forceRefreshing) ? "npl-history-spin" : ""} />
+            {forceRefreshing ? "Syncing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {msg && (
