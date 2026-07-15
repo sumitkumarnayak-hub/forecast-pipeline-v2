@@ -1188,9 +1188,17 @@ def patch_submission_status(
             from sqlalchemy.orm import Session
             from core.queue.driver import PostgresQueueDriver
             
+            user_id = int(current_user["sub"])
             with Session(db.engine) as session:
                 driver = PostgresQueueDriver(session)
-                driver.enqueue("npl.sheets_sync", payload={"submission_id": submission_id, "action": "append"})
+                driver.enqueue(
+                    "npl.sheets_sync",
+                    payload={
+                        "submission_id": submission_id,
+                        "action": "append",
+                        "user_id": user_id,
+                    }
+                )
             append_res = {"status": "queued"}
             
         from core.shared.api_cache import CacheNS, cache_invalidate
@@ -1243,9 +1251,18 @@ def sync_submission_to_new_product_launch(
         from core.database.engine import get_shared_database
         
         queue_db = get_shared_database()
+        user_id = int(current_user["sub"])
         with Session(queue_db.engine) as session:
             driver = PostgresQueueDriver(session)
-            driver.enqueue("npl.sheets_sync", payload={"submission_id": submission_id, "action": "append", "owner_email": owner_email})
+            driver.enqueue(
+                "npl.sheets_sync",
+                payload={
+                    "submission_id": submission_id,
+                    "action": "append",
+                    "owner_email": owner_email,
+                    "user_id": user_id,
+                }
+            )
             
         return {"status": "queued", "detail": "Submission appended to queue for Sheets sync"}
     except Exception as exc:
