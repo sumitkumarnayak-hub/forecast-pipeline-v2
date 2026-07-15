@@ -1520,7 +1520,13 @@ def _get_product_master_details_map() -> dict[str, dict]:
             sheet = _open_sheet(cfg.DEMAND_PLANNING_SHEET_ID, "P Master")
             return sheet.get_all_values()
         
-        pm_data = read_sheet_values_cached(cfg.DEMAND_PLANNING_SHEET_ID, "P Master", "all", "demand_planning_masters", _fetch_pm)
+        pm_data = read_sheet_values_cached(
+            cfg.DEMAND_PLANNING_SHEET_ID,
+            "P Master",
+            "all",
+            sheet_category="demand_planning_masters",
+            fetcher=_fetch_pm,
+        )
         if len(pm_data) > 1:
             pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
             for _, row in pm_df.iterrows():
@@ -1563,7 +1569,13 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             def _fetch_pm():
                 sheet = _open_sheet(cfg.DEMAND_PLANNING_SHEET_ID, "P Master")
                 return sheet.get_all_values()
-            pm_data = read_sheet_values_cached(cfg.DEMAND_PLANNING_SHEET_ID, "P Master", "all", "demand_planning_masters", _fetch_pm)
+            pm_data = read_sheet_values_cached(
+                cfg.DEMAND_PLANNING_SHEET_ID,
+                "P Master",
+                "all",
+                sheet_category="demand_planning_masters",
+                fetcher=_fetch_pm,
+            )
             if len(pm_data) > 1:
                 pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
                 pm_row = pm_df[pm_df["Product id"].astype(str).str.strip() == pid]

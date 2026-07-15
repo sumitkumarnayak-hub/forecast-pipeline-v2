@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 
 type JobStatus = "pending" | "processing" | "completed" | "failed";
@@ -49,7 +49,7 @@ export default function QueueAdminPage() {
   };
 
   useEffect(() => {
-    if (user?.role === "Admin") {
+    if (user?.role === "admin") {
       fetchData();
       // Auto-refresh every 5 seconds
       const interval = setInterval(fetchData, 5000);
