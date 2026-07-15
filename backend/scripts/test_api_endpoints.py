@@ -125,12 +125,59 @@ def test_product_launch_deletion():
     print("OK: Deletion with empty row indices rejected (400)")
 
 
+def test_npl_notes():
+    print("Testing NPL Submission Notes...")
+    user_payload = {"id": 1, "role": "admin", "full_name": "Test Admin", "email": "admin@example.com"}
+    token = create_access_token(user_payload)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # 1. Update notes
+    resp = client.put(
+        "/api/new-product-launch/submissions/SUB123/notes",
+        json={"notes": "Test NPL Note Content"},
+        headers=headers
+    )
+    assert resp.status_code == 200, f"Expected 200 for notes update, got {resp.status_code}: {resp.text}"
+    print("OK: Update Notes successful (200)")
+
+    # 2. Get NPL submissions log and check if the note is returned in the rows
+    import pandas as pd
+    mock_df = pd.DataFrame([{
+        "submission_id": "SUB123",
+        "sub_type": "New Launch",
+        "product_id": "prod_1",
+        "product_name": "Product 1",
+        "category": "Groceries",
+        "cities": "Mumbai",
+        "hub_count": 1,
+        "city_count": 1,
+        "start_date": "2026-07-20",
+        "status": "Pending",
+        "rejection_reason": "",
+        "submitted_by": "admin@example.com",
+        "timestamp": "2026-07-15 12:00:00",
+        "notes": "Test NPL Note Content"
+    }])
+    with patch("core.database.engine.Database.get_npl_submissions", return_value=mock_df):
+        resp = client.get(
+            "/api/new-product-launch/submissions/log",
+            params={"view": "detail", "submission_id": "SUB123"},
+            headers=headers
+        )
+    assert resp.status_code == 200, f"Expected 200 for fetching log, got {resp.status_code}"
+    rows = resp.json().get("rows", [])
+    assert len(rows) > 0, "Expected at least one row in submission log detail"
+    assert rows[0].get("Notes") == "Test NPL Note Content", f"Expected notes to match, got {rows[0].get('Notes')}"
+    print("OK: Fetched log contains the updated note")
+
+
 def main():
     try:
         test_auth()
         test_product_launch()
         test_hub_launch()
         test_product_launch_deletion()
+        test_npl_notes()
         print("\n==================================================")
         print(" ALL ENDPOINT TESTS PASSED SUCCESSFULLY! ")
         print("==================================================")

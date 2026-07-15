@@ -1039,11 +1039,14 @@ def delete_submission_rows_by_index(
         return 0
 
     headers = data[0]
-    sid_col = next((i for i, h in enumerate(headers) if h == "Submission_ID"), None)
-    pid_col = next((i for i, h in enumerate(headers) if h == "Product ID"), None)
-    city_col = next((i for i, h in enumerate(headers) if h == "City"), None)
-    hub_col = next((i for i, h in enumerate(headers) if h == "Hub"), None)
-    status_col = next((i for i, h in enumerate(headers) if h == "Status"), None)
+    headers_upper = [str(h).strip().upper() for h in headers]
+    
+    sid_col = next((i for i, h in enumerate(headers_upper) if h == "SUBMISSION_ID"), None)
+    pid_col = next((i for i, h in enumerate(headers_upper) if h in ("PRODUCT ID", "PRODUCT_ID")), None)
+    city_col = next((i for i, h in enumerate(headers_upper) if h == "CITY"), None)
+    hub_col = next((i for i, h in enumerate(headers_upper) if h == "HUB"), None)
+    status_col = next((i for i, h in enumerate(headers_upper) if h == "STATUS"), None)
+    reason_col = next((i for i, h in enumerate(headers_upper) if h in ("REJECTION_REASON", "REJECTION REASON")), None)
 
     if sid_col is None:
         return 0
@@ -1074,25 +1077,21 @@ def delete_submission_rows_by_index(
             "status": str(status).strip(),
         })
 
-    # Use Sheets API batchUpdate with DeleteDimensionRequest (0-based) to delete from Submission_Log
+    # Update matched row statuses to "Deleted" and add deletion reason in Submission_Log instead of physical deletion
     client = _get_client()
     sh = client.open_by_key(SPREADSHEET_ID)
     ws = sh.worksheet(LOG_SHEET_NAME)
 
-    requests = [
-        {
-            "deleteDimension": {
-                "range": {
-                    "sheetId": ws.id,
-                    "dimension": "ROWS",
-                    "startIndex": idx - 1,   # 0-based inclusive
-                    "endIndex": idx,          # 0-based exclusive
-                }
-            }
-        }
-        for idx in to_delete
-    ]
-    sh.batch_update({"requests": requests})
+    from gspread.models import Cell
+    cell_list = []
+    for idx in to_delete:
+        if status_col is not None:
+            cell_list.append(Cell(row=idx, col=status_col + 1, value="Deleted"))
+        if reason_col is not None:
+            cell_list.append(Cell(row=idx, col=reason_col + 1, value=reason))
+
+    if cell_list:
+        ws.update_cells(cell_list, value_input_option="USER_ENTERED")
 
     # Clean up Launch_Output (long format)
     try:
@@ -1100,9 +1099,10 @@ def delete_submission_rows_by_index(
         out_data = out_sheet.get_all_values()
         if len(out_data) > 1:
             out_headers = out_data[0]
-            o_pid_col = next((i for i, h in enumerate(out_headers) if h == "Product ID"), None)
-            o_city_col = next((i for i, h in enumerate(out_headers) if h == "City"), None)
-            o_hub_col = next((i for i, h in enumerate(out_headers) if h == "Hub"), None)
+            out_headers_upper = [str(h).strip().upper() for h in out_headers]
+            o_pid_col = next((i for i, h in enumerate(out_headers_upper) if h in ("PRODUCT ID", "PRODUCT_ID")), None)
+            o_city_col = next((i for i, h in enumerate(out_headers_upper) if h == "CITY"), None)
+            o_hub_col = next((i for i, h in enumerate(out_headers_upper) if h == "HUB"), None)
             
             out_to_delete = []
             for sheet_row_idx, row in enumerate(out_data[1:], start=2):
@@ -1148,8 +1148,9 @@ def delete_submission_rows_by_index(
                 city_data = city_sheet.get_all_values()
                 if len(city_data) > 1:
                     city_headers = city_data[0]
-                    c_pid_col = next((i for i, h in enumerate(city_headers) if h in ("Product ID", "SKU", "Product id", "product_id")), None)
-                    c_city_col = next((i for i, h in enumerate(city_headers) if h in ("City", "City Name", "city")), None)
+                    city_headers_upper = [str(h).strip().upper() for h in city_headers]
+                    c_pid_col = next((i for i, h in enumerate(city_headers_upper) if h in ("PRODUCT ID", "PRODUCT_ID", "SKU", "ANCHOR ID", "ANCHOR_ID")), None)
+                    c_city_col = next((i for i, h in enumerate(city_headers_upper) if h in ("CITY", "CITY NAME", "CITY_NAME")), None)
                     
                     city_to_delete = []
                     for sheet_row_idx, row in enumerate(city_data[1:], start=2):
@@ -1190,9 +1191,10 @@ def delete_submission_rows_by_index(
                 hub_data = hub_sheet.get_all_values()
                 if len(hub_data) > 1:
                     hub_headers = hub_data[0]
-                    h_pid_col = next((i for i, h in enumerate(hub_headers) if h in ("Product ID", "SKU", "Product id", "product_id", "Anchor ID")), None)
-                    h_city_col = next((i for i, h in enumerate(hub_headers) if h in ("City", "City Name", "city")), None)
-                    h_hub_col = next((i for i, h in enumerate(hub_headers) if h in ("Hub", "Hub Name", "hub")), None)
+                    hub_headers_upper = [str(h).strip().upper() for h in hub_headers]
+                    h_pid_col = next((i for i, h in enumerate(hub_headers_upper) if h in ("PRODUCT ID", "PRODUCT_ID", "SKU", "ANCHOR ID", "ANCHOR_ID")), None)
+                    h_city_col = next((i for i, h in enumerate(hub_headers_upper) if h in ("CITY", "CITY NAME", "CITY_NAME")), None)
+                    h_hub_col = next((i for i, h in enumerate(hub_headers_upper) if h in ("HUB", "HUB NAME", "HUB_NAME", "HUB_NAME_", "HUB_NAME_COL", "HUB_NAME_HEADER")), None)
                     
                     hub_to_delete = []
                     for sheet_row_idx, row in enumerate(hub_data[1:], start=2):

@@ -68,6 +68,7 @@ const COL_LABELS: Record<string, string> = {
   Rejection_Reason: "Rejection Reason",
   Submitted_By: "Submitted By",
   Timestamp: "Submitted At",
+  Notes: "Notes",
 };
 
 function fmtDate(value: unknown): string {
@@ -139,6 +140,13 @@ function renderCell(col: string, value: unknown) {
     );
   }
   if (col === "Rejection_Reason" && text !== "—") {
+    return (
+      <span className="npl-history-reason" title={text}>
+        {text}
+      </span>
+    );
+  }
+  if (col === "Notes" && text !== "—") {
     return (
       <span className="npl-history-reason" title={text}>
         {text}
@@ -568,6 +576,12 @@ export default function SubmissionHistory() {
               <span className="npl-history-detail-label">Submitted by</span>
               <span>{String(selectedRow["Submitted_By"] ?? "—")}</span>
             </div>
+            {selectedRow["Notes"] ? (
+              <div style={{ gridColumn: "1 / -1", borderTop: "1px dashed var(--border)", paddingTop: "0.5rem", marginTop: "0.25rem" }}>
+                <span className="npl-history-detail-label" style={{ display: "block", marginBottom: "0.25rem" }}>Notes</span>
+                <span style={{ fontSize: "0.78rem", whiteSpace: "pre-wrap", color: "var(--text-primary)" }}>{String(selectedRow["Notes"])}</span>
+              </div>
+            ) : null}
           </div>
 
           {(hubLoading || hubRows.length > 0) && (
@@ -808,10 +822,18 @@ export default function SubmissionHistory() {
                   />
                   <button
                     type="button"
-                    disabled={!noteText.trim()}
-                    onClick={() => {
-                      setMsg(`Note saved: "${noteText.trim()}"`);
-                      setNoteText("");
+                    disabled={!noteText.trim() || !selectedId}
+                    onClick={async () => {
+                      try {
+                        const trimmed = noteText.trim();
+                        await api.put(`/api/new-product-launch/submissions/${selectedId}/notes`, { notes: trimmed });
+                        setMsg("Note saved successfully.");
+                        setNoteText("");
+                        cacheInvalidate(logCacheKey);
+                        await reload(true);
+                      } catch {
+                        setMsg("Failed to save note.");
+                      }
                     }}
                     style={{
                       display: "flex", alignItems: "center", gap: 6,

@@ -417,6 +417,12 @@ class Database:
                 )
             """))
 
+        # Idempotent notes column addition
+        try:
+            conn.execute(text("ALTER TABLE npl_submissions ADD COLUMN notes TEXT"))
+        except Exception:
+            pass
+
     @staticmethod
     def _resolve_session_id(explicit: str | None = None) -> str | None:
         if explicit:
@@ -1849,7 +1855,7 @@ class Database:
                 text(f"""
                     SELECT submission_id, sub_type, product_id, product_name, category,
                            cities, hub_count, city_count, start_date, status,
-                           rejection_reason, submitted_by, timestamp
+                           rejection_reason, submitted_by, timestamp, notes
                     FROM npl_submissions
                     WHERE {where_sql}
                     ORDER BY {order_clause}
@@ -1858,6 +1864,21 @@ class Database:
                 conn,
                 params=params,
             )
+
+    def update_npl_submission_notes(
+        self, submission_id: str, notes: str
+    ) -> None:
+        """Update the notes column of a submission."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE npl_submissions
+                    SET notes = :notes
+                    WHERE submission_id = :submission_id
+                """), {"notes": notes, "submission_id": submission_id})
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to update NPL submission notes %s", submission_id)
 
     def ping(self) -> bool:
         """Return True if the database accepts a simple query."""

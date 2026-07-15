@@ -1166,8 +1166,8 @@ def submissions_log(
     s = [x.strip() for x in statuses.split(",") if x.strip()] if statuses else None
     p = [x.strip() for x in product_ids.split(",") if x.strip()] if product_ids else None
 
-    # Fast DB path (default) - ONLY for summary view
-    if source == "db" and view == "summary":
+    # Fast DB path (default)
+    if source == "db":
         try:
             df = db.get_npl_submissions(
                 types=t, statuses=s, product_ids=p, submission_id=submission_id
@@ -1352,6 +1352,24 @@ def delete_submission_rows(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+class UpdateNotesBody(BaseModel):
+    notes: str
+
+
+@router.put("/submissions/{submission_id}/notes")
+def update_submission_notes(
+    submission_id: str,
+    body: UpdateNotesBody,
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Update the notes column of a submission in the database."""
+    from core.shared.api_cache import CacheNS, cache_invalidate
+    db.update_npl_submission_notes(submission_id, body.notes)
+    cache_invalidate(CacheNS.NPL_WIZARD)
+    return {"status": "success"}
+
+
 def _fire_step_fail(step_name: str, error: str, current_user: dict, sub_type: str = "New Launch") -> None:
     """Fire a step-failure email in the background (best-effort, never raises)."""
     try:
@@ -1398,7 +1416,7 @@ def _format_db_submissions(df, *, view: str) -> dict:
             "Product ID": str(row.get("product_id") or ""),
             "Product Name": str(row.get("product_name") or ""),
             "Category": str(row.get("category") or ""),
-            "Cities": ", ".join(city_list[:6]) + (f", …" if len(city_list) > 6 else ""),
+            "Cities": (", ".join(city_list[:6]) + (f", …" if len(city_list) > 6 else "")) if view == "summary" else ", ".join(city_list),
             "Hub_Count": int(row.get("hub_count") or 0),
             "City_Count": int(row.get("city_count") or 0),
             "Start Date": str(row.get("start_date") or ""),
@@ -1407,16 +1425,17 @@ def _format_db_submissions(df, *, view: str) -> dict:
             "Rejection_Reason": str(row.get("rejection_reason") or ""),
             "Submitted_By": str(row.get("submitted_by") or ""),
             "Timestamp": ts_str,
+            "Notes": str(row.get("notes") or ""),
         })
 
     summary_cols = [
         "Submission_ID", "Submission_Type", "Product Name", "Start Date",
-        "Status", "SLA", "Hub_Count", "City_Count", "Cities", "Submitted_By", "Timestamp",
+        "Status", "SLA", "Hub_Count", "City_Count", "Cities", "Submitted_By", "Timestamp", "Notes"
     ]
     detail_cols = [
         "Submission_ID", "Submission_Type", "Product ID", "Product Name",
         "Category", "City_Count", "Cities", "Hub_Count", "Start Date",
-        "Status", "SLA", "Rejection_Reason", "Submitted_By", "Timestamp",
+        "Status", "SLA", "Rejection_Reason", "Submitted_By", "Timestamp", "Notes"
     ]
 
     cols = summary_cols if view == "summary" else detail_cols

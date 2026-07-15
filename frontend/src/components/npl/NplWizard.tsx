@@ -81,14 +81,10 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   const stages = useMemo(() => {
     if (isReplacement) {
-      return planLevel === "city"
-        ? (["setup", "upload", "dates", "confirm"] as const)
-        : (["setup", "upload", "split", "dates", "confirm"] as const);
+      return ["setup", "upload", "split", "dates", "confirm"] as const;
     }
-    return planLevel === "city"
-      ? (["upload", "dates", "confirm"] as const)
-      : (["upload", "split", "dates", "confirm"] as const);
-  }, [isReplacement, planLevel]);
+    return ["upload", "split", "dates", "confirm"] as const;
+  }, [isReplacement]);
 
   // --- Hub catalog vs. hub selection --------------------------------------
   // These used to be conflated into a single `cityHubs` object, which caused
@@ -307,15 +303,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
       );
 
-      if (planLevel === "city") {
-        setHubRows(data.rows || []);
-        setHubColumns(data.columns || []);
-        setStage("dates");
-      } else {
-        setHubRows(data.rows || []);
-        setHubColumns(data.columns || []);
-        setStage("split");
-      }
+      setHubRows(data.rows || []);
+      setHubColumns(data.columns || []);
+      setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
       const errorMsg = extractErrorMessage(err, "Upload failed");
@@ -344,6 +334,32 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       const next = current.includes(hub) ? current.filter(h => h !== hub) : [...current, hub];
       return { ...prev, [city]: next };
     });
+  };
+  const selectAllHubsForCity = (city: string) => {
+    const hubs = availableHubs[city] || [];
+    setSelectedHubs(prev => ({
+      ...prev,
+      [city]: [...hubs]
+    }));
+  };
+
+  const toggleAllHubsForCity = (city: string) => {
+    const hubs = availableHubs[city] || [];
+    setSelectedHubs(prev => {
+      const current = prev[city] || [];
+      const next = hubs.filter(h => !current.includes(h));
+      return {
+        ...prev,
+        [city]: next
+      };
+    });
+  };
+
+  const clearHubsForCity = (city: string) => {
+    setSelectedHubs(prev => ({
+      ...prev,
+      [city]: []
+    }));
   };
 
   const checkDuplicates = async () => {
@@ -567,12 +583,12 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const labels = useMemo(() => {
     if (isReplacement) {
       return planLevel === "city"
-        ? ["1 · Old & New SKU", "2 · Upload", "3 · Launch Date", "4 · Confirm"]
-        : ["1 · Old & New SKU", "2 · Upload", "3 · Hub Split", "4 · Launch Date", "5 · Confirm"];
+        ? ["1 — Old & New SKU", "2 — Upload", "3 — Forecast Preview", "4 — Launch Date", "5 — Confirm"]
+        : ["1 — Old & New SKU", "2 — Upload", "3 — Hub Split", "4 — Launch Date", "5 — Confirm"];
     }
     return planLevel === "city"
-      ? ["1 · Upload", "2 · Launch Date", "3 · Confirm"]
-      : ["1 · Upload", "2 · Hub Split", "3 · Launch Date", "4 · Confirm"];
+      ? ["1 — Upload", "2 — Forecast Preview", "3 — Launch Date", "4 — Confirm"]
+      : ["1 — Upload", "2 — Hub Split", "3 — Launch Date", "4 — Confirm"];
   }, [isReplacement, planLevel]);
   const categoryOptions =
     categories.length > 0
@@ -802,30 +818,63 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           </div>
           {selectedCities.length > 0 && planLevel === "hub" && (
             <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
-              <p className="text-xs font-semibold mb-2">Hub multiselect per city (optional — forces split)</p>
+              <p className="text-xs font-semibold mb-3 uppercase tracking-wider text-muted">Hub selection per city</p>
               {selectedCities.map(city => {
                 const hubs = availableHubs[city] || [];
                 const selected = selectedHubs[city] || [];
                 const loading = hubsLoading[city];
                 const error = hubsError[city];
                 return (
-                  <div key={city} className="mb-2">
-                    <div className="text-xs text-muted mb-1 flex items-center gap-2">
-                      <span>{city}</span>
-                      {selected.length > 0 && (
-                        <span className="badge badge-blue" style={{ fontSize: "0.6rem" }}>
-                          {selected.length} selected
-                        </span>
+                  <div key={city} className="mb-3 p-3 rounded" style={{ background: "rgba(255, 255, 255, 0.015)", border: "1px solid var(--border)" }}>
+                    <div className="mb-2.5 flex items-center justify-between flex-wrap gap-2" style={{ borderBottom: "1px dashed var(--border)", paddingBottom: "0.5rem" }}>
+                      <div className="flex items-center gap-2">
+                        <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>{city}</span>
+                        {selected.length > 0 && (
+                          <span className="badge badge-blue" style={{ fontSize: "0.6rem" }}>
+                            {selected.length} / {hubs.length} selected
+                          </span>
+                        )}
+                      </div>
+                      {!loading && !error && hubs.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                            onClick={() => selectAllHubsForCity(city)}
+                            disabled={readOnly}
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                            onClick={() => toggleAllHubsForCity(city)}
+                            disabled={readOnly}
+                          >
+                            Invert
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                            onClick={() => clearHubsForCity(city)}
+                            disabled={readOnly}
+                          >
+                            Clear
+                          </button>
+                        </div>
                       )}
                     </div>
                     {loading && (
-                      <div className="flex items-center gap-2 text-xs text-muted">
+                      <div className="flex items-center gap-2 text-xs text-muted py-1">
                         <span className="spinner" style={{ width: 12, height: 12 }} />
-                        Loading hubs…
+                        Loading hubs...
                       </div>
                     )}
                     {!loading && error && (
-                      <div className="flex items-center gap-2 text-xs" style={{ color: "var(--danger, #c0392b)" }}>
+                      <div className="flex items-center gap-2 text-xs py-1" style={{ color: "var(--danger, #ef4444)" }}>
                         <span>{error}</span>
                         <button
                           type="button"
@@ -838,7 +887,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                       </div>
                     )}
                     {!loading && !error && (
-                      <div className="flex flex-wrap gap-1">
+                      <div className="flex flex-wrap gap-1.5 pt-1">
                         {hubs.length ? (
                           hubs.map(hub => {
                             const isSelected = selected.includes(hub);
@@ -847,7 +896,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                                 key={hub}
                                 type="button"
                                 className={`btn btn-sm ${isSelected ? "btn-primary" : "btn-secondary"}`}
-                                style={{ fontSize: "0.65rem", padding: "0.15rem 0.4rem" }}
+                                style={{ fontSize: "0.65rem", padding: "0.15rem 0.45rem" }}
                                 onClick={() => toggleSelectedHub(city, hub)}
                                 disabled={readOnly}
                                 aria-pressed={isSelected}
@@ -857,7 +906,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                             );
                           })
                         ) : (
-                          <span className="text-xs text-muted">No hubs found for this city/category</span>
+                          <span className="text-xs text-muted py-1">No hubs found for this city/category</span>
                         )}
                       </div>
                     )}
@@ -951,7 +1000,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       {stage === "confirm" && (
         <>
           <p className="text-sm mb-2">
-            Sync <strong>{hubRows.length}</strong> hub rows as <strong>{subType}</strong> · launch {launchDate}
+            Sync <strong>{hubRows.length}</strong> {planLevel === "city" ? "city" : "hub"} rows as <strong>{subType}</strong> &mdash; launch {launchDate}
             {isReplacement && oldPid && newPid && (
               <> · replace {oldPid} → {newPid} ({splitPct}% to new)</>
             )}
