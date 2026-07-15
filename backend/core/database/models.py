@@ -227,3 +227,19 @@ class NplSubmission(Base):
     user_id          = Column(Integer, ForeignKey("users.id"), nullable=True)
     step_log         = Column(Text)            # JSON — per-wizard-step timing/errors
     timestamp        = Column(DateTime(timezone=True), server_default=func.now())
+    notes            = Column(Text)            # Notes from submissions
+
+class QueueJob(Base):
+    __tablename__ = "queue_jobs"
+
+    id = Column(String, primary_key=True)
+    task_name = Column(String, nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    status = Column(String, default="pending", index=True)
+    retries = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+    error_message = Column(Text)
+    locked_by = Column(String, index=True)
+    locked_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

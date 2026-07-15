@@ -51,8 +51,9 @@ class Database:
         except Exception as e:
             if not self.require_postgresql and self.backend == "postgresql":
                 import sys
+                import traceback
                 print("⚠️ Connection to PostgreSQL failed. Falling back to local SQLite...", file=sys.stderr)
-                print(f"Error: {e}", file=sys.stderr)
+                traceback.print_exc()
                 self.database_url = None
                 self.backend = "sqlite"
                 self.engine = self._create_engine(None, db_path)
@@ -121,16 +122,42 @@ class Database:
         statements = (
             _POSTGRES_SCHEMA if self.backend == "postgresql" else _SQLITE_SCHEMA
         )
-        with self.engine.begin() as conn:
+        
+        # Connect normally instead of .begin() to isolate transactions
+        with self.engine.connect() as conn:
             for statement in statements:
-                conn.execute(text(statement))
-            self._migrate_auth_sessions(conn)
-            self._migrate_session_id_columns(conn)
-            self._migrate_pipeline_run_log_lines(conn)
-            self._migrate_users_is_active(conn)
-            self._migrate_users_remove_username(conn)
-            self._migrate_npl_submissions_table(conn)
-            self._migrate_hub_launch_version_history(conn)
+                try:
+                    conn.execute(text(statement))
+                    conn.commit()
+                except Exception as e:
+                    import traceback
+                    print(f"Failed statement:\n{statement}\nError: {e}")
+                    conn.rollback()
+                    raise
+                    
+            migrations = [
+                self._migrate_auth_sessions,
+                self._migrate_session_id_columns,
+                self._migrate_pipeline_run_log_lines,
+                self._migrate_users_is_active,
+                self._migrate_users_remove_username,
+                self._migrate_npl_submissions_table,
+                self._migrate_hub_launch_version_history
+            ]
+            for mig in migrations:
+                try:
+                    mig(conn)
+                    conn.commit()
+                except Exception as e:
+                    import traceback
+                    print(f"Failed migration {mig.__name__}: {e}")
+                    conn.rollback()
+                    raise
+                    
+        # Now create any tables defined by SQLAlchemy ORM (like queue_jobs)
+        from core.database.models import Base
+        Base.metadata.create_all(bind=self.engine)
+        
         self.create_default_users()
         self.ensure_product_user()
 

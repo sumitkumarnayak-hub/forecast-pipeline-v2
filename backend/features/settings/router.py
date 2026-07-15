@@ -45,6 +45,52 @@ def get_env_status(current_user: dict = Depends(get_current_user)):
     return _env_status()
 
 
+@router.get("/queue/status")
+def get_queue_status(
+    current_user: dict = Depends(require_admin),
+    db: Database = Depends(get_db),
+):
+    """Return status of background queue jobs for admin monitoring."""
+    from sqlalchemy.orm import Session
+    from core.database.models import QueueJob
+    
+    try:
+        with Session(db.engine) as session:
+            # Get counts grouped by status
+            jobs = session.query(QueueJob).order_by(QueueJob.created_at.desc()).limit(100).all()
+            
+            pending_count = sum(1 for j in jobs if j.status == 'pending')
+            processing_count = sum(1 for j in jobs if j.status == 'processing')
+            failed_count = sum(1 for j in jobs if j.status == 'failed')
+            completed_count = sum(1 for j in jobs if j.status == 'completed')
+            
+            return {
+                "stats": {
+                    "pending": pending_count,
+                    "processing": processing_count,
+                    "failed": failed_count,
+                    "completed": completed_count,
+                    "total": len(jobs)
+                },
+                "recent_jobs": [
+                    {
+                        "id": j.id,
+                        "task_name": j.task_name,
+                        "status": j.status,
+                        "created_at": j.created_at.isoformat() if j.created_at else None,
+                        "locked_at": j.locked_at.isoformat() if j.locked_at else None,
+                        "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+                        "retries": j.retries,
+                        "error_message": j.error_message
+                    }
+                    for j in jobs
+                ]
+            }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+
 class PreferenceUpdate(BaseModel):
     email_notifications: Optional[bool] = None
     auto_sync_masters: Optional[bool] = None

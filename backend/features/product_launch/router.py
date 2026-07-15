@@ -310,35 +310,26 @@ def npl_confirm_ph_sync(
     db: Database = Depends(get_db),
 ):
     try:
-        from app.config import DPM_SHEET_KEY
-        from core.shared.sheets_session import get_sheets_manager
-
-
-        gsm = get_sheets_manager()
-        ss = gsm.gc.open_by_key(DPM_SHEET_KEY)
-        ph_ws = ss.worksheet("P-H Master")
-        values = [[r.get(h, "") for h in body.ph_headers] for r in body.rows_to_add]
-        gsm.append_rows_to_worksheet(
-            "demand_planning_masters",
-            "product_hub_master",
-            values,
-            worksheet=ph_ws,
-            value_input_option="RAW",
-        )
+        from sqlalchemy.orm import Session
+        from core.queue.driver import PostgresQueueDriver
+        from core.database.engine import get_shared_database
+        
+        queue_db = get_shared_database()
         user_id = int(current_user["sub"])
-        db.log_master_sync(
-            {
-                "master_type": "ph_master_sync",
-                "user_id": user_id,
-                "records_synced": len(body.rows_to_add),
-                "status": "success",
-                "error_message": (
-                    f"NPL sync — Product IDs: {', '.join(body.product_ids)} | "
-                    f"Rows added: {len(body.rows_to_add)}"
-                ),
-            }
-        )
-        return {"detail": f"Successfully added {len(body.rows_to_add)} rows to P-H Master"}
+        
+        with Session(queue_db.engine) as session:
+            driver = PostgresQueueDriver(session)
+            driver.enqueue(
+                "npl.ph_sync", 
+                payload={
+                    "rows_to_add": body.rows_to_add, 
+                    "ph_headers": body.ph_headers,
+                    "product_ids": body.product_ids,
+                    "user_id": user_id
+                }
+            )
+            
+        return {"detail": f"Queued {len(body.rows_to_add)} rows for P-H Master sync", "status": "queued"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -519,62 +510,33 @@ def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
 
 
 @router.post("/sync-new-hub/confirm")
-
 def npl_confirm_new_hub_sync(
     body: ConfirmHubSyncBody,
     current_user: dict = Depends(require_write),
     db: Database = Depends(get_db),
 ):
     try:
-        from app.config import DPM_SHEET_KEY
-        from core.shared.sheets_session import get_sheets_manager
-
-
-        gsm = get_sheets_manager()
-        ss = gsm.gc.open_by_key(DPM_SHEET_KEY)
-        ph_ws = ss.worksheet("P-H Master")
-        values = [[r.get(h, "") for h in body.ph_headers] for r in body.rows_to_add]
+        from sqlalchemy.orm import Session
+        from core.queue.driver import PostgresQueueDriver
+        from core.database.engine import get_shared_database
         
-        if values:
-            gsm.append_rows_to_worksheet(
-                "demand_planning_masters",
-                "product_hub_master",
-                values,
-                worksheet=ph_ws,
-                value_input_option="RAW",
+        queue_db = get_shared_database()
+        user_id = int(current_user["sub"])
+        
+        with Session(queue_db.engine) as session:
+            driver = PostgresQueueDriver(session)
+            driver.enqueue(
+                "npl.new_hub_sync", 
+                payload={
+                    "rows_to_add": body.rows_to_add, 
+                    "ph_headers": body.ph_headers,
+                    "user_id": user_id
+                }
             )
             
-        # Warm up cached data asynchronously in a background task
-        if values:
-            from fastapi import BackgroundTasks
-            # We can invoke cache warmups to fetch a fresh dataframe copy in the background
-            def warmup_cache():
-                try:
-                    # Read with use_cache=False to force a reload from Sheets, which auto-overwrites the cached Parquet file
-                    gsm.read_worksheet_uncached("demand_planning_masters", "product_hub_master", use_cache=False)
-                except Exception:
-                    pass
-            
-            # Start background thread execution to warm up the cache immediately
-            import threading
-            threading.Thread(target=warmup_cache, daemon=True).start()
-
-        user_id = int(current_user["sub"])
-        db.log_master_sync(
-            {
-                "master_type": "new_hub_sync",
-                "user_id": user_id,
-                "records_synced": len(body.rows_to_add),
-                "status": "success",
-                "error_message": f"New Hub Sync: Appended {len(body.rows_to_add)} rows from FF Input sheet configuration.",
-            }
-        )
-        return {
-            "success": True,
-            "rows_inserted": len(body.rows_to_add),
-            "detail": f"Successfully synced {len(body.rows_to_add)} new hub rows to P-H Master.",
-        }
+        return {"detail": f"Queued {len(body.rows_to_add)} rows for New Hub sync", "status": "queued"}
     except Exception as exc:
+        logger.error("[NPL] new-hub sync confirm failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -1105,20 +1067,25 @@ def wizard_submit(
     t_email = time.perf_counter()
     if body.send_email:
         try:
-            from core.shared.workflow_notifications import notify_npl_submitted
+            from core.queue.driver import PostgresQueueDriver
+            from core.database.engine import get_shared_database
 
-            background_tasks.add_task(
-                notify_npl_submitted,
-                sub_id=sub_id,
-                sub_type=body.sub_type,
-                product_name=product_name,
-                product_id=product_id,
-                launch_dates=launch_dates,
-                cities=cities,
-                hub_count=hub_count,
-                submitted_by=username,
-                user_id=user_id,
-                db=db,
+            # Create a dedicated session for the driver
+            queue_db = get_shared_database()
+            driver = PostgresQueueDriver(queue_db.SessionLocal())
+            driver.enqueue(
+                "npl.send_email",
+                payload={
+                    "sub_id": sub_id,
+                    "sub_type": body.sub_type,
+                    "product_name": product_name,
+                    "product_id": product_id,
+                    "launch_dates": launch_dates,
+                    "cities": cities,
+                    "hub_count": hub_count,
+                    "submitted_by": username,
+                    "user_id": user_id,
+                }
             )
             steps_status["email"] = {
                 "status": "success",
@@ -1218,7 +1185,13 @@ def patch_submission_status(
         
         append_res = None
         if body.status == "Approved":
-            append_res = _append_approved_to_new_product_launch(submission_id)
+            from sqlalchemy.orm import Session
+            from core.queue.driver import PostgresQueueDriver
+            
+            with Session(db.engine) as session:
+                driver = PostgresQueueDriver(session)
+                driver.enqueue("npl.sheets_sync", payload={"submission_id": submission_id, "action": "append"})
+            append_res = {"status": "queued"}
             
         from core.shared.api_cache import CacheNS, cache_invalidate
 
@@ -1264,7 +1237,17 @@ def sync_submission_to_new_product_launch(
         raise HTTPException(status_code=403, detail="Admin approval required")
     try:
         owner_email = current_user.get("email") or current_user.get("username") or "Demand Planning"
-        return _append_approved_to_new_product_launch(submission_id, owner_email=owner_email)
+        
+        from sqlalchemy.orm import Session
+        from core.queue.driver import PostgresQueueDriver
+        from core.database.engine import get_shared_database
+        
+        queue_db = get_shared_database()
+        with Session(queue_db.engine) as session:
+            driver = PostgresQueueDriver(session)
+            driver.enqueue("npl.sheets_sync", payload={"submission_id": submission_id, "action": "append", "owner_email": owner_email})
+            
+        return {"status": "queued", "detail": "Submission appended to queue for Sheets sync"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1318,35 +1301,35 @@ def delete_submission_rows(
         raise HTTPException(status_code=400, detail="reason must not be empty")
 
     try:
-        deleted_count = delete_submission_rows_by_index(submission_id, body.row_indices, reason=body.reason)
-
-        # Check if any rows remain for this submission — if none, mark DB as Deleted
-        remaining = get_submission_rows_with_indices(submission_id)
-        username = (
-            current_user.get("email")
-            or current_user.get("username")
-            or current_user.get("full_name")
-            or ""
-        )
-        if not remaining:
-            try:
-                db.update_npl_submission_status(submission_id, "Deleted", body.reason)
-                logger.info(
-                    "[NPL] submission %s fully deleted from sheet by %s (Reason: %s)",
-                    submission_id, username, body.reason
-                )
-            except Exception as db_exc:
-                logger.warning("[NPL] Could not update DB status to Deleted: %s", db_exc)
-
+        from sqlalchemy.orm import Session
+        from core.queue.driver import PostgresQueueDriver
+        from core.database.engine import get_shared_database
+        
+        queue_db = get_shared_database()
+        username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
+        
+        with Session(queue_db.engine) as session:
+            driver = PostgresQueueDriver(session)
+            driver.enqueue(
+                "npl.delete_submission_rows", 
+                payload={
+                    "submission_id": submission_id, 
+                    "row_indices": body.row_indices, 
+                    "reason": body.reason,
+                    "username": username
+                }
+            )
+            
         cache_invalidate(CacheNS.NPL_WIZARD)
         logger.info(
-            "[NPL] %d row(s) deleted from Submission_Log for %s by %s",
-            deleted_count, submission_id, username,
+            "[NPL] Queueing %d row(s) for deletion from Submission_Log for %s by %s",
+            len(body.row_indices), submission_id, username,
         )
         return {
-            "detail": f"Deleted {deleted_count} row(s) from Submission_Log",
-            "deleted_count": deleted_count,
-            "submission_fully_deleted": not remaining,
+            "detail": f"Queued {len(body.row_indices)} row(s) for deletion from Submission_Log",
+            "deleted_count": len(body.row_indices),
+            "submission_fully_deleted": False, # Will be checked by worker
+            "status": "queued"
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
