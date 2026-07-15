@@ -143,13 +143,39 @@ async def lifespan(app: FastAPI):
     try:
         from features.product_launch.watcher import start_ff_input_watcher
 
-
         start_ff_input_watcher(interval_seconds=20)
         logger.info("FF Input change watcher started (20s interval)")
     except Exception as exc:
         logger.warning("FF Input watcher startup warning: %s", exc)
 
+    queue_worker_stop_event = None
+    try:
+        import threading
+        from core.database.engine import get_shared_database
+        from core.queue.worker import QueueWorker
+        from features.product_launch.tasks import register_npl_tasks
+
+        db = get_shared_database()
+        queue_worker_stop_event = threading.Event()
+        worker = QueueWorker(engine=db.engine, sleep_interval=2.0)
+        register_npl_tasks(worker)
+        
+        queue_thread = threading.Thread(
+            target=worker.run,
+            args=(queue_worker_stop_event,),
+            daemon=True,
+            name="queue-worker-daemon"
+        )
+        queue_thread.start()
+        logger.info("Queue worker daemon started")
+    except Exception as exc:
+        logger.error("Queue worker startup failed: %s", exc)
+
     yield
+    
+    if queue_worker_stop_event:
+        logger.info("Shutting down queue worker daemon...")
+        queue_worker_stop_event.set()
 
 
 app = FastAPI(

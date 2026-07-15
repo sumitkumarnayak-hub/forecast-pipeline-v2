@@ -1148,12 +1148,14 @@ def wizard_submit(
         try:
             from core.queue.driver import PostgresQueueDriver
             from core.database.engine import get_shared_database
+            from sqlalchemy.orm import Session
 
             # Create a dedicated session for the driver
             queue_db = get_shared_database()
-            driver = PostgresQueueDriver(queue_db.SessionLocal())
-            driver.enqueue(
-                "npl.send_email",
+            with Session(queue_db.engine) as session:
+                driver = PostgresQueueDriver(session)
+                driver.enqueue(
+                    "npl.send_email",
                 payload={
                     "sub_id": sub_id,
                     "sub_type": body.sub_type,

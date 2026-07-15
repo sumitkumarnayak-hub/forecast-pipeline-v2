@@ -1,7 +1,8 @@
 import logging
 from typing import Dict, Any
 
-from core.database.engine import SessionLocal
+from sqlalchemy.orm import Session
+from core.database.engine import get_shared_database
 from core.shared.workflow_notifications import notify_npl_submitted
 # Note: In the future, we can import Google Sheets sync methods here as well.
 # from core.shared.google_sheets import ...
@@ -14,7 +15,8 @@ def handle_npl_email(payload: Dict[str, Any]):
     """
     logger.info(f"Processing email for NPL submission: {payload.get('sub_id')}")
     # Re-establish DB session if needed by the mailer
-    with SessionLocal() as db:
+    db_obj = get_shared_database()
+    with Session(db_obj.engine) as db:
         notify_npl_submitted(
             sub_id=payload.get("sub_id"),
             sub_type=payload.get("sub_type"),
