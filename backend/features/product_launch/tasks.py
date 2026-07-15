@@ -103,7 +103,8 @@ def handle_delete_submission_rows(payload: dict):
     delete_submission_rows_by_index(sub_id, row_indices, reason=reason)
     
     remaining = get_submission_rows_with_indices(sub_id)
-    if not remaining:
+    active_remaining = [r for r in remaining if str(r.get("Status", r.get("status", ""))).strip().lower() != "deleted"]
+    if not active_remaining:
         try:
             db = get_shared_database()
             db.update_npl_submission_status(sub_id, "Deleted", reason)
