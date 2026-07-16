@@ -1231,6 +1231,9 @@ def wizard_submit(
                 "Sat": source.get("Sat", 0),
                 "Sun": source.get("Sun", 0),
                 "_owner_email": current_user.get("email", current_user.get("sub", "")),
+                "old_product_id": source.get("old_product_id", ""),
+                "old_product_name": source.get("old_product_name", ""),
+                "replacement_percentage": source.get("replacement_percentage", ""),
             }
             if target_worksheet == "product_replacement":
                 row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
@@ -2043,6 +2046,9 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
             "Sat": source.get("Sat", 0),
             "Sun": source.get("Sun", 0),
             "_owner_email": owner_email or source.get("Submitted_By") or source.get("_owner_email", ""),
+            "old_product_id": source.get("Old Product ID", ""),
+            "old_product_name": source.get("Old Product Name", ""),
+            "replacement_percentage": source.get("Replacement Percentage", ""),
         }
 
         if target_worksheet == "product_replacement":
@@ -2246,7 +2252,8 @@ def ensure_product_replacement_sheet_exists(spreadsheet_key: str):
             "Product ID", "Product Name", "Anchor ID", "City", "Hub Name", "MRP",
             "Change Date", "UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life",
             "Hub Shelf Life", "PLU Code", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
-            "Planning Confirmation", "Submitted By", "Owner Email", "Submitted At"
+            "Planning Confirmation", "Submitted By", "Owner Email", "Submitted At",
+            "Old Product ID", "Old Product Name", "Replacement Percentage"
         ]
         plan_sheet.update("A1", [REPLACEMENT_HEADERS])
     return plan_sheet
@@ -2347,6 +2354,12 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
             row.append(source.get("_owner_email", ""))
         elif h_norm == "submitted at":
             row.append(source.get("Timestamp", ""))
+        elif h_norm == "old product id":
+            row.append(source.get("old_product_id", ""))
+        elif h_norm == "old product name":
+            row.append(source.get("old_product_name", ""))
+        elif h_norm == "replacement percentage":
+            row.append(source.get("replacement_percentage", ""))
         else:
             row.append("")
     return row

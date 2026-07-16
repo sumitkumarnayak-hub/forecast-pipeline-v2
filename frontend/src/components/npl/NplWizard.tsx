@@ -431,7 +431,15 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setStepState({ step: "submit", status: "loading", message: "Syncing data to Google Sheets & database..." });
 
     try {
-      const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
+      const dated = hubRows.map(r => ({
+        ...r,
+        launch_date: launchDate,
+        ...(isReplacement ? {
+          old_product_id: oldPid,
+          old_product_name: oldProductName,
+          replacement_percentage: splitPct,
+        } : {})
+      }));
       const t0Submit = performance.now();
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
         hub_rows: dated,

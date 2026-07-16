@@ -71,6 +71,7 @@ LOG_HEADERS = [
     "Product ID", "Product Name", "Category",
     "City", "Hub", "MRP", "Start Date",
     "Status", "Rejection_Reason", "Submitted_By",
+    "Old Product ID", "Old Product Name", "Replacement Percentage",
 ] + WEEKDAYS
 
 
@@ -850,7 +851,7 @@ def _ensure_log():
     try:
         ws = sh.worksheet(LOG_SHEET_NAME)
         existing = ws.row_values(1)
-        for col in ["Status", "Rejection_Reason", "Submitted_By", "MRP"]:
+        for col in ["Status", "Rejection_Reason", "Submitted_By", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"]:
             if col not in existing:
                 ws.update_cell(1, len(existing) + 1, col)
                 existing.append(col)
@@ -1339,6 +1340,9 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
         "product_name": "Product Name",
         "category":     "Category",
         "Launch Date":  "Start Date",
+        "old_product_id": "Old Product ID",
+        "old_product_name": "Old Product Name",
+        "replacement_percentage": "Replacement Percentage",
     })
 
     if "Hub" not in df.columns:
@@ -1378,7 +1382,8 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
                 "Product ID", "Product Name", "Category",
                 "City", "Hub", "MRP", "Start Date",
-                "Status", "Rejection_Reason", "Submitted_By"] + WEEKDAYS
+                "Status", "Rejection_Reason", "Submitted_By",
+                "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
     log_df = df[[c for c in log_cols if c in df.columns]]
     save_to_log(_sanitize(log_df))
 
