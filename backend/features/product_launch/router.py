@@ -510,6 +510,34 @@ def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/sync-new-hub/last-update")
+def get_last_hub_update(current_user: dict = Depends(get_current_user)):
+    """
+    Get the details of the last added hub configuration (time and user).
+    """
+    from core.database.models import AuditLog
+    from sqlalchemy.orm import Session
+    from core.database.engine import get_shared_database
+    
+    db = get_shared_database()
+    try:
+        with Session(db.engine) as session:
+            entry = (
+                session.query(AuditLog)
+                .filter(AuditLog.action == "append_ff_input")
+                .order_by(AuditLog.ts.desc())
+                .first()
+            )
+            if entry:
+                return {
+                    "ts": entry.ts.isoformat() if entry.ts else None,
+                    "user_id": entry.user_id
+                }
+            return {"ts": None, "user_id": None}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 class AppendFFInputRowBody(BaseModel):
     row: dict  # {header: value} pairs matching FF Input sheet columns
 

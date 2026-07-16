@@ -227,7 +227,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
     const init: Record<string, string> = {};
     finalHeaders.forEach(h => {
       if (h.toLowerCase() === "type") {
-        init[h] = "New Hub";
+        init[h] = "New Hub Launch";
       } else {
         init[h] = "";
       }
@@ -244,14 +244,14 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
     for (const h of finalHeaders) {
       const val = form[h]?.trim() ?? "";
       const hLower = h.toLowerCase();
-      if (!val && hLower !== "type") {
+      if (!val) {
         setError(`"${h}" is required.`);
         return;
       }
       if (hLower === "percentage") {
         const pct = parseFloat(val);
         if (isNaN(pct) || pct < 0 || pct > 1) {
-          setError('"Percentage" must be a number between 0 and 1 (e.g. 0.5).');
+          setError('"Percentage" must be a number between 0 and 1 (e.g. 0.5 or 0.001).');
           return;
         }
       }
@@ -287,7 +287,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
 
   const getPlaceholder = (h: string) => {
     const norm = h.toLowerCase().replace(/[\s_]/g, "");
-    if (norm.includes("percentage")) return "Between 0.0 and 1.0 (e.g. 0.5)";
+    if (norm.includes("percentage")) return "Between 0.0 and 1.0 (e.g. 0.001)";
     if (norm.includes("id")) return "Numeric Hub ID (e.g. 2606)";
     if (norm.includes("city")) return "e.g. NCR";
     if (norm.includes("source")) return "e.g. NGC";
@@ -298,48 +298,50 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 1000,
-      background: "rgba(10, 10, 12, 0.7)", backdropFilter: "blur(8px)",
+      background: "rgba(15, 23, 42, 0.4)", backdropFilter: "blur(4px)",
       display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
     }}>
       <div style={{
-        background: "rgba(30, 30, 38, 0.85)", border: "1px solid rgba(255, 255, 255, 0.08)",
-        borderRadius: "16px", width: "100%", maxWidth: 540,
-        boxShadow: "0 24px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)",
+        background: "#ffffff", border: "1px solid #e2e8f0",
+        borderRadius: "12px", width: "100%", maxWidth: 540,
+        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
         display: "flex", flexDirection: "column", maxHeight: "90vh",
         animation: "fadeInScale 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+        color: "#1e293b"
       }}>
         {/* Header */}
         <div style={{
-          padding: "1.25rem 1.5rem", borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
+          padding: "1.25rem 1.5rem", borderBottom: "1px solid #e2e8f0",
           display: "flex", alignItems: "center", gap: 12,
+          background: "#f8fafc", borderTopLeftRadius: "12px", borderTopRightRadius: "12px"
         }}>
           <div style={{
-            width: 36, height: 36, borderRadius: "10px",
-            background: "linear-gradient(135deg, rgba(168,85,247,0.25), rgba(99,102,241,0.2))",
-            border: "1px solid rgba(168,85,247,0.4)",
+            width: 36, height: 36, borderRadius: "8px",
+            background: "rgba(124, 58, 237, 0.08)",
+            border: "1px solid rgba(124, 58, 237, 0.15)",
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
-            <Plus size={16} style={{ color: "#c084fc" }} />
+            <Plus size={16} style={{ color: "#7c3aed" }} />
           </div>
           <div style={{ flex: 1 }}>
-            <h3 style={{ margin: 0, fontWeight: 700, fontSize: "0.95rem", color: "#f3f4f6" }}>Add New Hub Config</h3>
-            <p style={{ margin: 0, fontSize: "0.72rem", color: "#9ca3af" }}>Append a validated row to the FF Input sheet</p>
+            <h3 style={{ margin: 0, fontWeight: 600, fontSize: "0.95rem", color: "#0f172a" }}>Add New Hub Config</h3>
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>Append a validated row to the FF Input sheet</p>
           </div>
           <button
             type="button"
             onClick={onClose}
             style={{
-              background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)",
-              cursor: "pointer", color: "#9ca3af", padding: "6px", borderRadius: "8px",
+              background: "transparent", border: "none",
+              cursor: "pointer", color: "#64748b", padding: "6px", borderRadius: "8px",
               transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center"
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.08)";
-              e.currentTarget.style.color = "#f3f4f6";
+              e.currentTarget.style.background = "#f1f5f9";
+              e.currentTarget.style.color = "#0f172a";
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.03)";
-              e.currentTarget.style.color = "#9ca3af";
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#64748b";
             }}
           >
             <X size={16} />
@@ -348,20 +350,20 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
 
         {/* Body */}
         <form onSubmit={handleSubmit} style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
             {error && (
               <div style={{
                 display: "flex", alignItems: "center", gap: 8,
-                padding: "0.75rem 1rem", borderRadius: "10px",
-                background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)",
-                fontSize: "0.78rem", color: "#f87171",
+                padding: "0.75rem 1rem", borderRadius: "6px",
+                background: "#fef2f2", border: "1px solid #fee2e2",
+                fontSize: "0.78rem", color: "#b91c1c",
               }}>
                 <XCircle size={14} style={{ flexShrink: 0 }} />
                 <span>{error}</span>
               </div>
             )}
             
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
               {finalHeaders.map(header => {
                 const isTypeField = header.toLowerCase() === "type";
                 const isFullWidth = ["hub_name", "source_hub"].includes(header.toLowerCase());
@@ -371,33 +373,33 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                   <div key={header} style={{ gridColumn: isFullWidth ? "span 2" : "auto" }}>
                     <label style={{
                       display: "flex", alignItems: "center", gap: 4,
-                      fontSize: "0.7rem", fontWeight: 600,
-                      color: "#9ca3af",
-                      marginBottom: "0.35rem", textTransform: "uppercase", letterSpacing: "0.05em",
+                      fontSize: "0.75rem", fontWeight: 600,
+                      color: "#475569",
+                      marginBottom: "0.35rem",
                     }}>
-                      {header.replace(/_/g, " ")}
-                      {!isTypeField && <span style={{ color: "#c084fc", fontSize: "0.75rem" }}>*</span>}
+                      {header.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                      <span style={{ color: "#ef4444", fontSize: "0.75rem" }}>*</span>
                     </label>
                     
                     {isTypeField ? (
                       <select
-                        value={form[header] ?? "New Hub"}
+                        value={form[header] ?? "New Hub Launch"}
                         onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))}
                         className="form-input"
                         style={{
                           width: "100%", boxSizing: "border-box", fontSize: "0.82rem",
-                          background: "#24242e", border: "1px solid rgba(255,255,255,0.08)",
-                          borderRadius: "8px", color: "#f3f4f6", padding: "0.5rem 0.75rem"
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.5rem 0.75rem",
+                          outline: "none"
                         }}
                       >
-                        <option value="New Hub">New Hub</option>
-                        <option value="Expansion">Expansion</option>
-                        <option value="Replacement">Replacement</option>
+                        <option value="New Hub Launch">New Hub Launch</option>
+                        <option value="KML Remapping">KML Remapping</option>
                       </select>
                     ) : (
                       <input
                         type={type}
-                        step={type === "number" && header.toLowerCase().includes("percentage") ? "0.01" : "1"}
+                        step={type === "number" && header.toLowerCase().includes("percentage") ? "any" : "1"}
                         min={type === "number" && header.toLowerCase().includes("percentage") ? "0" : undefined}
                         max={type === "number" && header.toLowerCase().includes("percentage") ? "1" : undefined}
                         value={form[header] ?? ""}
@@ -406,9 +408,18 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                         className="form-input"
                         style={{
                           width: "100%", boxSizing: "border-box", fontSize: "0.82rem",
-                          background: "#24242e", border: "1px solid rgba(255,255,255,0.08)",
-                          borderRadius: "8px", color: "#f3f4f6", padding: "0.5rem 0.75rem",
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.5rem 0.75rem",
                           transition: "border-color 0.15s, box-shadow 0.15s",
+                          outline: "none"
+                        }}
+                        onFocus={e => {
+                          e.currentTarget.style.borderColor = "#7c3aed";
+                          e.currentTarget.style.boxShadow = "0 0 0 3px rgba(124, 58, 237, 0.1)";
+                        }}
+                        onBlur={e => {
+                          e.currentTarget.style.borderColor = "#cbd5e1";
+                          e.currentTarget.style.boxShadow = "none";
                         }}
                       />
                     )}
@@ -420,16 +431,27 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
 
           {/* Footer */}
           <div style={{
-            padding: "1rem 1.5rem", borderTop: "1px solid rgba(255, 255, 255, 0.06)",
+            padding: "1rem 1.5rem", borderTop: "1px solid #e2e8f0",
             display: "flex", gap: 10, justifyContent: "flex-end",
-            background: "rgba(255,255,255,0.01)"
+            background: "#f8fafc", borderBottomLeftRadius: "12px", borderBottomRightRadius: "12px"
           }}>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={onClose}
               disabled={submitting}
-              style={{ borderRadius: "8px", padding: "0.5rem 1rem", fontSize: "0.8rem" }}
+              style={{
+                borderRadius: "6px", padding: "0.5rem 1rem", fontSize: "0.8rem",
+                background: "#ffffff", border: "1px solid #cbd5e1", color: "#475569"
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = "#f8fafc";
+                e.currentTarget.style.color = "#0f172a";
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "#ffffff";
+                e.currentTarget.style.color = "#475569";
+              }}
             >
               Cancel
             </button>
@@ -438,12 +460,18 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
               disabled={submitting}
               style={{
                 display: "flex", alignItems: "center", gap: 6,
-                padding: "0.5rem 1.25rem", borderRadius: "8px", border: "none",
-                background: "linear-gradient(135deg, #a855f7, #6366f1)",
+                padding: "0.5rem 1.25rem", borderRadius: "6px", border: "none",
+                background: "#7c3aed",
                 color: "#fff", fontWeight: 600, fontSize: "0.8rem",
                 cursor: submitting ? "not-allowed" : "pointer",
-                boxShadow: "0 4px 14px rgba(168,85,247,0.3)",
+                boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
                 opacity: submitting ? 0.7 : 1, transition: "all 0.15s",
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = "#6d28d9";
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = "#7c3aed";
               }}
             >
               {submitting ? <RefreshCw size={13} className="animate-spin" /> : <Plus size={13} />}
@@ -471,6 +499,7 @@ export default function HubLaunchTab() {
   const [showHistory, setShowHistory] = useState(false);
   // Task 2: Add Hub modal state
   const [showAddHub, setShowAddHub] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<{ ts: string | null; user_id: string | null } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchFFInput = useCallback(async (bypass: boolean) => {
@@ -491,13 +520,21 @@ export default function HubLaunchTab() {
     } catch(e) { console.warn("[HubLaunchTab] change-status poll failed:", e); }
   }, []);
 
+  const fetchLastUpdate = useCallback(async () => {
+    try {
+      const { data } = await api.get<{ ts: string | null; user_id: string | null }>("/api/new-product-launch/sync-new-hub/last-update");
+      setLastUpdate(data);
+    } catch(e) { console.warn("[HubLaunchTab] Failed to fetch last update:", e); }
+  }, []);
+
   useEffect(() => {
     fetchFFInput(false);
     fetchChangeStatus();
+    fetchLastUpdate();
     // Task 3: Reduced from 30_000ms → 15_000ms
     pollRef.current = setInterval(fetchChangeStatus, 15_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [fetchFFInput, fetchChangeStatus]);
+  }, [fetchFFInput, fetchChangeStatus, fetchLastUpdate]);
 
   const fetchPreview = async (bypassCache: boolean) => {
     setRunning(true); setMsg({ text: "", type: "" }); setPreview(null);
@@ -550,7 +587,7 @@ export default function HubLaunchTab() {
         <AddHubModal
           headers={ffData?.headers}
           onClose={() => setShowAddHub(false)}
-          onSuccess={() => fetchFFInput(true)}
+          onSuccess={() => { fetchFFInput(true); fetchLastUpdate(); }}
         />
       )}
 
@@ -597,15 +634,21 @@ export default function HubLaunchTab() {
             {ffData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(ffData.cache_last_updated)}</span>}
 
             {/* Task 2: Add Hub CRM button */}
+            {lastUpdate && lastUpdate.ts && (
+              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4, marginRight: "4px" }}>
+                <Clock size={10} />
+                Last added: {formatIST(lastUpdate.ts)} by {lastUpdate.user_id?.split("@")[0]}
+              </span>
+            )}
             {canWrite && (
               <button
                 type="button"
                 onClick={() => setShowAddHub(true)}
                 style={{
-                  fontSize: "0.7rem", padding: "4px 10px", height: "auto",
+                  fontSize: "0.75rem", padding: "6px 12px", height: "auto",
                   display: "flex", alignItems: "center", gap: 5,
                   background: "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))",
-                  border: "1px solid rgba(168,85,247,0.35)", borderRadius: "7px",
+                  border: "1px solid rgba(168,85,247,0.35)", borderRadius: "8px",
                   color: "#a855f7", fontWeight: 600, cursor: "pointer",
                   transition: "all 0.15s",
                 }}
@@ -618,7 +661,7 @@ export default function HubLaunchTab() {
                   e.currentTarget.style.borderColor = "rgba(168,85,247,0.35)";
                 }}
               >
-                <Plus size={11} />
+                <Plus size={12} />
                 Add Hub
               </button>
             )}
