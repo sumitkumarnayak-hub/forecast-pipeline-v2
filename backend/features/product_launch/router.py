@@ -510,6 +510,28 @@ def npl_dismiss_ff_input_changes(current_user: dict = Depends(require_write)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _fetch_actual_drive_last_update(file_id: str) -> dict:
+    from googleapiclient.discovery import build
+    from core.shared.google_credentials import load_service_account_credentials
+    try:
+        creds = load_service_account_credentials(["https://www.googleapis.com/auth/drive.metadata.readonly"])
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        meta = service.files().get(
+            fileId=file_id, 
+            fields="modifiedTime, lastModifyingUser",
+            supportsAllDrives=True
+        ).execute()
+        
+        ts = meta.get("modifiedTime")
+        user_meta = meta.get("lastModifyingUser", {})
+        user_id = user_meta.get("emailAddress") or user_meta.get("displayName") or "Unknown Editor"
+        
+        return {"ts": ts, "user_id": user_id}
+    except Exception as e:
+        logger.warning("[DriveLastUpdate] Failed to fetch actual sheet mtime: %s", e)
+        return {"ts": None, "user_id": None}
+
+
 @router.get("/sync-new-hub/last-update")
 def get_last_hub_update(current_user: dict = Depends(get_current_user)):
     """
@@ -521,6 +543,11 @@ def get_last_hub_update(current_user: dict = Depends(get_current_user)):
     
     db = get_shared_database()
     try:
+        from app import config as cfg
+        actual = _fetch_actual_drive_last_update(cfg.NEW_HUB_LAUNCH_SHEET_KEY)
+        if actual.get("ts"):
+            return actual
+
         with Session(db.engine) as session:
             entry = (
                 session.query(AuditLog)

@@ -634,52 +634,59 @@ export default function HubLaunchTab() {
 
       {/* FF Input Sheet Table */}
       <div className="card" style={{ borderRadius: "12px", padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.65rem 1rem", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Database size={14} style={{ color: "var(--blue)" }} />
-            <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>FF Input Sheet</span>
-            {ffData && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(59,130,246,0.1)", color: "var(--blue)", fontWeight: 600 }}>{ffData.row_count} rows</span>}
-            {lastUpdate && lastUpdate.ts && (
-              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "12px", paddingLeft: "12px", borderLeft: "1px solid var(--border)" }}>
-                <Clock size={10} />
-                Last updated by : {lastUpdate.user_id} at {formatIST(lastUpdate.ts)}
-              </span>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {changeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(changeStatus.last_checked_at)}</span>}
-            {ffData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(ffData.cache_last_updated)}</span>}
+        <div style={{ display: "flex", flexDirection: "column", padding: "0.65rem 1rem", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", gap: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Database size={14} style={{ color: "var(--blue)" }} />
+              <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>FF Input Sheet</span>
+              {ffData && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(59,130,246,0.1)", color: "var(--blue)", fontWeight: 600 }}>{ffData.row_count} rows</span>}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Task 2: Add Hub CRM button */}
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddHub(true)}
+                  style={{
+                    fontSize: "0.72rem", padding: "4px 10px", height: "auto",
+                    display: "flex", alignItems: "center", gap: 5,
+                    background: "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))",
+                    border: "1px solid rgba(168,85,247,0.35)", borderRadius: "8px",
+                    color: "#a855f7", fontWeight: 600, cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.25), rgba(99,102,241,0.2))";
+                    e.currentTarget.style.borderColor = "rgba(168,85,247,0.55)";
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))";
+                    e.currentTarget.style.borderColor = "rgba(168,85,247,0.35)";
+                  }}
+                >
+                  <Plus size={12} />
+                  Add Hub
+                </button>
+              )}
 
-            {/* Task 2: Add Hub CRM button */}
-            {canWrite && (
-              <button
-                type="button"
-                onClick={() => setShowAddHub(true)}
-                style={{
-                  fontSize: "0.75rem", padding: "6px 12px", height: "auto",
-                  display: "flex", alignItems: "center", gap: 5,
-                  background: "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))",
-                  border: "1px solid rgba(168,85,247,0.35)", borderRadius: "8px",
-                  color: "#a855f7", fontWeight: 600, cursor: "pointer",
-                  transition: "all 0.15s",
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.25), rgba(99,102,241,0.2))";
-                  e.currentTarget.style.borderColor = "rgba(168,85,247,0.55)";
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))";
-                  e.currentTarget.style.borderColor = "rgba(168,85,247,0.35)";
-                }}
-              >
-                <Plus size={12} />
-                Add Hub
+              <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.68rem", padding: "4px 10px", height: "auto", display: "flex", alignItems: "center", gap: 3 }} onClick={() => fetchFFInput(true)} disabled={loadingFf}>
+                <RefreshCw size={10} className={loadingFf ? "animate-spin" : ""} /> {loadingFf ? "Fetching..." : "Refresh Live"}
               </button>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.64rem", color: "var(--text-muted)", flexWrap: "wrap", gap: 8, borderTop: "1px solid rgba(255,255,255,0.03)", paddingTop: "6px" }}>
+            {lastUpdate && lastUpdate.ts ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Clock size={10} />
+                Last updated by : <strong style={{ color: "var(--text-secondary)" }}>{lastUpdate.user_id}</strong> at {formatIST(lastUpdate.ts)}
+              </span>
+            ) : (
+              <span />
             )}
-
-            <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.68rem", padding: "2px 8px", height: "auto", display: "flex", alignItems: "center", gap: 3 }} onClick={() => fetchFFInput(true)} disabled={loadingFf}>
-              <RefreshCw size={10} className={loadingFf ? "animate-spin" : ""} /> {loadingFf ? "Fetching..." : "Refresh Live"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {changeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(changeStatus.last_checked_at)}</span>}
+              {ffData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(ffData.cache_last_updated)}</span>}
+            </div>
           </div>
         </div>
         {loadingFf && !ffData ? (
