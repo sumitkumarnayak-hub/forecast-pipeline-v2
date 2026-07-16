@@ -14,6 +14,7 @@ import {
   loadNplProductIds,
   loadNplProductsByCategory,
   peekNplContext,
+  loadNplBootstrap,
   type NplContextData,
   type NplProductRow,
 } from "@/lib/nplBootstrap";
@@ -38,9 +39,13 @@ export function NplProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [ctx, prods] = await Promise.all([loadNplContext({ force: true }), loadNplProductIds()]);
-      setContext(ctx);
-      setProducts(prods);
+      const data = await loadNplBootstrap({ force: true });
+      setContext({
+        categories: data.categories,
+        cities: data.cities,
+        earliest_launch_date: data.earliest_launch_date,
+      });
+      setProducts(data.products || []);
       setError(null);
     } catch {
       setError("Could not load launch master data. Check your connection and try again.");
@@ -54,10 +59,14 @@ export function NplProvider({ children }: { children: ReactNode }) {
     const hadCache = Boolean(peekNplContext());
     (async () => {
       try {
-        const [ctx, prods] = await Promise.all([loadNplContext(), loadNplProductIds()]);
+        const data = await loadNplBootstrap();
         if (!cancelled) {
-          setContext(ctx);
-          setProducts(prods);
+          setContext({
+            categories: data.categories,
+            cities: data.cities,
+            earliest_launch_date: data.earliest_launch_date,
+          });
+          setProducts(data.products || []);
           setError(null);
         }
       } catch {

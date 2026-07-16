@@ -831,6 +831,52 @@ def wizard_context(current_user: dict = Depends(get_current_user)):
     return cached(CacheNS.NPL_WIZARD, "context", wiz.wizard_context_payload, ttl=_NPL_CACHE_TTL)
 
 
+@router.get("/bootstrap")
+def npl_bootstrap(current_user: dict = Depends(get_current_user)):
+    from core.shared.api_cache import CacheNS, cached
+    from features.product_launch import wizard as wiz
+    from features.product_launch.core import get_categories, get_cities_from_salience, get_earliest_monday
+
+    def _load_all() -> dict:
+        master = wiz.load_product_master()
+        sal = wiz.load_hub_salience()
+        
+        # categories
+        categories = get_categories(master)
+        
+        # cities
+        cities = get_cities_from_salience(sal)
+        
+        # product_ids list
+        pid_col = next((c for c in ["Product id", "Product ID", "product_id"] if c in master.columns), None)
+        name_col = next((c for c in ["Product Name", "product_name", "Anchor Name"] if c in master.columns), None)
+        cat_col = next((c for c in ["sub_category", "Sub-category", "Sub category", "category"] if c in master.columns), None)
+        
+        products = []
+        if pid_col:
+            for _, row in master.iterrows():
+                pid = str(row.get(pid_col, "")).strip()
+                if not pid:
+                    continue
+                products.append({
+                    "product_id": pid,
+                    "product_name": str(row.get(name_col, "")).strip() if name_col else "",
+                    "category": str(row.get(cat_col, "")).strip() if cat_col else "",
+                })
+            products = sorted(products, key=lambda r: r["product_id"])
+            
+        payload = {
+            "categories": categories,
+            "cities": cities,
+            "earliest_launch_date": str(get_earliest_monday()),
+            "products": products
+        }
+        from core.utils.dataframe import sanitize_for_json
+        return sanitize_for_json(payload)
+        
+    return cached(CacheNS.NPL_WIZARD, "combined_bootstrap_v2", _load_all, ttl=_NPL_CACHE_TTL)
+
+
 @router.get("/wizard/hubs")
 def wizard_hubs(
     city: str,

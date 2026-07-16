@@ -259,7 +259,7 @@ def list_all_product_ids() -> list[dict[str, str]]:
         (c for c in ["Product Name", "product_name", "Anchor Name"] if c in master.columns),
         None,
     )
-    cat_col = next((c for c in ["Sub-category", "Sub category", "category"] if c in master.columns), None)
+    cat_col = next((c for c in ["sub_category", "Sub-category", "Sub category", "category"] if c in master.columns), None)
     if not pid_col:
         return []
     out: list[dict[str, str]] = []

@@ -4,8 +4,7 @@
 import api from "@/lib/api";
 import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 
-const KEY_CONTEXT = "npl:wizard-context";
-const KEY_PRODUCTS = "npl:product-ids";
+const KEY_BOOTSTRAP = "npl:combined-bootstrap-v2";
 
 export type NplContextData = {
   categories: string[];
@@ -19,50 +18,57 @@ export type NplProductRow = {
   category: string;
 };
 
-let contextInflight: Promise<NplContextData> | null = null;
-let productsInflight: Promise<NplProductRow[]> | null = null;
+export type NplBootstrapData = {
+  categories: string[];
+  cities: string[];
+  earliest_launch_date: string;
+  products: NplProductRow[];
+};
+
+let bootstrapInflight: Promise<NplBootstrapData> | null = null;
 const productsByCategory = new Map<string, Promise<string[]>>();
 
 export function peekNplContext(): NplContextData | null {
-  return readSessionBootstrap<NplContextData>(KEY_CONTEXT, BOOTSTRAP_TTL_MS);
+  const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, BOOTSTRAP_TTL_MS);
+  if (!cached) return null;
+  return {
+    categories: cached.categories,
+    cities: cached.cities,
+    earliest_launch_date: cached.earliest_launch_date,
+  };
 }
 
-export async function loadNplContext(options?: { force?: boolean }): Promise<NplContextData> {
+export async function loadNplBootstrap(options?: { force?: boolean }): Promise<NplBootstrapData> {
   if (!options?.force) {
-    const cached = peekNplContext();
+    const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, BOOTSTRAP_TTL_MS);
     if (cached) return cached;
   }
-  if (!contextInflight) {
-    contextInflight = api
-      .get<NplContextData>("/api/new-product-launch/wizard/context")
+  if (!bootstrapInflight) {
+    bootstrapInflight = api
+      .get<NplBootstrapData>("/api/new-product-launch/bootstrap")
       .then(({ data }) => {
-        writeSessionBootstrap(KEY_CONTEXT, data);
+        writeSessionBootstrap(KEY_BOOTSTRAP, data);
         return data;
       })
       .finally(() => {
-        contextInflight = null;
+        bootstrapInflight = null;
       });
   }
-  return contextInflight;
+  return bootstrapInflight;
+}
+
+export async function loadNplContext(options?: { force?: boolean }): Promise<NplContextData> {
+  const data = await loadNplBootstrap(options);
+  return {
+    categories: data.categories,
+    cities: data.cities,
+    earliest_launch_date: data.earliest_launch_date,
+  };
 }
 
 export async function loadNplProductIds(): Promise<NplProductRow[]> {
-  const cached = readSessionBootstrap<{ products: NplProductRow[] }>(KEY_PRODUCTS, BOOTSTRAP_TTL_MS);
-  if (cached?.products?.length) return cached.products;
-
-  if (!productsInflight) {
-    productsInflight = api
-      .get<{ products: NplProductRow[] }>("/api/new-product-launch/masters/product-ids")
-      .then(({ data }) => {
-        const products = data.products || [];
-        writeSessionBootstrap(KEY_PRODUCTS, { products });
-        return products;
-      })
-      .finally(() => {
-        productsInflight = null;
-      });
-  }
-  return productsInflight;
+  const data = await loadNplBootstrap();
+  return data.products || [];
 }
 
 export async function loadNplProductsByCategory(category: string): Promise<string[]> {
@@ -80,5 +86,5 @@ export async function loadNplProductsByCategory(category: string): Promise<strin
 }
 
 export async function prefetchNplBootstrap(): Promise<void> {
-  await Promise.allSettled([loadNplContext(), loadNplProductIds()]);
+  await loadNplBootstrap();
 }

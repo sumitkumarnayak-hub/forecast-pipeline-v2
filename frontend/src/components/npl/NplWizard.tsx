@@ -132,10 +132,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [splitPct, setSplitPct] = useState(100);
   const [newMrp, setNewMrp] = useState("");
 
-  const [oldPidSearch, setOldPidSearch] = useState("");
-  const [oldPnameSearch, setOldPnameSearch] = useState("");
-  const [showOldPidDropdown, setShowOldPidDropdown] = useState(false);
-  const [showOldPnameDropdown, setShowOldPnameDropdown] = useState(false);
+  const [oldSkuSearch, setOldSkuSearch] = useState("");
+  const [showOldSkuDropdown, setShowOldSkuDropdown] = useState(false);
 
   const [dupes, setDupes] = useState<Record<string, unknown>[] | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
@@ -199,56 +197,41 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   }, [newCategory, getProductsByCategory]);
 
   // --- Autocomplete SKU Search filtering hooks ----------------------------
-  const filteredProductsById = useMemo(() => {
+  const filteredProducts = useMemo(() => {
     if (!allProducts) return [];
-    if (!oldPidSearch.trim()) return allProducts.slice(0, 80);
-    const search = oldPidSearch.toLowerCase();
-    return allProducts.filter(p => p.product_id?.toLowerCase().includes(search)).slice(0, 80);
-  }, [allProducts, oldPidSearch]);
-
-  const filteredProductsByName = useMemo(() => {
-    if (!allProducts) return [];
-    if (!oldPnameSearch.trim()) return allProducts.slice(0, 80);
-    const search = oldPnameSearch.toLowerCase();
-    return allProducts.filter(p => p.product_name?.toLowerCase().includes(search)).slice(0, 80);
-  }, [allProducts, oldPnameSearch]);
+    if (!oldSkuSearch.trim()) return allProducts.slice(0, 100);
+    const search = oldSkuSearch.toLowerCase();
+    return allProducts.filter(
+      p => (p.product_id?.toLowerCase().includes(search) || 
+            p.product_name?.toLowerCase().includes(search))
+    ).slice(0, 100);
+  }, [allProducts, oldSkuSearch]);
 
   const selectProduct = (p: { product_id: string; product_name: string; category: string } | null) => {
     if (!p) {
       setOldPid("");
       setOldProductName("");
       setOldCategory("");
-      setOldPidSearch("");
-      setOldPnameSearch("");
+      setOldSkuSearch("");
     } else {
       setOldPid(p.product_id);
       setOldProductName(p.product_name);
       setOldCategory(p.category);
-      setOldPidSearch(p.product_id);
-      setOldPnameSearch(p.product_name);
+      setOldSkuSearch(`${p.product_name} (${p.product_id})`);
     }
-    setShowOldPidDropdown(false);
-    setShowOldPnameDropdown(false);
+    setShowOldSkuDropdown(false);
   };
 
-  const handleOldPidSearchChange = (val: string) => {
-    setOldPidSearch(val);
+  const handleOldSkuSearchChange = (val: string) => {
+    setOldSkuSearch(val);
     if (!val.trim()) {
       selectProduct(null);
     } else {
-      setShowOldPidDropdown(true);
-      const match = allProducts?.find(p => p.product_id.toLowerCase() === val.trim().toLowerCase());
-      if (match) selectProduct(match);
-    }
-  };
-
-  const handleOldPnameSearchChange = (val: string) => {
-    setOldPnameSearch(val);
-    if (!val.trim()) {
-      selectProduct(null);
-    } else {
-      setShowOldPnameDropdown(true);
-      const match = allProducts?.find(p => p.product_name.toLowerCase() === val.trim().toLowerCase());
+      setShowOldSkuDropdown(true);
+      const match = allProducts?.find(
+        p => p.product_id.toLowerCase() === val.trim().toLowerCase() ||
+             p.product_name.toLowerCase() === val.trim().toLowerCase()
+      );
       if (match) selectProduct(match);
     }
   };
@@ -755,113 +738,85 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "12px", padding: "1.25rem" }}>
             <h5 style={{ margin: "0 0 1rem", color: "var(--text-primary)", fontWeight: 600 }}>Old SKU Configuration (SKU being replaced)</h5>
             
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
-              {/* Old SKU Product ID input with search dropdown */}
-              <div style={{ position: "relative" }}>
-                <label className="form-label">Old SKU Product ID *</label>
-                <input
-                  type="text"
-                  className="form-input text-sm"
-                  placeholder="Search/Enter Product ID..."
-                  value={oldPidSearch}
-                  onFocus={() => setShowOldPidDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowOldPidDropdown(false), 200)}
-                  onChange={e => handleOldPidSearchChange(e.target.value)}
-                  disabled={readOnly}
-                />
-                {showOldPidDropdown && filteredProductsById.length > 0 && (
-                  <div style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    zIndex: 50,
-                    background: "var(--bg-elevated, #ffffff)",
-                    border: "1px solid var(--border, #cbd5e1)",
-                    borderRadius: "8px",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                    marginTop: "4px"
-                  }}>
-                    {filteredProductsById.map(p => (
-                      <div
-                        key={p.product_id}
-                        style={{
-                          padding: "8px 12px",
-                          cursor: "pointer",
-                          transition: "background 0.15s",
-                          fontSize: "0.78rem"
-                        }}
-                        onMouseDown={() => selectProduct(p)}
-                      >
-                        <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_id}</span>
-                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>{p.product_name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Old SKU Product Name input with search dropdown */}
-              <div style={{ position: "relative" }}>
-                <label className="form-label">Old SKU Product Name *</label>
-                <input
-                  type="text"
-                  className="form-input text-sm"
-                  placeholder="Search/Enter Product Name..."
-                  value={oldPnameSearch}
-                  onFocus={() => setShowOldPnameDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowOldPnameDropdown(false), 200)}
-                  onChange={e => handleOldPnameSearchChange(e.target.value)}
-                  disabled={readOnly}
-                />
-                {showOldPnameDropdown && filteredProductsByName.length > 0 && (
-                  <div style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    zIndex: 50,
-                    background: "var(--bg-elevated, #ffffff)",
-                    border: "1px solid var(--border, #cbd5e1)",
-                    borderRadius: "8px",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                    marginTop: "4px"
-                  }}>
-                    {filteredProductsByName.map(p => (
-                      <div
-                        key={p.product_id}
-                        style={{
-                          padding: "8px 12px",
-                          cursor: "pointer",
-                          transition: "background 0.15s",
-                          fontSize: "0.78rem"
-                        }}
-                        onMouseDown={() => selectProduct(p)}
-                      >
-                        <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_name}</span>
-                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>({p.product_id})</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Old Category - Read-only */}
-            <div style={{ maxWidth: 350 }}>
-              <label className="form-label">Old Category (Auto-filled)</label>
+            <div style={{ position: "relative", marginBottom: "1rem" }}>
+              <label className="form-label">Search Old SKU (Product ID or Name) *</label>
               <input
                 type="text"
                 className="form-input text-sm"
-                style={{ backgroundColor: "rgba(0,0,0,0.03)", color: "var(--text-secondary)" }}
-                value={oldCategory}
-                readOnly
-                placeholder="Select an old SKU to auto-fill category"
+                placeholder="Type Product ID or Name to search..."
+                value={oldSkuSearch}
+                onFocus={() => setShowOldSkuDropdown(true)}
+                onBlur={() => setTimeout(() => setShowOldSkuDropdown(false), 200)}
+                onChange={e => handleOldSkuSearchChange(e.target.value)}
+                disabled={readOnly}
               />
+              {showOldSkuDropdown && filteredProducts.length > 0 && (
+                <div style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  zIndex: 50,
+                  background: "var(--bg-elevated, #ffffff)",
+                  border: "1px solid var(--border, #cbd5e1)",
+                  borderRadius: "8px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                  maxHeight: "220px",
+                  overflowY: "auto",
+                  marginTop: "4px"
+                }}>
+                  {filteredProducts.map(p => (
+                    <div
+                      key={p.product_id}
+                      style={{
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        transition: "background 0.15s",
+                        fontSize: "0.78rem"
+                      }}
+                      onMouseDown={() => selectProduct(p)}
+                    >
+                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_name}</span>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>({p.product_id})</span>
+                      <span style={{ fontSize: "0.68rem", color: "var(--indigo, #6366f1)", float: "right", background: "rgba(99,102,241,0.08)", padding: "2px 6px", borderRadius: "4px" }}>{p.category}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Read-only Auto-populated SKU details */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
+              <div>
+                <label className="form-label" style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Selected Old ID</label>
+                <input
+                  type="text"
+                  className="form-input text-xs"
+                  style={{ backgroundColor: "rgba(0,0,0,0.03)", color: "var(--text-secondary)" }}
+                  value={oldPid || "Not selected"}
+                  readOnly
+                />
+              </div>
+              <div>
+                <label className="form-label" style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Selected Old Name</label>
+                <input
+                  type="text"
+                  className="form-input text-xs"
+                  style={{ backgroundColor: "rgba(0,0,0,0.03)", color: "var(--text-secondary)" }}
+                  value={oldProductName || "Not selected"}
+                  readOnly
+                />
+              </div>
+              <div>
+                <label className="form-label" style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Old Category</label>
+                <input
+                  type="text"
+                  className="form-input text-xs"
+                  style={{ backgroundColor: "rgba(0,0,0,0.03)", color: "var(--text-secondary)" }}
+                  value={oldCategory || "Not selected"}
+                  readOnly
+                />
+              </div>
             </div>
           </div>
 
