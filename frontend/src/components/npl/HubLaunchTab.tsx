@@ -642,7 +642,7 @@ export default function HubLaunchTab() {
             {lastUpdate && lastUpdate.ts && (
               <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "12px", paddingLeft: "12px", borderLeft: "1px solid var(--border)" }}>
                 <Clock size={10} />
-                Last updated: {formatIST(lastUpdate.ts)} by {lastUpdate.user_id?.split("@")[0]}
+                Last updated by : {lastUpdate.user_id} at {formatIST(lastUpdate.ts)}
               </span>
             )}
           </div>
