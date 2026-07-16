@@ -1381,6 +1381,11 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
         
     df = hub_df.copy()
 
+    # If Start Date is already present (e.g. from optional template columns),
+    # prioritize it and drop Launch Date to avoid duplicate column name errors.
+    if "Start Date" in df.columns and "Launch Date" in df.columns:
+        df = df.drop(columns=["Launch Date"])
+
     # Rename to sheet canonical column names
     df = df.rename(columns={
         "city_name":    "City",
