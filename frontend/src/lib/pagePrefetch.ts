@@ -19,7 +19,7 @@ const KEYS = {
   validation: "validation:bootstrap",
   insights: "insights:bootstrap",
   finalPlan: "final-plan:bootstrap",
-  nplContext: "npl:wizard-context",
+  nplContext: "npl:combined-bootstrap-v2",
   nplLogSummary: "npl:submission-log:summary:|",
 } as const;
 
@@ -87,7 +87,7 @@ async function prefetchFinalPlan(): Promise<void> {
 }
 
 async function prefetchNpl(): Promise<void> {
-  if (readSessionBootstrap(KEYS.nplContext, BOOTSTRAP_TTL_MS)) return;
+  if (readSessionBootstrap(KEYS.nplContext, 1_800_000)) return;
   await withConcurrencyLimit(() => prefetchNplBootstrap());
 }
 

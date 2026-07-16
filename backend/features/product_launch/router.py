@@ -185,7 +185,7 @@ def get_submissions(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-_NPL_CACHE_TTL = 600.0
+_NPL_CACHE_TTL = 1800.0
 _NPL_LOG_CACHE_TTL = 90.0
 
 
@@ -1067,7 +1067,9 @@ def wizard_preview_sync(
                 aggregated_sources[group_key][day] += val
 
         # 3. Determine level target tab based on body.plan_level (default to hub check)
-        if body.plan_level == "city":
+        if body.sub_type == "Replacement":
+            target_worksheet = "product_replacement"
+        elif body.plan_level == "city":
             target_worksheet = "City_Plan"
         elif body.plan_level == "hub":
             target_worksheet = "Hub_Plan"
@@ -1075,7 +1077,11 @@ def wizard_preview_sync(
             has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
             target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
 
-        plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+        if target_worksheet == "product_replacement":
+            plan_sheet = ensure_product_replacement_sheet_exists(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY)
+        else:
+            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+            
         sheet_sample = plan_sheet.get("A1:AP5")
         header_row_idx = 1
         for idx, r in enumerate(sheet_sample, 1):
@@ -1113,9 +1119,14 @@ def wizard_preview_sync(
                 "Fri": source.get("Fri", 0),
                 "Sat": source.get("Sat", 0),
                 "Sun": source.get("Sun", 0),
-                "_owner_email": "",
+                "_owner_email": current_user.get("email", current_user.get("sub", "")),
+                "old_product_id": source.get("old_product_id", ""),
+                "old_product_name": source.get("old_product_name", ""),
+                "replacement_percentage": source.get("replacement_percentage", ""),
             }
-            if target_worksheet == "Hub_Plan":
+            if target_worksheet == "product_replacement":
+                row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+            elif target_worksheet == "Hub_Plan":
                 row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
             else:
                 # Group/aggregate logic for City level is pre-grouped if needed, but we build dynamically

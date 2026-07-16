@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useNplBootstrap } from "@/context/NplContext";
 import { ChevronRight, Download, Info, Mail, Upload } from "lucide-react";
 
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 const BASE_STAGES = ["upload", "split", "dates", "confirm"] as const;
 const REPLACEMENT_STAGES = ["setup", "upload", "split", "dates", "confirm"] as const;
 
@@ -123,8 +124,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   const [oldCategory, setOldCategory] = useState("");
   const [newCategory, setNewCategory] = useState("");
-  const [oldProducts, setOldProducts] = useState<string[]>([]);
-  const [newProducts, setNewProducts] = useState<string[]>([]);
+
   const [oldProductName, setOldProductName] = useState("");
   const [newProductName, setNewProductName] = useState("");
   const [oldPid, setOldPid] = useState("");
@@ -186,15 +186,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     }
   }, [context]);
 
-  useEffect(() => {
-    if (!oldCategory) return;
-    getProductsByCategory(oldCategory).then(setOldProducts);
-  }, [oldCategory, getProductsByCategory]);
 
-  useEffect(() => {
-    if (!newCategory) return;
-    getProductsByCategory(newCategory).then(setNewProducts);
-  }, [newCategory, getProductsByCategory]);
 
   // --- Autocomplete SKU Search filtering hooks ----------------------------
   const filteredProducts = useMemo(() => {
@@ -330,6 +322,97 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setBusy("");
   };
 
+  const generateDefaultRows = () => {
+    const trimmedNewPid = newPid.trim();
+    const trimmedNewProductName = newProductName.trim();
+    const trimmedNewMrp = newMrp.trim();
+
+    if (planLevel === "hub") {
+      const rows: Record<string, any>[] = [];
+      selectedCities.forEach(city => {
+        const hubs = selectedHubs[city] || [];
+        hubs.forEach(hub => {
+          rows.push({
+            city_name: city,
+            hub_name: hub,
+            product_id: trimmedNewPid,
+            product_name: trimmedNewProductName,
+            category: oldCategory,
+            MRP: Number(trimmedNewMrp) || 0,
+            Mon: 0,
+            Tue: 0,
+            Wed: 0,
+            Thu: 0,
+            Fri: 0,
+            Sat: 0,
+            Sun: 0
+          });
+        });
+      });
+      return rows;
+    } else {
+      return selectedCities.map(city => ({
+        city_name: city,
+        product_id: trimmedNewPid,
+        product_name: trimmedNewProductName,
+        category: oldCategory,
+        MRP: Number(trimmedNewMrp) || 0,
+        Mon: 0,
+        Tue: 0,
+        Wed: 0,
+        Thu: 0,
+        Fri: 0,
+        Sat: 0,
+        Sun: 0
+      }));
+    }
+  };
+
+  const downloadPreviewCsv = () => {
+    const isHub = planLevel === "hub";
+    const headers = isHub 
+      ? ["city_name", "hub_name", "product_id", "product_name", "category", "MRP", ...WEEKDAYS]
+      : ["city_name", "product_id", "product_name", "category", "MRP", ...WEEKDAYS];
+
+    let rowsToUse = hubRows;
+    if (rowsToUse.length === 0) {
+      rowsToUse = generateDefaultRows();
+    }
+
+    const csvRows = [headers.join(",")];
+    for (const row of rowsToUse) {
+      const values = headers.map(h => {
+        const val = row[h] ?? "";
+        return typeof val === "string" && val.includes(",") ? `"${val}"` : String(val);
+      });
+      csvRows.push(values.join(","));
+    }
+    const csvContent = "data:text/csv;charset=utf-8," + csvRows.join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `preview_replacement_${newPid || "product"}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleNextFromUpload = () => {
+    if (isReplacement && hubRows.length === 0) {
+      const defaultRows = generateDefaultRows();
+      if (planLevel === "hub" && defaultRows.length === 0) {
+        setMsg({ text: "Please select at least one hub.", type: "warning" });
+        return;
+      }
+      setHubRows(defaultRows);
+      setHubColumns(planLevel === "hub" 
+        ? ["city_name", "hub_name", "product_id", "product_name", "category", "MRP", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        : ["city_name", "product_id", "product_name", "category", "MRP", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+      );
+    }
+    setStage("split");
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -452,7 +535,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       const elapsed = Math.round(performance.now() - t0);
       setPreviewRows(data.rows || []);
       setPreviewCols(data.columns || []);
-      setMsg({ text: `Sync preview generated (${data.rows?.length || 0} rows) in ${elapsed}ms — target: ${planLevel === "city" ? "City_Plan" : "Hub_Plan"}`, type: "success" });
+      setMsg({ text: `Sync preview generated (${data.rows?.length || 0} rows) in ${elapsed}ms — target: ${isReplacement ? "product_replacement" : (planLevel === "city" ? "City_Plan" : "Hub_Plan")}`, type: "success" });
       setStepState({ step: "preview", status: "success", message: `Preview loaded in ${elapsed}ms` });
     } catch (err: unknown) {
       logError("previewSync", err, { subType, launchDate, planLevel });
@@ -597,15 +680,10 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const finishReplacementSetup = async () => {
     const trimmedNewPid = newPid.trim();
     const trimmedNewProductName = newProductName.trim();
-    const trimmedNewCategory = newCategory.trim();
     const trimmedNewMrp = newMrp.trim();
 
     if (!oldPid || !oldProductName || !oldCategory) {
       setMsg({ text: "Select a valid old SKU (Product ID or Name)", type: "warning" });
-      return;
-    }
-    if (!trimmedNewCategory) {
-      setMsg({ text: "Please select a Category for the new SKU", type: "warning" });
       return;
     }
     if (!trimmedNewPid) {
@@ -620,12 +698,12 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setMsg({ text: "Please enter a valid MRP for the new SKU", type: "warning" });
       return;
     }
-    if (!planLevel) {
-      setMsg({ text: "Please select a Plan Level (City or Hub)", type: "warning" });
-      return;
-    }
     if (splitPct < 0 || splitPct > 100) {
       setMsg({ text: "Percentage must be between 0 and 100", type: "warning" });
+      return;
+    }
+    if (!planLevel) {
+      setMsg({ text: "Please select a Plan Level", type: "warning" });
       return;
     }
     if (!selectedCities.length) {
@@ -634,11 +712,17 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     }
 
     try {
-      setCategory(trimmedNewCategory);
+      setNewCategory(oldCategory);
+      setCategory(oldCategory);
+
+      // Reset rows to fresh start for setup transition
+      setHubRows([]);
+      setHubColumns([]);
+
       setStage("upload");
       setMsg({ text: "", type: "" });
     } catch (err) {
-      logError("finishReplacementSetup", err, { oldCategory, newCategory: trimmedNewCategory, oldProductName, newProductName: trimmedNewProductName });
+      logError("finishReplacementSetup", err, { oldCategory, newCategory: oldCategory, oldProductName, newProductName: trimmedNewProductName });
       setMsg({ text: extractErrorMessage(err, "Failed to complete setup"), type: "danger" });
     }
   };
@@ -667,9 +751,11 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         <div className="alert alert-warning mb-4 text-sm flex flex-col gap-2 p-4 border border-amber-200 rounded-xl bg-amber-50 text-amber-900 shadow-sm animate-fade-in">
           <div className="flex items-center justify-between w-full">
             <span className="font-semibold flex items-center gap-2">
-              {planLevel === "hub" 
-                ? "⚠️ Hub Plan is synced! Please update the masters list."
-                : "⚠️ City Plan is synced! Please update the masters list."
+              {isReplacement
+                ? "⚠️ product_replacement is synced! Please update the masters list."
+                : (planLevel === "hub" 
+                  ? "⚠️ Hub Plan is synced! Please update the masters list."
+                  : "⚠️ City Plan is synced! Please update the masters list.")
               }
             </span>
             <button 
@@ -681,7 +767,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </button>
           </div>
           <p className="text-xs text-amber-800 leading-normal">
-            The wizard has successfully synced new product configurations to the {planLevel === "hub" ? "Hub_Plan" : "City_Plan (FF Input)"} sheet. Please update the master worksheets to reflect the new configurations.
+            The wizard has successfully synced new product configurations to the {isReplacement ? "product_replacement" : (planLevel === "hub" ? "Hub_Plan" : "City_Plan (FF Input)")} sheet. Please update the master worksheets to reflect the new configurations.
           </p>
         </div>
       )}
@@ -979,52 +1065,56 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               )}
             </div>
           )}
-          <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
-            {!isExpansion && (
+          {!isReplacement && (
+            <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
+              {!isExpansion && (
+                <div className="form-group">
+                  <label className="form-label">Sub-Category</label>
+                  <select className="form-input text-sm" value={category} onChange={e => setCategory(e.target.value)} disabled={categorySelectDisabled || isExpansion}>
+                    {!category && <option value="">Select category</option>}
+                    {categoryOptions.map(c => (
+                      <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="form-group">
-                <label className="form-label">Sub-Category</label>
-                <select className="form-input text-sm" value={category} onChange={e => setCategory(e.target.value)} disabled={categorySelectDisabled || isExpansion}>
-                  {!category && <option value="">Select category</option>}
-                  {categoryOptions.map(c => (
-                    <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
-                  ))}
+                <label className="form-label">Plan Level <span className="text-danger">*</span></label>
+                <select
+                  className="form-input text-sm"
+                  value={planLevel}
+                  onChange={e => setPlanLevel(e.target.value as "city" | "hub" | "")}
+                  disabled={readOnly}
+                >
+                  <option value="">Select Plan Level</option>
+                  <option value="city">City Level</option>
+                  <option value="hub">Hub Level</option>
                 </select>
               </div>
-            )}
-            <div className="form-group">
-              <label className="form-label">Plan Level <span className="text-danger">*</span></label>
-              <select
-                className="form-input text-sm"
-                value={planLevel}
-                onChange={e => setPlanLevel(e.target.value as "city" | "hub" | "")}
-                disabled={readOnly}
-              >
-                <option value="">Select Plan Level</option>
-                <option value="city">City Level</option>
-                <option value="hub">Hub Level</option>
-              </select>
             </div>
-          </div>
-          <div className="form-group mb-3">
-            <label className="form-label">Cities</label>
-            <div className="flex flex-wrap gap-2">
-              {cities.length ? (
-                cities.map(c => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
-                    onClick={() => toggleCity(c)}
-                    disabled={readOnly}
-                  >
-                    {c}
-                  </button>
-                ))
-              ) : (
-                <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
-              )}
+          )}
+          {!isReplacement && (
+            <div className="form-group mb-3">
+              <label className="form-label">Cities</label>
+              <div className="flex flex-wrap gap-2">
+                {cities.length ? (
+                  cities.map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
+                      onClick={() => toggleCity(c)}
+                      disabled={readOnly}
+                    >
+                      {c}
+                    </button>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+                )}
+              </div>
             </div>
-          </div>
+          )}
           {selectedCities.length > 0 && planLevel === "hub" && (
             <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
               <p className="text-xs font-semibold mb-3 uppercase tracking-wider text-muted">Hub selection per city</p>
@@ -1125,23 +1215,55 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </div>
           )}
           <div className="flex gap-2 mb-4">
-            <button 
-              type="button" 
-              className="btn btn-secondary btn-sm" 
-              onClick={downloadTemplate} 
-              disabled={readOnly || busy === "template" || !planLevel}
-            >
-              <Download size={13} /> Download template
-            </button>
-            <label 
-              className="btn btn-primary btn-sm" 
-              style={{ cursor: (readOnly || !planLevel) ? "not-allowed" : "pointer", opacity: (!planLevel) ? 0.6 : 1 }}
-            >
-              <Upload size={13} /> {(!planLevel) ? "Select Plan Level first" : "Upload filled file"}
-              {planLevel && (
-                <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
-              )}
-            </label>
+            {isReplacement ? (
+              <>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary btn-sm" 
+                  onClick={downloadPreviewCsv} 
+                  disabled={readOnly || busy === "template" || !planLevel}
+                >
+                  <Download size={13} /> Download Preview CSV
+                </button>
+                <label 
+                  className="btn btn-secondary btn-sm" 
+                  style={{ cursor: (readOnly || !planLevel) ? "not-allowed" : "pointer", opacity: (!planLevel) ? 0.6 : 1 }}
+                >
+                  <Upload size={13} /> Upload Plan (Optional)
+                  {planLevel && (
+                    <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
+                  )}
+                </label>
+                <button 
+                  type="button" 
+                  className="btn btn-primary btn-sm" 
+                  onClick={handleNextFromUpload}
+                  disabled={readOnly || !planLevel}
+                >
+                  Next <ChevronRight size={13} />
+                </button>
+              </>
+            ) : (
+              <>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary btn-sm" 
+                  onClick={downloadTemplate} 
+                  disabled={readOnly || busy === "template" || !planLevel}
+                >
+                  <Download size={13} /> Download template
+                </button>
+                <label 
+                  className="btn btn-primary btn-sm" 
+                  style={{ cursor: (readOnly || !planLevel) ? "not-allowed" : "pointer", opacity: (!planLevel) ? 0.6 : 1 }}
+                >
+                  <Upload size={13} /> {(!planLevel) ? "Select Plan Level first" : "Upload filled file"}
+                  {planLevel && (
+                    <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
+                  )}
+                </label>
+              </>
+            )}
           </div>
         </>
       )}
@@ -1209,7 +1331,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       {stage === "confirm" && (
         <>
           <p className="text-sm mb-2">
-            Sync <strong>{hubRows.length}</strong> {planLevel === "city" ? "city" : "hub"} rows as <strong>{subType}</strong> &mdash; launch {launchDate}
+            Sync <strong>{hubRows.length}</strong> {isReplacement ? "product_replacement" : (planLevel === "city" ? "city" : "hub")} rows as <strong>{subType}</strong> &mdash; launch {launchDate}
             {isReplacement && oldPid && newPid && (
               <> · replace {oldPid} → {newPid} ({splitPct}% to new)</>
             )}

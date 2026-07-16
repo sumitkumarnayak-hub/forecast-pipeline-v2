@@ -29,7 +29,7 @@ let bootstrapInflight: Promise<NplBootstrapData> | null = null;
 const productsByCategory = new Map<string, Promise<string[]>>();
 
 export function peekNplContext(): NplContextData | null {
-  const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, BOOTSTRAP_TTL_MS);
+  const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, 1_800_000);
   if (!cached) return null;
   return {
     categories: cached.categories,
@@ -40,7 +40,7 @@ export function peekNplContext(): NplContextData | null {
 
 export async function loadNplBootstrap(options?: { force?: boolean }): Promise<NplBootstrapData> {
   if (!options?.force) {
-    const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, BOOTSTRAP_TTL_MS);
+    const cached = readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, 1_800_000);
     if (cached) return cached;
   }
   if (!bootstrapInflight) {

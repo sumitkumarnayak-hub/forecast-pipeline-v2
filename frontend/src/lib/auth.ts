@@ -28,6 +28,7 @@ export function establishSession(user: User) {
   if (typeof window !== "undefined") {
     sessionStorage.removeItem("settings:bootstrap");
     sessionStorage.removeItem("npl:wizard-context");
+    sessionStorage.removeItem("npl:combined-bootstrap-v2");
     sessionStorage.removeItem("npl:product-ids");
   }
   saveUser(user);
@@ -40,6 +41,7 @@ export function clearAuth() {
   sessionStorage.removeItem(VERIFIED_AT_KEY);
   sessionStorage.removeItem("settings:bootstrap");
   sessionStorage.removeItem("npl:wizard-context");
+  sessionStorage.removeItem("npl:combined-bootstrap-v2");
   sessionStorage.removeItem("npl:product-ids");
   sessionStorage.removeItem("ps_user");
   sessionStorage.removeItem("ps_user_verified_at");
