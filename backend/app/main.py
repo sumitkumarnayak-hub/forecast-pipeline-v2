@@ -17,7 +17,10 @@ if str(BACKEND_DIR) not in sys.path:
 
 # ── Load .env before anything else ────────────────────────────────────────────
 from dotenv import load_dotenv
-load_dotenv(BACKEND_DIR / ".env")
+env_path = BACKEND_DIR / ".env"
+if not env_path.exists():
+    env_path = BACKEND_DIR.parent / ".env"
+load_dotenv(env_path)
 
 # Resolve Google credentials from GOOGLE_CREDENTIALS_JSON before app.config loads.
 from core.shared.google_credentials import get_google_credentials_path

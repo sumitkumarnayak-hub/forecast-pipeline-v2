@@ -10,7 +10,13 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 BASE_DIR = PROJECT_ROOT
 
-load_dotenv(BASE_DIR / ".env")
+def _load_dotenv_config(override=False):
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        env_path = BASE_DIR.parent / ".env"
+    load_dotenv(env_path, override=override)
+
+_load_dotenv_config()
 
 
 def _env_path(name: str) -> str:
@@ -133,7 +139,7 @@ DATABASE_PATH = BASE_DIR / "forecasting_db.sqlite"
 
 
 def get_database_url():
-    load_dotenv(BASE_DIR / ".env", override=True)
+    _load_dotenv_config(override=True)
     return os.getenv("DATABASE_URL", "").strip() or None
 
 
@@ -298,7 +304,7 @@ def _smtp_host_for_email(email: str) -> str:
 
 
 def get_smtp_config() -> dict:
-    load_dotenv(BASE_DIR / ".env", override=True)
+    _load_dotenv_config(override=True)
     from_email = os.getenv("FROM_EMAIL", "").strip()
     app_password = os.getenv("FROM_EMAIL_APP_PASSWORD", "").strip()
 

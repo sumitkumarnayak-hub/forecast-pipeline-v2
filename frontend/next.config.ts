@@ -1,4 +1,9 @@
 import type { NextConfig } from "next";
+import { loadEnvConfig } from "@next/env";
+import path from "path";
+
+const rootDir = process.cwd().endsWith("frontend") ? path.resolve(process.cwd(), "..") : process.cwd();
+loadEnvConfig(rootDir);
 
 const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "on" },

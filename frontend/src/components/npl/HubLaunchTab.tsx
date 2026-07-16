@@ -648,7 +648,7 @@ export default function HubLaunchTab() {
                   type="button"
                   onClick={() => setShowAddHub(true)}
                   style={{
-                    fontSize: "0.72rem", padding: "4px 10px", height: "auto",
+                    fontSize: "0.78rem", padding: "6px 14px", height: "auto",
                     display: "flex", alignItems: "center", gap: 5,
                     background: "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(99,102,241,0.12))",
                     border: "1px solid rgba(168,85,247,0.35)", borderRadius: "8px",

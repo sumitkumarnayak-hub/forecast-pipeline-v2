@@ -540,27 +540,51 @@ def get_last_hub_update(current_user: dict = Depends(get_current_user)):
     from core.database.models import AuditLog
     from sqlalchemy.orm import Session
     from core.database.engine import get_shared_database
+    from datetime import timezone
     
     db = get_shared_database()
     try:
         from app import config as cfg
         actual = _fetch_actual_drive_last_update(cfg.NEW_HUB_LAUNCH_SHEET_KEY)
-        if actual.get("ts"):
-            return actual
-
+        
+        # Load the last AuditLog append action
+        db_entry = None
         with Session(db.engine) as session:
-            entry = (
+            db_entry = (
                 session.query(AuditLog)
                 .filter(AuditLog.action == "append_ff_input")
                 .order_by(AuditLog.ts.desc())
                 .first()
             )
-            if entry:
-                return {
-                    "ts": entry.ts.isoformat() if entry.ts else None,
-                    "user_id": entry.user_id
-                }
-            return {"ts": None, "user_id": None}
+            
+        if actual.get("ts"):
+            from dateutil.parser import parse as parse_date
+            try:
+                drive_dt = parse_date(actual["ts"])
+                if db_entry and db_entry.ts:
+                    db_ts = db_entry.ts
+                    if db_ts.tzinfo is None:
+                        db_ts = db_ts.replace(tzinfo=timezone.utc)
+                    if drive_dt.tzinfo is None:
+                        drive_dt = drive_dt.replace(tzinfo=timezone.utc)
+                        
+                    # If Drive mtime is close to db log or the editor is a service account,
+                    # resolve to the actual logged-in user email who initiated it
+                    time_diff = abs((drive_dt - db_ts).total_seconds())
+                    is_service_acct = "gserviceaccount.com" in str(actual.get("user_id", "")).lower()
+                    if time_diff < 90 or is_service_acct:
+                        if db_entry.user_id:
+                            actual["user_id"] = db_entry.user_id
+            except Exception as e:
+                logger.warning("[LastUpdateCompare] Failed to match Drive mtime with audit log: %s", e)
+            return actual
+
+        if db_entry:
+            return {
+                "ts": db_entry.ts.isoformat() if db_entry.ts else None,
+                "user_id": db_entry.user_id
+            }
+        return {"ts": None, "user_id": None}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
