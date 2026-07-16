@@ -130,6 +130,12 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [oldPid, setOldPid] = useState("");
   const [newPid, setNewPid] = useState("");
   const [splitPct, setSplitPct] = useState(100);
+  const [newMrp, setNewMrp] = useState("");
+
+  const [oldPidSearch, setOldPidSearch] = useState("");
+  const [oldPnameSearch, setOldPnameSearch] = useState("");
+  const [showOldPidDropdown, setShowOldPidDropdown] = useState(false);
+  const [showOldPnameDropdown, setShowOldPnameDropdown] = useState(false);
 
   const [dupes, setDupes] = useState<Record<string, unknown>[] | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
@@ -191,6 +197,61 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     if (!newCategory) return;
     getProductsByCategory(newCategory).then(setNewProducts);
   }, [newCategory, getProductsByCategory]);
+
+  // --- Autocomplete SKU Search filtering hooks ----------------------------
+  const filteredProductsById = useMemo(() => {
+    if (!allProducts) return [];
+    if (!oldPidSearch.trim()) return allProducts.slice(0, 80);
+    const search = oldPidSearch.toLowerCase();
+    return allProducts.filter(p => p.product_id?.toLowerCase().includes(search)).slice(0, 80);
+  }, [allProducts, oldPidSearch]);
+
+  const filteredProductsByName = useMemo(() => {
+    if (!allProducts) return [];
+    if (!oldPnameSearch.trim()) return allProducts.slice(0, 80);
+    const search = oldPnameSearch.toLowerCase();
+    return allProducts.filter(p => p.product_name?.toLowerCase().includes(search)).slice(0, 80);
+  }, [allProducts, oldPnameSearch]);
+
+  const selectProduct = (p: { product_id: string; product_name: string; category: string } | null) => {
+    if (!p) {
+      setOldPid("");
+      setOldProductName("");
+      setOldCategory("");
+      setOldPidSearch("");
+      setOldPnameSearch("");
+    } else {
+      setOldPid(p.product_id);
+      setOldProductName(p.product_name);
+      setOldCategory(p.category);
+      setOldPidSearch(p.product_id);
+      setOldPnameSearch(p.product_name);
+    }
+    setShowOldPidDropdown(false);
+    setShowOldPnameDropdown(false);
+  };
+
+  const handleOldPidSearchChange = (val: string) => {
+    setOldPidSearch(val);
+    if (!val.trim()) {
+      selectProduct(null);
+    } else {
+      setShowOldPidDropdown(true);
+      const match = allProducts?.find(p => p.product_id.toLowerCase() === val.trim().toLowerCase());
+      if (match) selectProduct(match);
+    }
+  };
+
+  const handleOldPnameSearchChange = (val: string) => {
+    setOldPnameSearch(val);
+    if (!val.trim()) {
+      selectProduct(null);
+    } else {
+      setShowOldPnameDropdown(true);
+      const match = allProducts?.find(p => p.product_name.toLowerCase() === val.trim().toLowerCase());
+      if (match) selectProduct(match);
+    }
+  };
 
   const hubCategory = expansionCategory || category || "";
 
@@ -263,12 +324,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               category: expansionCategory || category,
               product_id: templateProductId,
               product_name: templateProductName,
+              mrp: isReplacement ? newMrp : "",
             }
           : {
               cities_hubs: forcedHubs,
               category: expansionCategory || category,
               product_id: templateProductId,
               product_name: templateProductName,
+              mrp: isReplacement ? newMrp : "",
             };
       const res = await api.post(path, body, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
@@ -438,6 +501,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           old_product_id: oldPid,
           old_product_name: oldProductName,
           replacement_percentage: splitPct,
+          MRP: newMrp || r.MRP || r.mrp || "",
         } : {})
       }));
       const t0Submit = performance.now();
@@ -548,43 +612,51 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const finishReplacementSetup = async () => {
+    const trimmedNewPid = newPid.trim();
     const trimmedNewProductName = newProductName.trim();
     const trimmedNewCategory = newCategory.trim();
+    const trimmedNewMrp = newMrp.trim();
 
-    if (!oldProductName || !trimmedNewProductName || !trimmedNewCategory || !selectedCities.length) {
-      setMsg({ text: "Select old product, type new product & sub-category, and select at least one city", type: "warning" });
+    if (!oldPid || !oldProductName || !oldCategory) {
+      setMsg({ text: "Select a valid old SKU (Product ID or Name)", type: "warning" });
       return;
     }
+    if (!trimmedNewCategory) {
+      setMsg({ text: "Please select a Category for the new SKU", type: "warning" });
+      return;
+    }
+    if (!trimmedNewPid) {
+      setMsg({ text: "Please enter a Product ID for the new SKU", type: "warning" });
+      return;
+    }
+    if (!trimmedNewProductName) {
+      setMsg({ text: "Please enter a Product Name for the new SKU", type: "warning" });
+      return;
+    }
+    if (!trimmedNewMrp || isNaN(Number(trimmedNewMrp)) || Number(trimmedNewMrp) <= 0) {
+      setMsg({ text: "Please enter a valid MRP for the new SKU", type: "warning" });
+      return;
+    }
+    if (!planLevel) {
+      setMsg({ text: "Please select a Plan Level (City or Hub)", type: "warning" });
+      return;
+    }
+    if (splitPct < 0 || splitPct > 100) {
+      setMsg({ text: "Percentage must be between 0 and 100", type: "warning" });
+      return;
+    }
+    if (!selectedCities.length) {
+      setMsg({ text: "Select at least one target city", type: "warning" });
+      return;
+    }
+
     try {
-      const oPid = allProducts.find(p => p.product_name === oldProductName && p.category === oldCategory)?.product_id
-        || await resolveProductId(oldCategory, oldProductName);
-
-      const matchedNewProduct = allProducts.find(p => 
-        (p.product_id.toLowerCase() === trimmedNewProductName.toLowerCase() || p.product_name.toLowerCase() === trimmedNewProductName.toLowerCase()) &&
-        p.category.toLowerCase() === trimmedNewCategory.toLowerCase()
-      );
-
-      let nPid = "";
-      if (matchedNewProduct) {
-        nPid = matchedNewProduct.product_id;
-        setNewProductName(matchedNewProduct.product_name);
-      } else {
-        const resolved = await resolveProductId(trimmedNewCategory, trimmedNewProductName);
-        if (resolved) {
-          nPid = resolved;
-        } else {
-          nPid = trimmedNewProductName;
-        }
-      }
-
-      setOldPid(oPid);
-      setNewPid(nPid);
       setCategory(trimmedNewCategory);
       setStage("upload");
       setMsg({ text: "", type: "" });
     } catch (err) {
       logError("finishReplacementSetup", err, { oldCategory, newCategory: trimmedNewCategory, oldProductName, newProductName: trimmedNewProductName });
-      setMsg({ text: extractErrorMessage(err, "Failed to resolve product IDs"), type: "danger" });
+      setMsg({ text: extractErrorMessage(err, "Failed to complete setup"), type: "danger" });
     }
   };
 
@@ -678,81 +750,253 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       </div>
 
       {isReplacement && stage === "setup" && (
-        <>
-          <div className="grid-2 mb-3" style={{ maxWidth: 720 }}>
-            <div>
-              <p className="text-xs font-semibold mb-2">Old SKU (being replaced)</p>
-              <select className="form-input text-sm mb-2" value={oldCategory} onChange={e => setOldCategory(e.target.value)} disabled={categorySelectDisabled}>
-                {!oldCategory && <option value="">Select category</option>}
-                {categoryOptions.map(c => (
-                  <option key={c} value={c === "Loading categories…" || c === "No categories available" ? "" : c}>{c}</option>
-                ))}
-              </select>
-              <select className="form-input text-sm" value={oldProductName} onChange={e => setOldProductName(e.target.value)} disabled={readOnly || !oldCategory}>
-                <option value="">{oldProducts.length ? "Select product" : "Loading products…"}</option>
-                {oldProducts.map(p => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", maxWidth: 720 }}>
+          {/* Section 1: Old SKU details */}
+          <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "12px", padding: "1.25rem" }}>
+            <h5 style={{ margin: "0 0 1rem", color: "var(--text-primary)", fontWeight: 600 }}>Old SKU Configuration (SKU being replaced)</h5>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+              {/* Old SKU Product ID input with search dropdown */}
+              <div style={{ position: "relative" }}>
+                <label className="form-label">Old SKU Product ID *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  placeholder="Search/Enter Product ID..."
+                  value={oldPidSearch}
+                  onFocus={() => setShowOldPidDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowOldPidDropdown(false), 200)}
+                  onChange={e => handleOldPidSearchChange(e.target.value)}
+                  disabled={readOnly}
+                />
+                {showOldPidDropdown && filteredProductsById.length > 0 && (
+                  <div style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    zIndex: 50,
+                    background: "var(--bg-elevated, #ffffff)",
+                    border: "1px solid var(--border, #cbd5e1)",
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                    maxHeight: "200px",
+                    overflowY: "auto",
+                    marginTop: "4px"
+                  }}>
+                    {filteredProductsById.map(p => (
+                      <div
+                        key={p.product_id}
+                        style={{
+                          padding: "8px 12px",
+                          cursor: "pointer",
+                          transition: "background 0.15s",
+                          fontSize: "0.78rem"
+                        }}
+                        onMouseDown={() => selectProduct(p)}
+                      >
+                        <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_id}</span>
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>{p.product_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Old SKU Product Name input with search dropdown */}
+              <div style={{ position: "relative" }}>
+                <label className="form-label">Old SKU Product Name *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  placeholder="Search/Enter Product Name..."
+                  value={oldPnameSearch}
+                  onFocus={() => setShowOldPnameDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowOldPnameDropdown(false), 200)}
+                  onChange={e => handleOldPnameSearchChange(e.target.value)}
+                  disabled={readOnly}
+                />
+                {showOldPnameDropdown && filteredProductsByName.length > 0 && (
+                  <div style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    zIndex: 50,
+                    background: "var(--bg-elevated, #ffffff)",
+                    border: "1px solid var(--border, #cbd5e1)",
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                    maxHeight: "200px",
+                    overflowY: "auto",
+                    marginTop: "4px"
+                  }}>
+                    {filteredProductsByName.map(p => (
+                      <div
+                        key={p.product_id}
+                        style={{
+                          padding: "8px 12px",
+                          cursor: "pointer",
+                          transition: "background 0.15s",
+                          fontSize: "0.78rem"
+                        }}
+                        onMouseDown={() => selectProduct(p)}
+                      >
+                        <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_name}</span>
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>({p.product_id})</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold mb-2">New SKU (replacement)</p>
+
+            {/* Old Category - Read-only */}
+            <div style={{ maxWidth: 350 }}>
+              <label className="form-label">Old Category (Auto-filled)</label>
               <input
                 type="text"
-                placeholder="Enter sub-category"
-                className="form-input text-sm mb-2"
-                value={newCategory}
-                onChange={e => setNewCategory(e.target.value)}
-                disabled={readOnly}
-              />
-              <input
-                type="text"
-                placeholder="Enter product name / ID"
                 className="form-input text-sm"
-                value={newProductName}
-                onChange={e => setNewProductName(e.target.value)}
-                disabled={readOnly}
+                style={{ backgroundColor: "rgba(0,0,0,0.03)", color: "var(--text-secondary)" }}
+                value={oldCategory}
+                readOnly
+                placeholder="Select an old SKU to auto-fill category"
               />
             </div>
           </div>
-          <div className="form-group mb-3" style={{ maxWidth: 360 }}>
-            <label className="form-label">% plan to new SKU ({splitPct}% new · {Math.max(0, 100 - splitPct)}% old)</label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="any"
-              value={splitPct}
-              onChange={e => setSplitPct(Math.min(100, Math.max(0, Number(e.target.value))))}
-              disabled={readOnly}
-              className="form-input text-sm"
-              placeholder="e.g. 100 or 99.5"
-            />
-          </div>
-          <div className="form-group mb-3">
-            <label className="form-label">Cities</label>
-            <div className="flex flex-wrap gap-2">
-              {cities.length ? (
-                cities.map(c => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
-                    onClick={() => toggleCity(c)}
-                    disabled={readOnly}
-                  >
-                    {c}
-                  </button>
-                ))
-              ) : (
-                <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
-              )}
+
+          {/* Section 2: New SKU details */}
+          <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "12px", padding: "1.25rem" }}>
+            <h5 style={{ margin: "0 0 1rem", color: "var(--text-primary)", fontWeight: 600 }}>New SKU Configuration (Replacement SKU)</h5>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+              {/* New Category Dropdown from masters */}
+              <div>
+                <label className="form-label">New Category *</label>
+                <select
+                  className="form-input text-sm"
+                  value={newCategory}
+                  onChange={e => setNewCategory(e.target.value)}
+                  disabled={readOnly}
+                >
+                  <option value="">Select category</option>
+                  {categories.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* New Product ID */}
+              <div>
+                <label className="form-label">New Product ID *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  placeholder="Enter new SKU Product ID..."
+                  value={newPid}
+                  onChange={e => setNewPid(e.target.value)}
+                  disabled={readOnly}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              {/* New Product Name */}
+              <div>
+                <label className="form-label">New Product Name *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  placeholder="Enter new SKU Product Name..."
+                  value={newProductName}
+                  onChange={e => setNewProductName(e.target.value)}
+                  disabled={readOnly}
+                />
+              </div>
+
+              {/* New MRP */}
+              <div>
+                <label className="form-label">New SKU MRP *</label>
+                <input
+                  type="number"
+                  className="form-input text-sm"
+                  placeholder="Enter MRP..."
+                  value={newMrp}
+                  onChange={e => setNewMrp(e.target.value)}
+                  disabled={readOnly}
+                />
+              </div>
             </div>
           </div>
-          <button type="button" className="btn btn-primary btn-sm" onClick={finishReplacementSetup} disabled={readOnly}>
-            Next: Upload plan <ChevronRight size={13} />
-          </button>
-        </>
+
+          {/* Section 3: Level & Share Configuration */}
+          <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "12px", padding: "1.25rem" }}>
+            <h5 style={{ margin: "0 0 1rem", color: "var(--text-primary)", fontWeight: 600 }}>Level & Share Configuration</h5>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+              {/* Plan Level Type */}
+              <div>
+                <label className="form-label">Plan Level *</label>
+                <select
+                  className="form-input text-sm"
+                  value={planLevel}
+                  onChange={e => setPlanLevel(e.target.value as "city" | "hub")}
+                  disabled={readOnly}
+                >
+                  <option value="">Select level</option>
+                  <option value="city">City Level</option>
+                  <option value="hub">Hub Level</option>
+                </select>
+              </div>
+
+              {/* Share Percentage */}
+              <div>
+                <label className="form-label">% Plan to New SKU (0 to 100) *</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="any"
+                  value={splitPct}
+                  onChange={e => setSplitPct(Math.min(100, Math.max(0, Number(e.target.value))))}
+                  disabled={readOnly}
+                  className="form-input text-sm"
+                  placeholder="e.g. 100"
+                />
+              </div>
+            </div>
+
+            {/* Cities Selection */}
+            <div style={{ marginTop: "1rem" }}>
+              <label className="form-label" style={{ marginBottom: "0.5rem", display: "block" }}>Select Target Cities *</label>
+              <div className="flex flex-wrap gap-2">
+                {cities.length ? (
+                  cities.map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`btn btn-sm ${selectedCities.includes(c) ? "btn-primary" : "btn-secondary"}`}
+                      onClick={() => toggleCity(c)}
+                      disabled={readOnly}
+                      style={{ borderRadius: "6px", fontSize: "0.72rem", padding: "0.3rem 0.6rem" }}
+                    >
+                      {c}
+                    </button>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Action button */}
+          <div style={{ marginTop: "0.5rem" }}>
+            <button type="button" className="btn btn-primary" onClick={finishReplacementSetup} disabled={readOnly} style={{ padding: "0.5rem 1.25rem", borderRadius: "8px", fontWeight: 600 }}>
+              Next: Download & Upload Plan <ChevronRight size={14} style={{ marginLeft: 4 }} />
+            </button>
+          </div>
+        </div>
       )}
 
       {stage === "upload" && (

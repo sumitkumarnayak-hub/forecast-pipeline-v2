@@ -643,12 +643,12 @@ def _style_ws(ws):
 
 
 def build_city_template(cities: list, category: str,
-                         product_id: str = "", product_name: str = "") -> bytes:
-    """One blank row per city; product_id / product_name / MRP left blank for user to fill."""
+                         product_id: str = "", product_name: str = "", mrp: str = "") -> bytes:
+    """One blank row per city; prefilled with category, product_id, product_name, and mrp if provided."""
     rows = [
         {"city_name": c, "product_id": product_id,
          "product_name": product_name, "category": category,
-         "MRP": "", **{d: 0 for d in WEEKDAYS}}
+         "MRP": mrp, **{d: 0 for d in WEEKDAYS}}
         for c in cities
     ]
     df  = pd.DataFrame(rows, columns=CITY_COLS)
@@ -661,13 +661,13 @@ def build_city_template(cities: list, category: str,
 
 
 def build_hub_template(cities_hubs: dict, category: str,
-                        product_id: str = "", product_name: str = "") -> bytes:
+                        product_id: str = "", product_name: str = "", mrp: str = "") -> bytes:
     """cities_hubs = {city: [hub, ...]}
-    Rows pre-filled with city_name / hub_name / category; product_id, product_name, MRP left blank."""
+    Rows pre-filled with city_name / hub_name / category; product_id, product_name, and mrp if provided."""
     rows = [
         {"city_name": city, "hub_name": hub,
          "product_id": product_id, "product_name": product_name,
-         "category": category, "MRP": "", **{d: 0 for d in WEEKDAYS}}
+         "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS}}
         for city, hubs in cities_hubs.items()
         for hub in sorted(hubs)
     ]

@@ -67,8 +67,9 @@ def city_template_bytes(
     *,
     product_id: str = "",
     product_name: str = "",
+    mrp: str = "",
 ) -> bytes:
-    return build_city_template(cities, category, product_id, product_name)
+    return build_city_template(cities, category, product_id, product_name, mrp)
 
 
 def hub_template_bytes(
@@ -77,8 +78,9 @@ def hub_template_bytes(
     *,
     product_id: str = "",
     product_name: str = "",
+    mrp: str = "",
 ) -> bytes:
-    return build_hub_template(cities_hubs, category, product_id, product_name)
+    return build_hub_template(cities_hubs, category, product_id, product_name, mrp)
 
 
 def parse_city_file(content: bytes) -> dict[str, Any]:

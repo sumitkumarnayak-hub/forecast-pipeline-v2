@@ -788,6 +788,7 @@ class TemplateCityBody(BaseModel):
     category: str
     product_id: str = ""
     product_name: str = ""
+    mrp: str = ""
 
 
 class TemplateHubBody(BaseModel):
@@ -795,6 +796,7 @@ class TemplateHubBody(BaseModel):
     category: str
     product_id: str = ""
     product_name: str = ""
+    mrp: str = ""
 
 
 class SplitCityBody(BaseModel):
@@ -847,7 +849,7 @@ def wizard_template_city(body: TemplateCityBody, current_user: dict = Depends(ge
     from features.product_launch import wizard as wiz
 
 
-    data = wiz.city_template_bytes(body.cities, body.category, product_id=body.product_id, product_name=body.product_name)
+    data = wiz.city_template_bytes(body.cities, body.category, product_id=body.product_id, product_name=body.product_name, mrp=body.mrp)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -861,7 +863,7 @@ def wizard_template_hub(body: TemplateHubBody, current_user: dict = Depends(get_
     from features.product_launch import wizard as wiz
 
 
-    data = wiz.hub_template_bytes(body.cities_hubs, body.category, product_id=body.product_id, product_name=body.product_name)
+    data = wiz.hub_template_bytes(body.cities_hubs, body.category, product_id=body.product_id, product_name=body.product_name, mrp=body.mrp)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
