@@ -48,7 +48,7 @@ class QueueWorker:
             driver.mark_failed(job.id, error_trace)
 
     def _cleanup_old_jobs(self):
-        """Periodically deletes jobs that are completed and older than 7 days."""
+        """Periodically deletes completed/permanently-failed jobs older than 7 days."""
         now = time.time()
         # Run cleanup at most once per hour
         if now - self._last_cleanup < 3600:
@@ -59,13 +59,19 @@ class QueueWorker:
             with Session(self.engine) as db:
                 is_postgres = db.bind.dialect.name == "postgresql" if db.bind else False
                 if is_postgres:
-                    # Postgres cleanup
-                    db.execute(text("DELETE FROM queue_jobs WHERE status = 'completed' AND updated_at < NOW() - INTERVAL '7 days'"))
+                    result = db.execute(text(
+                        "DELETE FROM queue_jobs WHERE "
+                        "(status = 'completed' OR (status = 'failed' AND retries >= max_retries)) "
+                        "AND updated_at < NOW() - INTERVAL '7 days'"
+                    ))
                 else:
-                    # SQLite cleanup
-                    db.execute(text("DELETE FROM queue_jobs WHERE status = 'completed' AND updated_at < datetime('now', '-7 days')"))
+                    result = db.execute(text(
+                        "DELETE FROM queue_jobs WHERE "
+                        "(status = 'completed' OR (status = 'failed' AND retries >= max_retries)) "
+                        "AND updated_at < datetime('now', '-7 days')"
+                    ))
                 db.commit()
-                logger.debug(f"[{self.worker_id}] Cleaned up old queue jobs.")
+                logger.info(f"[{self.worker_id}] Cleaned up {result.rowcount} old queue jobs.")
         except Exception as e:
             logger.warning(f"[{self.worker_id}] Failed to clean up old queue jobs: {e}")
 

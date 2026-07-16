@@ -241,5 +241,6 @@ class QueueJob(Base):
     error_message = Column(Text)
     locked_by = Column(String, index=True)
     locked_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

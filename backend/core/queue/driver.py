@@ -2,7 +2,7 @@ import json
 import uuid
 import logging
 from typing import Any, Dict, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
@@ -86,6 +86,7 @@ class PostgresQueueDriver:
         job = self.db.query(QueueJob).filter_by(id=job_id).first()
         if job:
             job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
             job.locked_by = None
             job.locked_at = None
             self.db.commit()

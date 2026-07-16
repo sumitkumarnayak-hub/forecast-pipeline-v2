@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session  # used by handle_ph_sync
 from core.database.engine import get_shared_database
 from core.shared.workflow_notifications import notify_npl_submitted
 # Note: In the future, we can import Google Sheets sync methods here as well.
@@ -14,21 +14,19 @@ def handle_npl_email(payload: Dict[str, Any]):
     Queue handler for sending NPL submission emails.
     """
     logger.info(f"Processing email for NPL submission: {payload.get('sub_id')}")
-    # Re-establish DB session if needed by the mailer
-    db_obj = get_shared_database()
-    with Session(db_obj.engine) as db:
-        notify_npl_submitted(
-            sub_id=payload.get("sub_id"),
-            sub_type=payload.get("sub_type"),
-            product_name=payload.get("product_name"),
-            product_id=payload.get("product_id"),
-            launch_dates=payload.get("launch_dates"),
-            cities=payload.get("cities"),
-            hub_count=payload.get("hub_count"),
-            submitted_by=payload.get("submitted_by"),
-            user_id=payload.get("user_id"),
-            db=db,
-        )
+    db = get_shared_database()  # Database object, not a Session
+    notify_npl_submitted(
+        sub_id=payload.get("sub_id"),
+        sub_type=payload.get("sub_type"),
+        product_name=payload.get("product_name"),
+        product_id=payload.get("product_id"),
+        launch_dates=payload.get("launch_dates"),
+        cities=payload.get("cities"),
+        hub_count=payload.get("hub_count"),
+        submitted_by=payload.get("submitted_by"),
+        user_id=payload.get("user_id"),
+        db=db,
+    )
 
 def handle_npl_sheets_sync(payload: Dict[str, Any]):
     """

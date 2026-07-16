@@ -1404,35 +1404,40 @@ def delete_submission_rows(
         raise HTTPException(status_code=400, detail="reason must not be empty")
 
     try:
-        from sqlalchemy.orm import Session
-        from core.queue.driver import PostgresQueueDriver
-        from core.database.engine import get_shared_database
-        
-        queue_db = get_shared_database()
         username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or ""
         
-        with Session(queue_db.engine) as session:
-            driver = PostgresQueueDriver(session)
-            driver.enqueue(
-                "npl.delete_submission_rows", 
-                payload={
-                    "submission_id": submission_id, 
-                    "row_indices": body.row_indices, 
-                    "reason": body.reason,
-                    "username": username
-                }
-            )
-            
-        cache_invalidate(CacheNS.NPL_WIZARD)
         logger.info(
-            "[NPL] Queueing %d row(s) for deletion from Submission_Log for %s by %s",
+            "[NPL] Deleting %d row(s) from Submission_Log for %s by %s",
             len(body.row_indices), submission_id, username,
         )
+        
+        # Run synchronously so the frontend gets immediate feedback
+        deleted_count = delete_submission_rows_by_index(
+            submission_id, body.row_indices, reason=body.reason
+        )
+        
+        # Check if all rows for this submission are now "Deleted"
+        remaining = get_submission_rows_with_indices(submission_id)
+        active_remaining = [
+            r for r in remaining
+            if str(r.get("Status", r.get("status", ""))).strip().lower() != "deleted"
+        ]
+        submission_fully_deleted = len(active_remaining) == 0
+        
+        # If fully deleted, update DB status too
+        if submission_fully_deleted:
+            try:
+                db.update_npl_submission_status(submission_id, "Deleted", body.reason)
+            except Exception as e:
+                logger.warning("[NPL] Failed to update DB status to Deleted: %s", e)
+        
+        cache_invalidate(CacheNS.NPL_WIZARD)
+        
         return {
-            "detail": f"Queued {len(body.row_indices)} row(s) for deletion from Submission_Log",
-            "deleted_count": len(body.row_indices),
-            "submission_fully_deleted": False, # Will be checked by worker
-            "status": "queued"
+            "detail": f"Deleted {deleted_count} row(s) from Submission_Log",
+            "deleted_count": deleted_count,
+            "submission_fully_deleted": submission_fully_deleted,
+            "status": "completed"
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

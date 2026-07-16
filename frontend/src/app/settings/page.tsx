@@ -20,9 +20,12 @@ import {
   Pencil,
   Send,
   Save,
+  Activity,
 } from "lucide-react";
 import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 import UsersAdminTab from "@/components/settings/UsersAdminTab";
+import dynamic from "next/dynamic";
+const QueueAdminPage = dynamic(() => import("@/app/admin/queue/page"), { ssr: false });
 
 const DEFAULT_RECIPIENT_CATEGORIES: Record<string, string> = {
   all: "All notifications",
@@ -635,6 +638,7 @@ export default function SettingsPage() {
     { id: "preferences", label: <><Settings size={14} /> Preferences</>, content: preferencesTab },
     ...(admin ? [{ id: "users", label: <><Users size={14} /> Users</>, content: usersTab }] : []),
     { id: "email", label: <><Mail size={14} /> Email Settings</>, content: emailTab },
+    ...(admin ? [{ id: "queue", label: <><Activity size={14} /> Queue Monitor</>, content: <QueueAdminPage /> }] : []),
     { id: "session", label: <><Monitor size={14} /> Session</>, content: sessionTab },
     { id: "about", label: <><Info size={14} /> About</>, content: aboutTab },
   ];
