@@ -615,6 +615,8 @@ def npl_append_ff_input_row(
                     return v_str
                     
             pydantic_obj = FFInputPydanticRow(**normalized)
+            if pydantic_obj.Start_date > pydantic_obj.End_date:
+                raise ValueError("Start_date must be less than or equal to End_date")
             
             # Pandera validation
             import pandas as pd

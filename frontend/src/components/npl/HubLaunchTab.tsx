@@ -263,6 +263,17 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
       }
     }
 
+    const startDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "startdate") || "";
+    const endDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "enddate") || "";
+    const startDateVal = form[startDateKey]?.trim() ?? "";
+    const endDateVal = form[endDateKey]?.trim() ?? "";
+    if (startDateVal && endDateVal) {
+      if (new Date(startDateVal) > new Date(endDateVal)) {
+        setError("Start Date must be less than or equal to End Date.");
+        return;
+      }
+    }
+
     setError("");
     setSubmitting(true);
     try {
@@ -628,18 +639,18 @@ export default function HubLaunchTab() {
             <Database size={14} style={{ color: "var(--blue)" }} />
             <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>FF Input Sheet</span>
             {ffData && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(59,130,246,0.1)", color: "var(--blue)", fontWeight: 600 }}>{ffData.row_count} rows</span>}
+            {lastUpdate && lastUpdate.ts && (
+              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "12px", paddingLeft: "12px", borderLeft: "1px solid var(--border)" }}>
+                <Clock size={10} />
+                Last updated: {formatIST(lastUpdate.ts)} by {lastUpdate.user_id?.split("@")[0]}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {changeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(changeStatus.last_checked_at)}</span>}
             {ffData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(ffData.cache_last_updated)}</span>}
 
             {/* Task 2: Add Hub CRM button */}
-            {lastUpdate && lastUpdate.ts && (
-              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4, marginRight: "4px" }}>
-                <Clock size={10} />
-                Last added: {formatIST(lastUpdate.ts)} by {lastUpdate.user_id?.split("@")[0]}
-              </span>
-            )}
             {canWrite && (
               <button
                 type="button"
