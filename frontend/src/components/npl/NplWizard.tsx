@@ -708,15 +708,17 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </div>
           </div>
           <div className="form-group mb-3" style={{ maxWidth: 360 }}>
-            <label className="form-label">% plan to new SKU ({splitPct}% new · {100 - splitPct}% old)</label>
+            <label className="form-label">% plan to new SKU ({splitPct}% new · {Math.max(0, 100 - splitPct)}% old)</label>
             <input
-              type="range"
+              type="number"
               min={0}
               max={100}
+              step="any"
               value={splitPct}
-              onChange={e => setSplitPct(Number(e.target.value))}
+              onChange={e => setSplitPct(Math.min(100, Math.max(0, Number(e.target.value))))}
               disabled={readOnly}
-              className="w-full"
+              className="form-input text-sm"
+              placeholder="e.g. 100 or 99.5"
             />
           </div>
           <div className="form-group mb-3">
