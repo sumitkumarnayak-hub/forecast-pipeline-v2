@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useNplBootstrap } from "@/context/NplContext";
-import { ChevronRight, Download, Info, Mail, Upload } from "lucide-react";
+import { ChevronRight, Download, Info, Mail, Upload, RefreshCw } from "lucide-react";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 const BASE_STAGES = ["upload", "split", "dates", "confirm"] as const;
@@ -228,7 +228,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     }
   };
 
-  const hubCategory = expansionCategory || category || "";
+  const hubCategory = isReplacement 
+    ? (newCategory || oldCategory || "") 
+    : (expansionCategory || category || "");
 
   /**
    * Fetches the hub catalog for a single city + category, guarded against
@@ -301,6 +303,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               product_name: templateProductName,
               mrp: isReplacement ? newMrp : "",
               sub_type: isReplacement ? "Replacement" : "New Launch",
+              old_product_id: isReplacement ? oldPid : "",
+              old_product_name: isReplacement ? oldProductName : "",
+              replacement_percentage: isReplacement ? String(splitPct) : "",
             }
           : {
               cities_hubs: forcedHubs,
@@ -309,6 +314,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               product_name: templateProductName,
               mrp: isReplacement ? newMrp : "",
               sub_type: isReplacement ? "Replacement" : "New Launch",
+              old_product_id: isReplacement ? oldPid : "",
+              old_product_name: isReplacement ? oldProductName : "",
+              replacement_percentage: isReplacement ? String(splitPct) : "",
             };
       const res = await api.post(path, body, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
@@ -1119,7 +1127,22 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           )}
           {selectedCities.length > 0 && planLevel === "hub" && (
             <div className="mb-4 rounded border p-3" style={{ borderColor: "var(--border)" }}>
-              <p className="text-xs font-semibold mb-3 uppercase tracking-wider text-muted">Hub selection per city</p>
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted m-0">Hub selection per city</p>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary flex items-center gap-1.5"
+                  style={{ fontSize: "0.68rem", padding: "4px 8px", height: "auto" }}
+                  onClick={() => {
+                    selectedCities.forEach(city => {
+                      fetchHubsForCity(city, hubCategory);
+                    });
+                  }}
+                  title="Reload hubs from the backend"
+                >
+                  <RefreshCw size={11} /> Refresh Hubs
+                </button>
+              </div>
               {selectedCities.map(city => {
                 const hubs = availableHubs[city] || [];
                 const selected = selectedHubs[city] || [];

@@ -843,6 +843,9 @@ class TemplateCityBody(BaseModel):
     product_name: str = ""
     mrp: str = ""
     sub_type: str = "New Launch"
+    old_product_id: str = ""
+    old_product_name: str = ""
+    replacement_percentage: str = ""
 
 
 class TemplateHubBody(BaseModel):
@@ -852,6 +855,9 @@ class TemplateHubBody(BaseModel):
     product_name: str = ""
     mrp: str = ""
     sub_type: str = "New Launch"
+    old_product_id: str = ""
+    old_product_name: str = ""
+    replacement_percentage: str = ""
 
 
 class SplitCityBody(BaseModel):
@@ -956,6 +962,9 @@ def wizard_template_city(body: TemplateCityBody, current_user: dict = Depends(ge
         product_name=body.product_name,
         mrp=body.mrp,
         sub_type=body.sub_type,
+        old_product_id=body.old_product_id,
+        old_product_name=body.old_product_name,
+        replacement_percentage=body.replacement_percentage,
     )
     return Response(
         content=data,
@@ -976,6 +985,9 @@ def wizard_template_hub(body: TemplateHubBody, current_user: dict = Depends(get_
         product_name=body.product_name,
         mrp=body.mrp,
         sub_type=body.sub_type,
+        old_product_id=body.old_product_id,
+        old_product_name=body.old_product_name,
+        replacement_percentage=body.replacement_percentage,
     )
     return Response(
         content=data,

@@ -698,7 +698,9 @@ def _style_ws(ws, mandatory_cols):
 
 def build_city_template(cities: list, category: str,
                          product_id: str = "", product_name: str = "", mrp: str = "",
-                         sub_type: str = "New Launch") -> bytes:
+                         sub_type: str = "New Launch",
+                         old_product_id: str = "", old_product_name: str = "",
+                         replacement_percentage: str = "") -> bytes:
     """One blank row per city; prefilled with category, product_id, product_name, and mrp if provided."""
     mandatory_cols, optional_cols = get_template_columns("city", sub_type)
     rows = []
@@ -710,9 +712,9 @@ def build_city_template(cities: list, category: str,
         }
         if sub_type == "Replacement":
             row.update({
-                "old_product_id": "",
-                "old_product_name": "",
-                "replacement_percentage": ""
+                "old_product_id": old_product_id,
+                "old_product_name": old_product_name,
+                "replacement_percentage": replacement_percentage
             })
         for opt in optional_cols:
             row[opt] = ""
@@ -729,7 +731,9 @@ def build_city_template(cities: list, category: str,
 
 def build_hub_template(cities_hubs: dict, category: str,
                         product_id: str = "", product_name: str = "", mrp: str = "",
-                        sub_type: str = "New Launch") -> bytes:
+                        sub_type: str = "New Launch",
+                        old_product_id: str = "", old_product_name: str = "",
+                        replacement_percentage: str = "") -> bytes:
     """cities_hubs = {city: [hub, ...]}
     Rows pre-filled with city_name / hub_name / category; product_id, product_name, and mrp if provided."""
     mandatory_cols, optional_cols = get_template_columns("hub", sub_type)
@@ -743,9 +747,9 @@ def build_hub_template(cities_hubs: dict, category: str,
             }
             if sub_type == "Replacement":
                 row.update({
-                    "old_product_id": "",
-                    "old_product_name": "",
-                    "replacement_percentage": ""
+                    "old_product_id": old_product_id,
+                    "old_product_name": old_product_name,
+                    "replacement_percentage": replacement_percentage
                 })
             for opt in optional_cols:
                 row[opt] = ""

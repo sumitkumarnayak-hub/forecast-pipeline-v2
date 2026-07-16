@@ -69,8 +69,17 @@ def city_template_bytes(
     product_name: str = "",
     mrp: str = "",
     sub_type: str = "New Launch",
+    old_product_id: str = "",
+    old_product_name: str = "",
+    replacement_percentage: str = "",
 ) -> bytes:
-    return build_city_template(cities, category, product_id, product_name, mrp, sub_type=sub_type)
+    return build_city_template(
+        cities, category, product_id, product_name, mrp,
+        sub_type=sub_type,
+        old_product_id=old_product_id,
+        old_product_name=old_product_name,
+        replacement_percentage=replacement_percentage,
+    )
 
 
 def hub_template_bytes(
@@ -81,8 +90,17 @@ def hub_template_bytes(
     product_name: str = "",
     mrp: str = "",
     sub_type: str = "New Launch",
+    old_product_id: str = "",
+    old_product_name: str = "",
+    replacement_percentage: str = "",
 ) -> bytes:
-    return build_hub_template(cities_hubs, category, product_id, product_name, mrp, sub_type=sub_type)
+    return build_hub_template(
+        cities_hubs, category, product_id, product_name, mrp,
+        sub_type=sub_type,
+        old_product_id=old_product_id,
+        old_product_name=old_product_name,
+        replacement_percentage=replacement_percentage,
+    )
 
 
 def parse_city_file(content: bytes) -> dict[str, Any]:
