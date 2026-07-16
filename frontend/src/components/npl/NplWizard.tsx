@@ -294,14 +294,18 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       const forcedHubs = Object.fromEntries(
         Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
       );
+      const templateCategory = isReplacement
+        ? (newCategory || oldCategory || "")
+        : (expansionCategory || category || "");
+
       const body =
         planLevel === "city"
           ? {
               cities: selectedCities,
-              category: expansionCategory || category,
+              category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : "",
+              mrp: isReplacement ? newMrp : (isExpansion ? "" : ""), // Expansion doesn't have an input MRP in Step 1
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -309,10 +313,10 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             }
           : {
               cities_hubs: forcedHubs,
-              category: expansionCategory || category,
+              category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : "",
+              mrp: isReplacement ? newMrp : (isExpansion ? "" : ""),
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -322,7 +326,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${planLevel}_template_${expansionCategory || category}.xlsx`;
+      a.download = `${planLevel}_template_${templateCategory}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {

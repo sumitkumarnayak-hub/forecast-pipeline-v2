@@ -36,11 +36,27 @@ from app.config import (
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
-    "city_name": pa.Column(str, coerce=True),
-    "product_id": pa.Column(str, coerce=True),
-    "product_name": pa.Column(str, coerce=True, nullable=True),
-    "category": pa.Column(str, coerce=True, nullable=True),
-    "MRP": pa.Column(float, coerce=True, nullable=True),
+    # Support both "City" and internal "city_name"
+    "City": pa.Column(str, coerce=True, required=False),
+    "city_name": pa.Column(str, coerce=True, required=False),
+    # Product ID / PRODUCT_ID / product_id
+    "Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PRODUCT_ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "product_id": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Product Name / PRODUCT_NAME / product_name
+    "Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PRODUCT_NAME": pa.Column(str, coerce=True, nullable=True, required=False),
+    "product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Sub Category / SUB_CATEGORY / category
+    "Sub Category": pa.Column(str, coerce=True, nullable=True, required=False),
+    "SUB_CATEGORY": pa.Column(str, coerce=True, nullable=True, required=False),
+    "category": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Channel
+    "Channel": pa.Column(str, coerce=True, nullable=True, required=False),
+    # MRP / MRP\n(Before KVi Discount)
+    "MRP": pa.Column(float, coerce=True, nullable=True, required=False),
+    "MRP\n(Before KVi Discount)": pa.Column(float, coerce=True, nullable=True, required=False),
+    # Optional columns
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
@@ -49,20 +65,41 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Replacement Percentage": pa.Column(float, coerce=True, nullable=True, required=False),
     "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
-    **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
+    **{day: pa.Column(int, coerce=True, nullable=True, required=False) for day in WEEKDAYS}
 }, strict=False)
 
 HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
-    "city_name": pa.Column(str, coerce=True),
-    "hub_name": pa.Column(str, coerce=True),
-    "product_id": pa.Column(str, coerce=True),
-    "product_name": pa.Column(str, coerce=True, nullable=True),
-    "category": pa.Column(str, coerce=True, nullable=True),
-    "MRP": pa.Column(float, coerce=True, nullable=True),
+    # Support both "City" and internal "city_name"
+    "City": pa.Column(str, coerce=True, required=False),
+    "city_name": pa.Column(str, coerce=True, required=False),
+    # Support "Hub Name" and internal "hub_name"
+    "Hub Name": pa.Column(str, coerce=True, required=False),
+    "hub_name": pa.Column(str, coerce=True, required=False),
+    # Product ID / PRODUCT_ID / product_id
+    "Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PRODUCT_ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "product_id": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Product Name / PRODUCT_NAME / product_name
+    "Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PRODUCT_NAME": pa.Column(str, coerce=True, nullable=True, required=False),
+    "product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Sub Category / SUB_CATEGORY / category
+    "Sub Category": pa.Column(str, coerce=True, nullable=True, required=False),
+    "SUB_CATEGORY": pa.Column(str, coerce=True, nullable=True, required=False),
+    "category": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Channel
+    "Channel": pa.Column(str, coerce=True, nullable=True, required=False),
+    # MRP / MRP\n(Before KVi Discount)
+    "MRP": pa.Column(float, coerce=True, nullable=True, required=False),
+    "MRP\n(Before KVi Discount)": pa.Column(float, coerce=True, nullable=True, required=False),
+    # Optional columns
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
@@ -71,11 +108,14 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
+    "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Replacement Percentage": pa.Column(float, coerce=True, nullable=True, required=False),
     "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
-    **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
+    **{day: pa.Column(int, coerce=True, nullable=True, required=False) for day in WEEKDAYS}
 }, strict=False)
 
 SERVICE_ACCOUNT_FILE = GOOGLE_CREDENTIALS_PATH
@@ -655,17 +695,20 @@ ALL_POSSIBLE_OPTIONAL_COLS = [
 
 def get_template_columns(plan_level: str, sub_type: str) -> tuple[list[str], list[str]]:
     """Returns (mandatory_cols, optional_cols) dynamically based on plan level and sub_type."""
-    if plan_level == "city":
-        base_mandatory = ["city_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
-    else:
-        base_mandatory = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
-
     if sub_type == "Replacement":
-        mandatory = base_mandatory + ["old_product_id", "old_product_name", "replacement_percentage"]
-        optional = ["UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
+        # Replacement headers
+        if plan_level == "city":
+            mandatory = ["City", "Product ID", "Product Name", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+        else:
+            mandatory = ["City", "Hub Name", "Product ID", "Product Name", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+        optional = ["PLU Code", "UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life", "Hub Shelf Life"]
     else:
-        mandatory = base_mandatory
-        optional = ["UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
+        # New Launch & Expansion headers
+        if plan_level == "city":
+            mandatory = ["City", "PRODUCT_ID", "PRODUCT_NAME", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+        else:
+            mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+        optional = ["PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
 
     return mandatory, optional
 
@@ -705,19 +748,30 @@ def build_city_template(cities: list, category: str,
     mandatory_cols, optional_cols = get_template_columns("city", sub_type)
     rows = []
     for c in cities:
-        row = {
-            "city_name": c, "product_id": product_id,
-            "product_name": product_name, "category": category,
-            "MRP": mrp, **{d: 0 for d in WEEKDAYS}
-        }
-        if sub_type == "Replacement":
-            row.update({
-                "old_product_id": old_product_id,
-                "old_product_name": old_product_name,
-                "replacement_percentage": replacement_percentage
-            })
-        for opt in optional_cols:
-            row[opt] = ""
+        row = {}
+        for col in mandatory_cols + optional_cols:
+            if col == "City":
+                row[col] = c
+            elif col in ["PRODUCT_ID", "Product ID"]:
+                row[col] = product_id
+            elif col in ["PRODUCT_NAME", "Product Name"]:
+                row[col] = product_name
+            elif col in ["SUB_CATEGORY", "Sub Category"]:
+                row[col] = category
+            elif col == "Channel":
+                row[col] = "General"
+            elif col in ["MRP", "MRP\n(Before KVi Discount)"]:
+                row[col] = mrp
+            elif col in ["Old Product ID", "old_product_id"]:
+                row[col] = old_product_id
+            elif col in ["Old Product Name", "old_product_name"]:
+                row[col] = old_product_name
+            elif col in ["Replacement Percentage", "replacement_percentage"]:
+                row[col] = replacement_percentage
+            elif col in WEEKDAYS:
+                row[col] = 0
+            else:
+                row[col] = ""
         rows.append(row)
 
     df  = pd.DataFrame(rows, columns=mandatory_cols + optional_cols)
@@ -740,19 +794,32 @@ def build_hub_template(cities_hubs: dict, category: str,
     rows = []
     for city, hubs in cities_hubs.items():
         for hub in sorted(hubs):
-            row = {
-                "city_name": city, "hub_name": hub,
-                "product_id": product_id, "product_name": product_name,
-                "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS}
-            }
-            if sub_type == "Replacement":
-                row.update({
-                    "old_product_id": old_product_id,
-                    "old_product_name": old_product_name,
-                    "replacement_percentage": replacement_percentage
-                })
-            for opt in optional_cols:
-                row[opt] = ""
+            row = {}
+            for col in mandatory_cols + optional_cols:
+                if col == "City":
+                    row[col] = city
+                elif col in ["hub_name", "Hub Name"]:
+                    row[col] = hub
+                elif col in ["PRODUCT_ID", "Product ID"]:
+                    row[col] = product_id
+                elif col in ["PRODUCT_NAME", "Product Name"]:
+                    row[col] = product_name
+                elif col in ["SUB_CATEGORY", "Sub Category"]:
+                    row[col] = category
+                elif col == "Channel":
+                    row[col] = "General"
+                elif col in ["MRP", "MRP\n(Before KVi Discount)"]:
+                    row[col] = mrp
+                elif col in ["Old Product ID", "old_product_id"]:
+                    row[col] = old_product_id
+                elif col in ["Old Product Name", "old_product_name"]:
+                    row[col] = old_product_name
+                elif col in ["Replacement Percentage", "replacement_percentage"]:
+                    row[col] = replacement_percentage
+                elif col in WEEKDAYS:
+                    row[col] = 0
+                else:
+                    row[col] = ""
             rows.append(row)
 
     df  = pd.DataFrame(rows, columns=mandatory_cols + optional_cols)
@@ -781,6 +848,35 @@ def parse_city_upload(file) -> tuple:
     except Exception as e:
         return pd.DataFrame(), [f"Cannot read file: {e}"]
     df.columns = [str(c).strip() for c in df.columns]
+    
+    # Normalize naming mapping to standard internal fields
+    if "City" in df.columns and "city_name" not in df.columns:
+        df["city_name"] = df["City"]
+    if "PRODUCT_ID" in df.columns and "product_id" not in df.columns:
+        df["product_id"] = df["PRODUCT_ID"]
+    elif "Product ID" in df.columns and "product_id" not in df.columns:
+        df["product_id"] = df["Product ID"]
+    if "PRODUCT_NAME" in df.columns and "product_name" not in df.columns:
+        df["product_name"] = df["PRODUCT_NAME"]
+    elif "Product Name" in df.columns and "product_name" not in df.columns:
+        df["product_name"] = df["Product Name"]
+    if "SUB_CATEGORY" in df.columns and "category" not in df.columns:
+        df["category"] = df["SUB_CATEGORY"]
+    elif "Sub Category" in df.columns and "category" not in df.columns:
+        df["category"] = df["Sub Category"]
+    if "MRP\n(Before KVi Discount)" in df.columns and "MRP" not in df.columns:
+        df["MRP"] = df["MRP\n(Before KVi Discount)"]
+    if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
+        df["PLU Code"] = df["PLU_CODE"]
+    if "Meat Ratio" in df.columns and "Meat Ratio (for VA)" not in df.columns:
+        df["Meat Ratio (for VA)"] = df["Meat Ratio"]
+    if "Old Product ID" in df.columns and "old_product_id" not in df.columns:
+        df["old_product_id"] = df["Old Product ID"]
+    if "Old Product Name" in df.columns and "old_product_name" not in df.columns:
+        df["old_product_name"] = df["Old Product Name"]
+    if "Replacement Percentage" in df.columns and "replacement_percentage" not in df.columns:
+        df["replacement_percentage"] = df["Replacement Percentage"]
+
     missing = [c for c in ["city_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
@@ -869,6 +965,37 @@ def parse_hub_upload(file) -> tuple:
     except Exception as e:
         return pd.DataFrame(), [f"Cannot read file: {e}"]
     df.columns = [str(c).strip() for c in df.columns]
+    
+    # Normalize naming mapping to standard internal fields
+    if "City" in df.columns and "city_name" not in df.columns:
+        df["city_name"] = df["City"]
+    if "Hub Name" in df.columns and "hub_name" not in df.columns:
+        df["hub_name"] = df["Hub Name"]
+    if "PRODUCT_ID" in df.columns and "product_id" not in df.columns:
+        df["product_id"] = df["PRODUCT_ID"]
+    elif "Product ID" in df.columns and "product_id" not in df.columns:
+        df["product_id"] = df["Product ID"]
+    if "PRODUCT_NAME" in df.columns and "product_name" not in df.columns:
+        df["product_name"] = df["PRODUCT_NAME"]
+    elif "Product Name" in df.columns and "product_name" not in df.columns:
+        df["product_name"] = df["Product Name"]
+    if "SUB_CATEGORY" in df.columns and "category" not in df.columns:
+        df["category"] = df["SUB_CATEGORY"]
+    elif "Sub Category" in df.columns and "category" not in df.columns:
+        df["category"] = df["Sub Category"]
+    if "MRP\n(Before KVi Discount)" in df.columns and "MRP" not in df.columns:
+        df["MRP"] = df["MRP\n(Before KVi Discount)"]
+    if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
+        df["PLU Code"] = df["PLU_CODE"]
+    if "Meat Ratio" in df.columns and "Meat Ratio (for VA)" not in df.columns:
+        df["Meat Ratio (for VA)"] = df["Meat Ratio"]
+    if "Old Product ID" in df.columns and "old_product_id" not in df.columns:
+        df["old_product_id"] = df["Old Product ID"]
+    if "Old Product Name" in df.columns and "old_product_name" not in df.columns:
+        df["old_product_name"] = df["Old Product Name"]
+    if "Replacement Percentage" in df.columns and "replacement_percentage" not in df.columns:
+        df["replacement_percentage"] = df["Replacement Percentage"]
+
     missing = [c for c in ["city_name", "hub_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
