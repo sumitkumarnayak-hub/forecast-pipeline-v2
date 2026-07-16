@@ -118,6 +118,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [expansionPid, setExpansionPid] = useState("");
   const [expansionName, setExpansionName] = useState("");
   const [expansionCategory, setExpansionCategory] = useState("");
+  const [expansionSkuSearch, setExpansionSkuSearch] = useState("");
+  const [showExpansionSkuDropdown, setShowExpansionSkuDropdown] = useState(false);
 
   const [newLaunchPid, setNewLaunchPid] = useState("");
   const [newLaunchName, setNewLaunchName] = useState("");
@@ -228,6 +230,47 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     }
   };
 
+  const filteredExpansionProducts = useMemo(() => {
+    if (!allProducts) return [];
+    if (!expansionSkuSearch.trim()) return allProducts.slice(0, 100);
+    const search = expansionSkuSearch.toLowerCase();
+    return allProducts.filter(
+      p => (p.product_id?.toLowerCase().includes(search) || 
+            p.product_name?.toLowerCase().includes(search))
+    ).slice(0, 100);
+  }, [allProducts, expansionSkuSearch]);
+
+  const selectExpansionProduct = (p: { product_id: string; product_name: string; category: string } | null) => {
+    if (!p) {
+      setExpansionPid("");
+      setExpansionName("");
+      setExpansionCategory("");
+      setCategory("");
+      setExpansionSkuSearch("");
+    } else {
+      setExpansionPid(p.product_id);
+      setExpansionName(p.product_name);
+      setExpansionCategory(p.category);
+      setCategory(p.category);
+      setExpansionSkuSearch(`${p.product_name} (${p.product_id})`);
+    }
+    setShowExpansionSkuDropdown(false);
+  };
+
+  const handleExpansionSkuSearchChange = (val: string) => {
+    setExpansionSkuSearch(val);
+    if (!val.trim()) {
+      selectExpansionProduct(null);
+    } else {
+      setShowExpansionSkuDropdown(true);
+      const match = allProducts?.find(
+        p => p.product_id.toLowerCase() === val.trim().toLowerCase() ||
+             p.product_name.toLowerCase() === val.trim().toLowerCase()
+      );
+      if (match) selectExpansionProduct(match);
+    }
+  };
+
   const hubCategory = isReplacement 
     ? (newCategory || oldCategory || "") 
     : (expansionCategory || category || "");
@@ -267,7 +310,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     if (!selectedCities.length || planLevel !== "hub") return;
     selectedCities.forEach(city => {
       const loadState = hubLoadStateRef.current[city];
-      const isCachedForCurrentCategory = loadState?.category === hubCategory && (availableHubs[city]?.length ?? 0) > 0;
+      const isCachedForCurrentCategory = loadState?.category === hubCategory && availableHubs[city] !== undefined;
       const isAlreadyInFlight = hubsLoading[city];
       if (isCachedForCurrentCategory || isAlreadyInFlight) return;
       fetchHubsForCity(city, hubCategory);
@@ -1023,7 +1066,40 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
             {/* Cities Selection */}
             <div style={{ marginTop: "1rem" }}>
-              <label className="form-label" style={{ marginBottom: "0.5rem", display: "block" }}>Select Target Cities *</label>
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <label className="form-label m-0" style={{ display: "block" }}>Select Target Cities *</label>
+                {cities.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities(cities)}
+                      disabled={readOnly}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities(prev => cities.filter(c => !prev.includes(c)))}
+                      disabled={readOnly}
+                    >
+                      Invert
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities([])}
+                      disabled={readOnly}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {cities.length ? (
                   cities.map(c => (
@@ -1057,24 +1133,54 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       {stage === "upload" && (
         <>
           {isExpansion && (
-            <div className="form-group mb-3" style={{ maxWidth: 420 }}>
-              <label className="form-label">Existing Product ID</label>
-              <select
+            <div className="form-group mb-3" style={{ maxWidth: 420, position: "relative" }}>
+              <label className="form-label">Search Existing SKU (Product ID or Name) *</label>
+              <input
+                type="text"
                 className="form-input text-sm"
-                value={expansionPid}
-                onChange={e => onExpansionPidChange(e.target.value)}
-                disabled={readOnly || (nplLoading && allProducts.length === 0)}
-              >
-                <option value="">{allProducts.length ? "Select product" : "Loading products…"}</option>
-                {allProducts.map(p => (
-                  <option key={p.product_id} value={p.product_id}>
-                    {p.product_id} — {p.product_name}
-                  </option>
-                ))}
-              </select>
+                placeholder="Type Product ID or Name to search..."
+                value={expansionSkuSearch}
+                onFocus={() => setShowExpansionSkuDropdown(true)}
+                onBlur={() => setTimeout(() => setShowExpansionSkuDropdown(false), 200)}
+                onChange={e => handleExpansionSkuSearchChange(e.target.value)}
+                disabled={readOnly}
+              />
+              {showExpansionSkuDropdown && filteredExpansionProducts.length > 0 && (
+                <div style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  zIndex: 50,
+                  background: "var(--bg-elevated, #ffffff)",
+                  border: "1px solid var(--border, #cbd5e1)",
+                  borderRadius: "8px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                  maxHeight: "220px",
+                  overflowY: "auto",
+                  marginTop: "4px"
+                }}>
+                  {filteredExpansionProducts.map(p => (
+                    <div
+                      key={p.product_id}
+                      style={{
+                        padding: "8px 12px",
+                        cursor: "pointer",
+                        transition: "background 0.15s",
+                        fontSize: "0.78rem"
+                      }}
+                      onMouseDown={() => selectExpansionProduct(p)}
+                    >
+                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{p.product_name}</span>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginLeft: 8 }}>({p.product_id})</span>
+                      <span style={{ fontSize: "0.68rem", color: "var(--indigo, #6366f1)", float: "right", background: "rgba(99,102,241,0.08)", padding: "2px 6px", borderRadius: "4px" }}>{p.category}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {expansionName && (
-                <p className="text-xs text-muted mt-1">
-                  {expansionName} · {expansionCategory}
+                <p className="text-xs text-muted mt-2">
+                  Selected: <span className="font-semibold text-primary">{expansionName}</span> ({expansionPid}) · <span className="font-semibold text-indigo">{expansionCategory}</span>
                 </p>
               )}
             </div>
@@ -1109,7 +1215,40 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           )}
           {!isReplacement && (
             <div className="form-group mb-3">
-              <label className="form-label">Cities</label>
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <label className="form-label m-0">Cities</label>
+                {cities.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities(cities)}
+                      disabled={readOnly}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities(prev => cities.filter(c => !prev.includes(c)))}
+                      disabled={readOnly}
+                    >
+                      Invert
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.62rem", padding: "0.15rem 0.4rem", height: "auto" }}
+                      onClick={() => setSelectedCities([])}
+                      disabled={readOnly}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {cities.length ? (
                   cities.map(c => (
