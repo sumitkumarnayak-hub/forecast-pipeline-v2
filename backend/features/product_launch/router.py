@@ -842,6 +842,7 @@ class TemplateCityBody(BaseModel):
     product_id: str = ""
     product_name: str = ""
     mrp: str = ""
+    sub_type: str = "New Launch"
 
 
 class TemplateHubBody(BaseModel):
@@ -850,6 +851,7 @@ class TemplateHubBody(BaseModel):
     product_id: str = ""
     product_name: str = ""
     mrp: str = ""
+    sub_type: str = "New Launch"
 
 
 class SplitCityBody(BaseModel):
@@ -947,8 +949,14 @@ def wizard_template_city(body: TemplateCityBody, current_user: dict = Depends(ge
     from fastapi.responses import Response
     from features.product_launch import wizard as wiz
 
-
-    data = wiz.city_template_bytes(body.cities, body.category, product_id=body.product_id, product_name=body.product_name, mrp=body.mrp)
+    data = wiz.city_template_bytes(
+        body.cities,
+        body.category,
+        product_id=body.product_id,
+        product_name=body.product_name,
+        mrp=body.mrp,
+        sub_type=body.sub_type,
+    )
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -961,8 +969,14 @@ def wizard_template_hub(body: TemplateHubBody, current_user: dict = Depends(get_
     from fastapi.responses import Response
     from features.product_launch import wizard as wiz
 
-
-    data = wiz.hub_template_bytes(body.cities_hubs, body.category, product_id=body.product_id, product_name=body.product_name, mrp=body.mrp)
+    data = wiz.hub_template_bytes(
+        body.cities_hubs,
+        body.category,
+        product_id=body.product_id,
+        product_name=body.product_name,
+        mrp=body.mrp,
+        sub_type=body.sub_type,
+    )
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

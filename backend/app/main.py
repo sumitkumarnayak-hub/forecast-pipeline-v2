@@ -146,8 +146,8 @@ async def lifespan(app: FastAPI):
     try:
         from features.product_launch.watcher import start_ff_input_watcher
 
-        start_ff_input_watcher(interval_seconds=20)
-        logger.info("FF Input change watcher started (20s interval)")
+        start_ff_input_watcher(interval_seconds=60)
+        logger.info("FF Input change watcher started (60s interval)")
     except Exception as exc:
         logger.warning("FF Input watcher startup warning: %s", exc)
 
@@ -224,6 +224,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     """Return JSON errors with CORS headers (avoids browser 'CORS' masking of 500s)."""
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        
+    # Detect Google API Quota Exceeded (429)
+    exc_str = str(exc)
+    is_quota = "quotaexceeded" in exc_str.lower() or "429" in exc_str or (hasattr(exc, "code") and getattr(exc, "code") == 429)
+    if is_quota:
+        logger.warning("Google API Quota Exceeded detected globally: %s", exc)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Google Sheets API quota limit reached. Please wait 60 seconds before retrying."}
+        )
+
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": public_error_detail(exc)})
 

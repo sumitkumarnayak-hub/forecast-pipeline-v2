@@ -44,10 +44,15 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Meat Ratio": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Meat Ratio (for VA)": pa.Column(str, coerce=True, nullable=True, required=False),
     "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
+    "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
+    "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
 }, strict=False)
 
@@ -61,10 +66,15 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Meat Ratio": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Meat Ratio (for VA)": pa.Column(str, coerce=True, nullable=True, required=False),
     "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
+    "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
+    "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
+    "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
 }, strict=False)
 
@@ -619,14 +629,14 @@ def split_city_to_hubs(
                 "category":     category,
                 "MRP":          r.get("MRP", ""),
             }
-            for opt in OPTIONAL_COLS:
+            for opt in ALL_POSSIBLE_OPTIONAL_COLS:
                 if opt in r:
                     hub_row[opt] = r[opt]
             for day in WEEKDAYS:
                 hub_row[day] = day_alloc[day].get(hub, 0)
             rows.append(hub_row)
 
-    cols = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS + OPTIONAL_COLS
+    cols = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS + ALL_POSSIBLE_OPTIONAL_COLS
     return (pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols), zero_sal_info)
 
 
@@ -636,9 +646,28 @@ def split_city_to_hubs(
 CITY_COLS = ["city_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
 HUB_COLS  = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
 
-OPTIONAL_COLS = ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
-CITY_TEMPLATE_COLS = CITY_COLS + OPTIONAL_COLS
-HUB_TEMPLATE_COLS  = HUB_COLS + OPTIONAL_COLS
+ALL_POSSIBLE_OPTIONAL_COLS = [
+    "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Meat Ratio",
+    "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date",
+    "old_product_id", "old_product_name", "replacement_percentage"
+]
+
+
+def get_template_columns(plan_level: str, sub_type: str) -> tuple[list[str], list[str]]:
+    """Returns (mandatory_cols, optional_cols) dynamically based on plan level and sub_type."""
+    if plan_level == "city":
+        base_mandatory = ["city_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
+    else:
+        base_mandatory = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
+
+    if sub_type == "Replacement":
+        mandatory = base_mandatory + ["old_product_id", "old_product_name", "replacement_percentage"]
+        optional = ["UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
+    else:
+        mandatory = base_mandatory
+        optional = ["UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
+
+    return mandatory, optional
 
 
 def _style_ws(ws, mandatory_cols):
@@ -668,41 +697,65 @@ def _style_ws(ws, mandatory_cols):
 
 
 def build_city_template(cities: list, category: str,
-                         product_id: str = "", product_name: str = "", mrp: str = "") -> bytes:
+                         product_id: str = "", product_name: str = "", mrp: str = "",
+                         sub_type: str = "New Launch") -> bytes:
     """One blank row per city; prefilled with category, product_id, product_name, and mrp if provided."""
-    rows = [
-        {"city_name": c, "product_id": product_id,
-         "product_name": product_name, "category": category,
-         "MRP": mrp, **{d: 0 for d in WEEKDAYS},
-         **{opt: "" for opt in OPTIONAL_COLS}}
-        for c in cities
-    ]
-    df  = pd.DataFrame(rows, columns=CITY_TEMPLATE_COLS)
+    mandatory_cols, optional_cols = get_template_columns("city", sub_type)
+    rows = []
+    for c in cities:
+        row = {
+            "city_name": c, "product_id": product_id,
+            "product_name": product_name, "category": category,
+            "MRP": mrp, **{d: 0 for d in WEEKDAYS}
+        }
+        if sub_type == "Replacement":
+            row.update({
+                "old_product_id": "",
+                "old_product_name": "",
+                "replacement_percentage": ""
+            })
+        for opt in optional_cols:
+            row[opt] = ""
+        rows.append(row)
+
+    df  = pd.DataFrame(rows, columns=mandatory_cols + optional_cols)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="City Plan")
-        _style_ws(w.sheets["City Plan"], CITY_COLS)
+        _style_ws(w.sheets["City Plan"], mandatory_cols)
     buf.seek(0)
     return buf.getvalue()
 
 
 def build_hub_template(cities_hubs: dict, category: str,
-                        product_id: str = "", product_name: str = "", mrp: str = "") -> bytes:
+                        product_id: str = "", product_name: str = "", mrp: str = "",
+                        sub_type: str = "New Launch") -> bytes:
     """cities_hubs = {city: [hub, ...]}
     Rows pre-filled with city_name / hub_name / category; product_id, product_name, and mrp if provided."""
-    rows = [
-        {"city_name": city, "hub_name": hub,
-         "product_id": product_id, "product_name": product_name,
-         "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS},
-         **{opt: "" for opt in OPTIONAL_COLS}}
-        for city, hubs in cities_hubs.items()
-        for hub in sorted(hubs)
-    ]
-    df  = pd.DataFrame(rows, columns=HUB_TEMPLATE_COLS)
+    mandatory_cols, optional_cols = get_template_columns("hub", sub_type)
+    rows = []
+    for city, hubs in cities_hubs.items():
+        for hub in sorted(hubs):
+            row = {
+                "city_name": city, "hub_name": hub,
+                "product_id": product_id, "product_name": product_name,
+                "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS}
+            }
+            if sub_type == "Replacement":
+                row.update({
+                    "old_product_id": "",
+                    "old_product_name": "",
+                    "replacement_percentage": ""
+                })
+            for opt in optional_cols:
+                row[opt] = ""
+            rows.append(row)
+
+    df  = pd.DataFrame(rows, columns=mandatory_cols + optional_cols)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="Hub Plan")
-        _style_ws(w.sheets["Hub Plan"], HUB_COLS)
+        _style_ws(w.sheets["Hub Plan"], mandatory_cols)
     buf.seek(0)
     return buf.getvalue()
 
@@ -790,11 +843,11 @@ def parse_city_upload(file) -> tuple:
     df["MRP"]          = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
     # Clean and standardize optional columns
-    for col in OPTIONAL_COLS:
+    for col in ALL_POSSIBLE_OPTIONAL_COLS:
         if col not in df.columns:
             df[col] = None
         else:
-            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life"]:
+            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life", "replacement_percentage"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             else:
                 df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
@@ -802,7 +855,7 @@ def parse_city_upload(file) -> tuple:
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
-    return df[CITY_TEMPLATE_COLS], errors
+    return df[CITY_COLS + ALL_POSSIBLE_OPTIONAL_COLS], errors
 
 
 def parse_hub_upload(file) -> tuple:
@@ -876,11 +929,11 @@ def parse_hub_upload(file) -> tuple:
     df["MRP"] = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
     # Clean and standardize optional columns
-    for col in OPTIONAL_COLS:
+    for col in ALL_POSSIBLE_OPTIONAL_COLS:
         if col not in df.columns:
             df[col] = None
         else:
-            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life"]:
+            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life", "replacement_percentage"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             else:
                 df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
@@ -888,7 +941,7 @@ def parse_hub_upload(file) -> tuple:
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
-    return df[HUB_TEMPLATE_COLS], errors
+    return df[HUB_COLS + ALL_POSSIBLE_OPTIONAL_COLS], errors
 
 
 # ──────────────────────────────────────────────────────────────────

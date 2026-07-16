@@ -300,6 +300,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               product_id: templateProductId,
               product_name: templateProductName,
               mrp: isReplacement ? newMrp : "",
+              sub_type: isReplacement ? "Replacement" : "New Launch",
             }
           : {
               cities_hubs: forcedHubs,
@@ -307,6 +308,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               product_id: templateProductId,
               product_name: templateProductName,
               mrp: isReplacement ? newMrp : "",
+              sub_type: isReplacement ? "Replacement" : "New Launch",
             };
       const res = await api.post(path, body, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
