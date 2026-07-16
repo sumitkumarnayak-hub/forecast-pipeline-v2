@@ -518,13 +518,15 @@ def _fetch_actual_drive_last_update(file_id: str) -> dict:
         service = build("drive", "v3", credentials=creds, cache_discovery=False)
         meta = service.files().get(
             fileId=file_id, 
-            fields="modifiedTime, lastModifyingUser",
+            fields="modifiedTime,lastModifyingUser",
             supportsAllDrives=True
         ).execute()
         
         ts = meta.get("modifiedTime")
         user_meta = meta.get("lastModifyingUser", {})
         user_id = user_meta.get("emailAddress") or user_meta.get("displayName") or "Unknown Editor"
+        if isinstance(user_id, str) and user_id.endswith("@domain.com"):
+            user_id = user_id.replace("@domain.com", "@licious.com")
         
         return {"ts": ts, "user_id": user_id}
     except Exception as e:
@@ -1175,6 +1177,17 @@ def wizard_preview_sync(
                 "old_product_name": source.get("old_product_name", ""),
                 "replacement_percentage": source.get("replacement_percentage", ""),
             }
+            # Propagate optional template columns if present
+            for opt in ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]:
+                if opt in source and source[opt] is not None:
+                    # If Start Date is customized, prioritize it over Launch Date
+                    if opt == "Start Date" and str(source[opt]).strip():
+                        row_source["Start Date"] = str(source[opt]).strip()
+                    elif opt == "PLU Code":
+                        row_source["PLU_CODE"] = source[opt]
+                        row_source["PLU Code"] = source[opt]
+                    else:
+                        row_source[opt] = source[opt]
             if target_worksheet == "product_replacement":
                 row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
             elif target_worksheet == "Hub_Plan":
@@ -1345,6 +1358,17 @@ def wizard_submit(
                 "old_product_name": source.get("old_product_name", ""),
                 "replacement_percentage": source.get("replacement_percentage", ""),
             }
+            # Propagate optional template columns if present
+            for opt in ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]:
+                if opt in source and source[opt] is not None:
+                    # If Start Date is customized, prioritize it over Launch Date
+                    if opt == "Start Date" and str(source[opt]).strip():
+                        row_source["Start Date"] = str(source[opt]).strip()
+                    elif opt == "PLU Code":
+                        row_source["PLU_CODE"] = source[opt]
+                        row_source["PLU Code"] = source[opt]
+                    else:
+                        row_source[opt] = source[opt]
             if target_worksheet == "product_replacement":
                 row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
                 key = _npl_replacement_key_dynamic(row_vals, sheet_headers)
@@ -1354,7 +1378,7 @@ def wizard_submit(
             else:
                 row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
                 key = _npl_city_plan_key(row_vals, sheet_headers)
-                
+    
             if key and key in existing_keys:
                 continue
             values_to_append.append(row_vals)

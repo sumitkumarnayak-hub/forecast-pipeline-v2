@@ -1220,28 +1220,20 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                 <button 
                   type="button" 
                   className="btn btn-secondary btn-sm" 
-                  onClick={downloadPreviewCsv} 
+                  onClick={downloadTemplate} 
                   disabled={readOnly || busy === "template" || !planLevel}
                 >
-                  <Download size={13} /> Download Preview CSV
+                  <Download size={13} /> Download Template
                 </button>
                 <label 
-                  className="btn btn-secondary btn-sm" 
+                  className="btn btn-primary btn-sm" 
                   style={{ cursor: (readOnly || !planLevel) ? "not-allowed" : "pointer", opacity: (!planLevel) ? 0.6 : 1 }}
                 >
-                  <Upload size={13} /> Upload Plan (Optional)
+                  <Upload size={13} /> {(!planLevel) ? "Select Plan Level first" : "Upload Filled Template *"}
                   {planLevel && (
                     <input type="file" accept=".xlsx" style={{ display: "none" }} onChange={handleUpload} disabled={readOnly || !!busy} />
                   )}
                 </label>
-                <button 
-                  type="button" 
-                  className="btn btn-primary btn-sm" 
-                  onClick={handleNextFromUpload}
-                  disabled={readOnly || !planLevel}
-                >
-                  Next <ChevronRight size={13} />
-                </button>
               </>
             ) : (
               <>

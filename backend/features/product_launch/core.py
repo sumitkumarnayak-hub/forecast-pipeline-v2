@@ -41,6 +41,13 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "product_name": pa.Column(str, coerce=True, nullable=True),
     "category": pa.Column(str, coerce=True, nullable=True),
     "MRP": pa.Column(float, coerce=True, nullable=True),
+    "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
+    "RM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
 }, strict=False)
 
@@ -51,6 +58,13 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "product_name": pa.Column(str, coerce=True, nullable=True),
     "category": pa.Column(str, coerce=True, nullable=True),
     "MRP": pa.Column(float, coerce=True, nullable=True),
+    "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
+    "RM": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Start Date": pa.Column(str, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True) for day in WEEKDAYS}
 }, strict=False)
 
@@ -605,11 +619,14 @@ def split_city_to_hubs(
                 "category":     category,
                 "MRP":          r.get("MRP", ""),
             }
+            for opt in OPTIONAL_COLS:
+                if opt in r:
+                    hub_row[opt] = r[opt]
             for day in WEEKDAYS:
                 hub_row[day] = day_alloc[day].get(hub, 0)
             rows.append(hub_row)
 
-    cols = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
+    cols = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS + OPTIONAL_COLS
     return (pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols), zero_sal_info)
 
 
@@ -619,15 +636,23 @@ def split_city_to_hubs(
 CITY_COLS = ["city_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
 HUB_COLS  = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
 
+OPTIONAL_COLS = ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]
+CITY_TEMPLATE_COLS = CITY_COLS + OPTIONAL_COLS
+HUB_TEMPLATE_COLS  = HUB_COLS + OPTIONAL_COLS
 
-def _style_ws(ws):
+
+def _style_ws(ws, mandatory_cols):
     try:
         from openpyxl.styles import Font, PatternFill, Alignment
-        blue = PatternFill("solid", fgColor="1A73E8")
+        blue = PatternFill("solid", fgColor="1A73E8")  # Mandatory header
+        slate = PatternFill("solid", fgColor="475569")  # Optional header
         grey = PatternFill("solid", fgColor="F8FAFC")
         for cell in ws[1]:
-            cell.font      = Font(bold=True, color="FFFFFF", size=10)
-            cell.fill      = blue
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            if cell.value in mandatory_cols:
+                cell.fill = blue
+            else:
+                cell.fill = slate
             cell.alignment = Alignment(horizontal="center", vertical="center")
         for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
             for cell in row:
@@ -648,14 +673,15 @@ def build_city_template(cities: list, category: str,
     rows = [
         {"city_name": c, "product_id": product_id,
          "product_name": product_name, "category": category,
-         "MRP": mrp, **{d: 0 for d in WEEKDAYS}}
+         "MRP": mrp, **{d: 0 for d in WEEKDAYS},
+         **{opt: "" for opt in OPTIONAL_COLS}}
         for c in cities
     ]
-    df  = pd.DataFrame(rows, columns=CITY_COLS)
+    df  = pd.DataFrame(rows, columns=CITY_TEMPLATE_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="City Plan")
-        _style_ws(w.sheets["City Plan"])
+        _style_ws(w.sheets["City Plan"], CITY_COLS)
     buf.seek(0)
     return buf.getvalue()
 
@@ -667,15 +693,16 @@ def build_hub_template(cities_hubs: dict, category: str,
     rows = [
         {"city_name": city, "hub_name": hub,
          "product_id": product_id, "product_name": product_name,
-         "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS}}
+         "category": category, "MRP": mrp, **{d: 0 for d in WEEKDAYS},
+         **{opt: "" for opt in OPTIONAL_COLS}}
         for city, hubs in cities_hubs.items()
         for hub in sorted(hubs)
     ]
-    df  = pd.DataFrame(rows, columns=HUB_COLS)
+    df  = pd.DataFrame(rows, columns=HUB_TEMPLATE_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="Hub Plan")
-        _style_ws(w.sheets["Hub Plan"])
+        _style_ws(w.sheets["Hub Plan"], HUB_COLS)
     buf.seek(0)
     return buf.getvalue()
 
@@ -761,10 +788,21 @@ def parse_city_upload(file) -> tuple:
     df["product_name"] = df.get("product_name", "").astype(str).str.strip()
     df["category"]     = df.get("category", "").astype(str).str.strip()
     df["MRP"]          = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
+
+    # Clean and standardize optional columns
+    for col in OPTIONAL_COLS:
+        if col not in df.columns:
+            df[col] = None
+        else:
+            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
+
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
-    return df[CITY_COLS], errors
+    return df[CITY_TEMPLATE_COLS], errors
 
 
 def parse_hub_upload(file) -> tuple:
@@ -836,10 +874,21 @@ def parse_hub_upload(file) -> tuple:
     for col in ["city_name", "hub_name", "product_id", "product_name", "category"]:
         df[col] = df.get(col, "").astype(str).str.strip()
     df["MRP"] = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
+
+    # Clean and standardize optional columns
+    for col in OPTIONAL_COLS:
+        if col not in df.columns:
+            df[col] = None
+        else:
+            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
+
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
-    return df[HUB_COLS], errors
+    return df[HUB_TEMPLATE_COLS], errors
 
 
 # ──────────────────────────────────────────────────────────────────
