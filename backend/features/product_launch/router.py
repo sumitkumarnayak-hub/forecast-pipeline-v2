@@ -529,6 +529,110 @@ def npl_append_ff_input_row(
         from app import config as cfg
         from core.shared.sheets_session import get_sheets_manager
         from core.shared import sheets_cache as _sheets_cache
+        from core.database.models import AuditLog
+        from sqlalchemy.orm import Session
+        import uuid
+        from datetime import datetime, timezone
+
+        # 1. Normalize and Validate inputs using Pydantic and Pandera
+        try:
+            # Map keys to canonical keys
+            canonical_map = {
+                "city_name": ["city_name", "city name", "city", "cityname"],
+                "Type": ["type", "hub_type", "hub type", "hubtype"],
+                "Hub_name": ["hub_name", "hub name", "hubname", "hub"],
+                "Hub_id": ["hub_id", "hub id", "hubid"],
+                "Source_Hub": ["source_hub", "source hub", "sourcehub"],
+                "Percentage": ["percentage", "percent", "pct"],
+                "Start_date": ["start_date", "start date", "startdate"],
+                "End_date": ["end_date", "end date", "enddate"]
+            }
+            
+            normalized = {}
+            for key, val in body.row.items():
+                k_clean = str(key).strip().lower().replace("_", " ")
+                matched = False
+                for canonical_key, aliases in canonical_map.items():
+                    if k_clean == canonical_key.lower().replace("_", " ") or k_clean in [a.lower().replace("_", " ") for a in aliases]:
+                        normalized[canonical_key] = val
+                        matched = True
+                        break
+                if not matched:
+                    normalized[key] = val
+                    
+            if "Type" not in normalized or not str(normalized["Type"]).strip():
+                normalized["Type"] = "New Hub"
+                
+            # Pydantic validation
+            from pydantic import BaseModel, Field, field_validator
+            from datetime import date
+            import re
+            
+            class FFInputPydanticRow(BaseModel):
+                city_name: str = Field(..., min_length=1)
+                Type: str = Field(..., min_length=1)
+                Hub_name: str = Field(..., min_length=1)
+                Hub_id: str = Field(..., min_length=1)
+                Source_Hub: str = Field(..., min_length=1)
+                Percentage: float = Field(..., ge=0.0, le=1.0)
+                Start_date: date
+                End_date: date
+                
+                @field_validator("Hub_id")
+                @classmethod
+                def validate_hub_id(cls, v):
+                    v_str = str(v).strip()
+                    if not re.match(r"^\d+$", v_str):
+                        raise ValueError("Hub_id must contain only digits")
+                    return v_str
+                    
+            pydantic_obj = FFInputPydanticRow(**normalized)
+            
+            # Pandera validation
+            import pandas as pd
+            import pandera as pa
+            from pandera import Column, Check, DataFrameSchema
+            
+            schema = DataFrameSchema(
+                columns={
+                    "city_name": Column(str, checks=Check.str_length(min_value=1)),
+                    "Type": Column(str, checks=Check.str_length(min_value=1)),
+                    "Hub_name": Column(str, checks=Check.str_length(min_value=1)),
+                    "Hub_id": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Source_Hub": Column(str, checks=Check.str_length(min_value=1)),
+                    "Percentage": Column(float, checks=Check.between(0.0, 1.0)),
+                    "Start_date": Column(str, checks=Check(lambda s: s.str.match(r"^\d{4}-\d{2}-\d{2}$"))),
+                    "End_date": Column(str, checks=Check(lambda s: s.str.match(r"^\d{4}-\d{2}-\d{2}$"))),
+                },
+                coerce=True,
+                strict=False
+            )
+            
+            row_for_pandas = {
+                "city_name": pydantic_obj.city_name,
+                "Type": pydantic_obj.Type,
+                "Hub_name": pydantic_obj.Hub_name,
+                "Hub_id": pydantic_obj.Hub_id,
+                "Source_Hub": pydantic_obj.Source_Hub,
+                "Percentage": pydantic_obj.Percentage,
+                "Start_date": pydantic_obj.Start_date.isoformat(),
+                "End_date": pydantic_obj.End_date.isoformat(),
+            }
+            schema.validate(pd.DataFrame([row_for_pandas]))
+            
+            # Write validated row back to body.row using mapped/cleaned keys
+            validated_row = {
+                "city_name": pydantic_obj.city_name,
+                "Type": pydantic_obj.Type,
+                "Hub_name": pydantic_obj.Hub_name,
+                "Hub_id": pydantic_obj.Hub_id,
+                "Source_Hub": pydantic_obj.Source_Hub,
+                "Percentage": str(pydantic_obj.Percentage),
+                "Start_date": pydantic_obj.Start_date.isoformat(),
+                "End_date": pydantic_obj.End_date.isoformat(),
+            }
+        except Exception as err:
+            raise HTTPException(status_code=400, detail=f"Validation failed: {str(err)}")
 
         gsm = get_sheets_manager()
 
@@ -544,16 +648,24 @@ def npl_append_ff_input_row(
                 ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
 
         # Build the row values aligned to sheet column order
-        headers = list(ff_df.columns) if ff_df is not None and not ff_df.empty else list(body.row.keys())
-        row_values = [str(body.row.get(h, "")).strip() for h in headers]
+        headers = list(ff_df.columns) if ff_df is not None and not ff_df.empty else list(validated_row.keys())
+        
+        # Align validated_row to sheet headers (case-insensitive fallback)
+        row_values = []
+        for h in headers:
+            h_clean = h.strip().lower()
+            val = ""
+            for k, v in validated_row.items():
+                if k.lower() == h_clean:
+                    val = v
+                    break
+            row_values.append(str(val).strip())
 
         # Validate: require at minimum hub_name and source_hub to be non-empty
         hub_col = next((h for h in headers if h.strip().lower() in ("hub_name", "hub name")), None)
         src_col = next((h for h in headers if h.strip().lower() in ("source_hub", "source hub")), None)
-        hub_val = str(body.row.get(hub_col or "", "")).strip() if hub_col else ""
-        src_val = str(body.row.get(src_col or "", "")).strip() if src_col else ""
-        if not hub_val or not src_val:
-            raise HTTPException(status_code=400, detail="hub_name and source_hub are required and must be non-empty.")
+        hub_val = validated_row["Hub_name"]
+        src_val = validated_row["Source_Hub"]
 
         # Open the actual Google Sheet worksheet and append
         ws_name = cfg.SHEETS_CONFIG.get("new_hub_launch", {}).get("worksheets", {}).get("ff_input", "FF Input")
@@ -571,13 +683,33 @@ def npl_append_ff_input_row(
         except Exception:
             pass
 
+        # 2. Keep a log of who added and uploaded
+        username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or "system"
+        try:
+            with Session(gsm.db.engine) as session:
+                audit_entry = AuditLog(
+                    id=str(uuid.uuid4()),
+                    sync_run_id=None,
+                    action="append_ff_input",
+                    user_id=username,
+                    sheet_name="FF Input",
+                    rows_affected=1,
+                    status="success",
+                    ts=datetime.now(timezone.utc)
+                )
+                session.add(audit_entry)
+                session.commit()
+        except Exception as db_exc:
+            logger.warning("[FFInput] Failed to write audit log to DB: %s", db_exc)
+
         elapsed = round((time.perf_counter() - t0) * 1000)
-        logger.info("[FFInput] Appended new hub row hub=%s source=%s in %dms", hub_val, src_val, elapsed)
+        logger.info("[FFInput] Appended new hub row hub=%s source=%s by %s in %dms", hub_val, src_val, username, elapsed)
         return {
             "ok": True,
             "hub_name": hub_val,
             "source_hub": src_val,
             "headers": headers,
+            "added_by": username,
             "elapsed_ms": elapsed,
         }
     except HTTPException:
