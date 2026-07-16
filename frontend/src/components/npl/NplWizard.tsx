@@ -98,7 +98,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   //                     what actually gets sent to the backend as forced_hubs).
   // `hubsLoading` / `hubsError` -> per-city fetch status so the UI can show a
   //                     spinner or a retry action instead of failing silently.
-  const [availableHubs, setAvailableHubs] = useState<Record<string, string[]>>({});
+  const [availableHubs, setAvailableHubs] = useState<Record<string, Record<string, string[]>>>({});
   const [selectedHubs, setSelectedHubs] = useState<Record<string, string[]>>({});
   const [hubsLoading, setHubsLoading] = useState<Record<string, boolean>>({});
   const [hubsError, setHubsError] = useState<Record<string, string>>({});
@@ -295,7 +295,13 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         // (e.g. category changed again while this call was in flight) —
         // drop the response rather than overwrite fresher data.
         if (hubLoadStateRef.current[city]?.requestId !== requestId) return;
-        setAvailableHubs(prev => ({ ...prev, [city]: data.hubs || [] }));
+        setAvailableHubs(prev => ({
+          ...prev,
+          [cat]: {
+            ...(prev[cat] || {}),
+            [city]: data.hubs || [],
+          },
+        }));
         setHubsLoading(prev => ({ ...prev, [city]: false }));
       })
       .catch((err: unknown) => {
@@ -310,8 +316,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     if (!selectedCities.length || planLevel !== "hub") return;
     selectedCities.forEach(city => {
       const loadState = hubLoadStateRef.current[city];
-      const isCachedForCurrentCategory = loadState?.category === hubCategory && availableHubs[city] !== undefined;
-      const isAlreadyInFlight = hubsLoading[city];
+      const isCachedForCurrentCategory = availableHubs[hubCategory]?.[city] !== undefined;
+      const isAlreadyInFlight = hubsLoading[city] && loadState?.category === hubCategory;
       if (isCachedForCurrentCategory || isAlreadyInFlight) return;
       fetchHubsForCity(city, hubCategory);
     });
@@ -522,7 +528,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     });
   };
   const selectAllHubsForCity = (city: string) => {
-    const hubs = availableHubs[city] || [];
+    const hubs = availableHubs[hubCategory]?.[city] || [];
     setSelectedHubs(prev => ({
       ...prev,
       [city]: [...hubs]
@@ -530,7 +536,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   };
 
   const toggleAllHubsForCity = (city: string) => {
-    const hubs = availableHubs[city] || [];
+    const hubs = availableHubs[hubCategory]?.[city] || [];
     setSelectedHubs(prev => {
       const current = prev[city] || [];
       const next = hubs.filter(h => !current.includes(h));
@@ -1287,7 +1293,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                 </button>
               </div>
               {selectedCities.map(city => {
-                const hubs = availableHubs[city] || [];
+                const hubs = availableHubs[hubCategory]?.[city] || [];
                 const selected = selectedHubs[city] || [];
                 const loading = hubsLoading[city];
                 const error = hubsError[city];

@@ -944,10 +944,16 @@ def wizard_hubs(
     category: str | None = None,
     current_user: dict = Depends(get_current_user),
 ):
+    from core.shared.api_cache import CacheNS, cached
     from features.product_launch import wizard as wiz
 
-
-    return {"hubs": wiz.list_hubs_for_city(city, category)}
+    cache_key = f"hubs:{city}:{category or ''}"
+    return cached(
+        CacheNS.NPL_WIZARD,
+        cache_key,
+        lambda: {"hubs": wiz.list_hubs_for_city(city, category)},
+        ttl=_NPL_CACHE_TTL
+    )
 
 
 @router.post("/wizard/template/city")

@@ -543,26 +543,42 @@ def _require_salience(sal_df: pd.DataFrame) -> bool:
 
 
 def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> list:
-    if sal_df is None or sal_df.empty:
-        return []
+    if sal_df is None:
+        sal_df = pd.DataFrame()
 
-    # Prefer active hubs from Hub Sku Master when available for the city/category.
+    # 1. Prefer active hubs from Hub Sku Master when available for the city/category.
     hub_sku_df = load_hub_sku_master()
     if category and not hub_sku_df.empty:
         active_hubs = get_active_hubs_for_city(hub_sku_df, city, category)
         if active_hubs:
             return active_hubs
 
+    # 2. Try with category filtering from Hub Level Suggestion (salience) sheet
     city_col = _resolve_col(sal_df, "city_name", "City Name", "city")
     hub_col = _resolve_col(sal_df, "hub_name", "Hub Name", "hub")
-    if not city_col or not hub_col:
-        return []
-    mask = sal_df[city_col].astype(str).str.strip() == str(city).strip()
-    if category:
-        sc = _subcat_col(sal_df)
-        if sc in sal_df.columns:
-            mask &= sal_df[sc].astype(str).str.strip().str.lower() == category.strip().lower()
-    return sorted(sal_df.loc[mask, hub_col].dropna().astype(str).str.strip().unique().tolist())
+    
+    if city_col and hub_col and not sal_df.empty:
+        mask = sal_df[city_col].astype(str).str.strip().str.lower() == str(city).strip().lower()
+        if category:
+            sc = _subcat_col(sal_df)
+            if sc in sal_df.columns:
+                cat_mask = mask & (sal_df[sc].astype(str).str.strip().str.lower() == category.strip().lower())
+                hubs = sorted(sal_df.loc[cat_mask, hub_col].dropna().astype(str).str.strip().unique().tolist())
+                if hubs:
+                    return hubs
+
+        # 3. Fallback: Try fetching all hubs in this city from salience sheet, regardless of category
+        hubs = sorted(sal_df.loc[mask, hub_col].dropna().astype(str).str.strip().unique().tolist())
+        if hubs:
+            return hubs
+
+    # 4. Fallback: Try fetching all hubs in this city from Hub Sku Master, regardless of category
+    if not hub_sku_df.empty:
+        active_hubs = get_active_hubs_for_city(hub_sku_df, city, category=None)
+        if active_hubs:
+            return active_hubs
+
+    return []
 
 
 # ──────────────────────────────────────────────────────────────────
