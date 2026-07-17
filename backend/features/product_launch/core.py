@@ -27,10 +27,10 @@ import uuid
 import pandera as pa
 
 from app.config import (
-    CLUSTER_MASTER_SHEET_KEY,
     GOOGLE_CREDENTIALS_PATH,
     HUB_LEVEL_PLANNING_SHEET_KEY,
     OUTPUT_PATH,
+    NPL_SOURCE_SHEET_KEY,
 )
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -120,7 +120,7 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
 
 SERVICE_ACCOUNT_FILE = GOOGLE_CREDENTIALS_PATH
 SPREADSHEET_ID = HUB_LEVEL_PLANNING_SHEET_KEY
-MASTER_FILE_ID = CLUSTER_MASTER_SHEET_KEY
+MASTER_FILE_ID = NPL_SOURCE_SHEET_KEY
 MASTER_SHEET_NAME    = "P-L Master"
 OUTPUT_SHEET_NAME    = "Launch_Output"
 LOG_SHEET_NAME       = "Submission_Log"
@@ -224,18 +224,28 @@ def load_product_master() -> pd.DataFrame:
 
         with sheets_slot():
             sheet = _open_sheet(MASTER_FILE_ID, MASTER_SHEET_NAME)
-            return sheet.get_values("B:N")
+            return sheet.get_values("A:Z")
 
     data = read_sheet_values_cached(
         MASTER_FILE_ID,
         MASTER_SHEET_NAME,
-        "B:N",
+        "A:Z",
         sheet_category="demand_planning_masters",
         fetcher=_fetch,
     )
     if len(data) < 2:
         return pd.DataFrame()
-    df = pd.DataFrame(data[1:], columns=data[0])
+    headers = data[0]
+    num_cols = len(headers)
+    cleaned_rows = []
+    for r in data[1:]:
+        if len(r) < num_cols:
+            cleaned_rows.append(r + [""] * (num_cols - len(r)))
+        elif len(r) > num_cols:
+            cleaned_rows.append(r[:num_cols])
+        else:
+            cleaned_rows.append(r)
+    df = pd.DataFrame(cleaned_rows, columns=headers)
     df = _normalize_columns(df)
     for c in df.columns:
         if "order" in c.lower() and "type" in c.lower():
@@ -291,66 +301,50 @@ def get_product_info(df_master: pd.DataFrame, product_id: str) -> dict:
 # ──────────────────────────────────────────────────────────────────
 
 def load_salience_source() -> pd.DataFrame:
-    """Load hub-level plan from Hub Level Planning sheet (Product parity)."""
-    from features.product_launch.sheet_reads import read_sheet_values_cached
-
-
-    def _fetch():
-        from core.shared.sheets_throttle import sheets_slot
-
-
-        with sheets_slot():
-            sheet = _open_sheet(SPREADSHEET_ID, SALIENCE_SHEET_NAME)
-            return sheet.get_values("A:F")
-
-    data = read_sheet_values_cached(
-        SPREADSHEET_ID,
-        SALIENCE_SHEET_NAME,
-        "A:F",
-        sheet_category="hub_level_planning",
-        fetcher=_fetch,
-    )
-    if not data or len(data) < 2:
-        return pd.DataFrame()
-    df = pd.DataFrame(data[1:], columns=data[0])
-    df = _normalize_columns(df)
-    if "Base_plan" not in df.columns:
-        bp = _resolve_col(df, "Base_plan", "Base plan", "base_plan")
-        if bp:
-            df = df.rename(columns={bp: "Base_plan"})
-    if "Base_plan" not in df.columns:
-        return pd.DataFrame()
-    df["Base_plan"] = pd.to_numeric(df["Base_plan"], errors="coerce").fillna(0).round()
-    df = df[df["Base_plan"] > 0]
-    return df.reset_index(drop=True)
-
+    """Dynamically construct equal-weighted salience source from Hub_Mapping active hubs."""
+    return load_hub_salience()
 
 
 def load_hub_sku_master() -> pd.DataFrame:
-    """Load Hub Sku Master for active hub and expansion eligibility lookups."""
+    """Load Hub Sku Master equivalent (Hub_Mapping) for active hub and expansion eligibility lookups."""
     from features.product_launch.sheet_reads import read_sheet_values_cached
-
 
     def _fetch():
         from core.shared.sheets_throttle import sheets_slot
 
-
         with sheets_slot():
-            sheet = _open_sheet(SPREADSHEET_ID, HUB_SKU_MASTER_SHEET)
+            sheet = _open_sheet(MASTER_FILE_ID, "Hub_Mapping")
             return sheet.get_all_values()
 
     data = read_sheet_values_cached(
-        SPREADSHEET_ID,
-        HUB_SKU_MASTER_SHEET,
+        MASTER_FILE_ID,
+        "Hub_Mapping",
         "A:Z",
-        sheet_category="hub_sku_master",
+        sheet_category="demand_planning_masters",
         fetcher=_fetch,
     )
     if not data or len(data) < 2:
         return pd.DataFrame()
-    df = pd.DataFrame(data[1:], columns=data[0])
+    headers = data[0]
+    num_cols = len(headers)
+    cleaned_rows = []
+    for r in data[1:]:
+        if len(r) < num_cols:
+            cleaned_rows.append(r + [""] * (num_cols - len(r)))
+        elif len(r) > num_cols:
+            cleaned_rows.append(r[:num_cols])
+        else:
+            cleaned_rows.append(r)
+    df = pd.DataFrame(cleaned_rows, columns=headers)
     df = _normalize_columns(df)
-    for col in ["city_name", "hub_name", "sub_category", "Plan Flag"]:
+    
+    # Map the status column to Plan Flag to maintain compatibility
+    if "status" in df.columns:
+        df["Plan Flag"] = df["status"].astype(str).str.strip().str.upper()
+    else:
+        df["Plan Flag"] = "A" # fallback
+        
+    for col in ["city_name", "hub_name", "Plan Flag"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
     return df
@@ -365,8 +359,7 @@ def get_active_hubs_for_city(hub_sku_df: pd.DataFrame, city: str, category: str 
         ) & (
         hub_sku_df["Plan Flag"].astype(str).str.strip().str.upper() != "I"
         )
-    if category:
-        mask &= hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == category.strip().lower()
+    # Ignore category since Hub_Mapping is category-agnostic
     return sorted(hub_sku_df.loc[mask, "hub_name"].dropna().astype(str).str.strip().unique().tolist())
 
 
@@ -381,22 +374,19 @@ def get_expansion_hubs_for_city(
         return sorted(set(all_hubs_in_city))
 
     city_lower = str(city).strip().lower()
-    cat_lower = str(category).strip().lower()
-
-    city_cat_mask = (
+    
+    city_mask = (
         hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
-        ) & (
-        hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == cat_lower
     )
-    city_cat_df = hub_sku_df.loc[city_cat_mask]
+    city_df = hub_sku_df.loc[city_mask]
 
-    inactive_hubs = city_cat_df[
-        city_cat_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
+    inactive_hubs = city_df[
+        city_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
     ]["hub_name"].dropna().astype(str).str.strip().unique().tolist()
 
     present_hubs = {
         str(h).strip().lower()
-        for h in city_cat_df["hub_name"].dropna().astype(str).tolist()
+        for h in city_df["hub_name"].dropna().astype(str).tolist()
     }
     not_present_hubs = [
         hub for hub in all_hubs_in_city
@@ -411,19 +401,16 @@ def get_expansion_cities(hub_sku_df: pd.DataFrame, category: str, all_cities: li
     if hub_sku_df is None or hub_sku_df.empty:
         return []
     result = []
-    cat_lower = str(category).strip().lower()
 
     for city in all_cities:
         city_lower = str(city).strip().lower()
-        city_cat_mask = (
+        city_mask = (
             hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
-            ) & (
-            hub_sku_df["sub_category"].astype(str).str.strip().str.lower() == cat_lower
         )
-        city_cat_df = hub_sku_df.loc[city_cat_mask]
+        city_df = hub_sku_df.loc[city_mask]
 
         has_inactive = (
-            city_cat_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
+            city_df["Plan Flag"].astype(str).str.strip().str.upper() == "I"
         ).any()
         if has_inactive:
             result.append(city)
@@ -431,12 +418,11 @@ def get_expansion_cities(hub_sku_df: pd.DataFrame, category: str, all_cities: li
 
         present_hubs = {
             str(h).strip().lower()
-            for h in city_cat_df["hub_name"].dropna().astype(str).tolist()
+            for h in city_df["hub_name"].dropna().astype(str).tolist()
         }
-        all_city_mask = hub_sku_df["city_name"].astype(str).str.strip().str.lower() == city_lower
         all_hubs_city = {
             str(h).strip().lower()
-            for h in hub_sku_df.loc[all_city_mask, "hub_name"].dropna().astype(str).tolist()
+            for h in hub_sku_df.loc[city_mask, "hub_name"].dropna().astype(str).tolist()
         }
         if all_hubs_city - present_hubs:
             result.append(city)
@@ -445,81 +431,49 @@ def get_expansion_cities(hub_sku_df: pd.DataFrame, category: str, all_cities: li
 
 
 def compute_salience_category(df: pd.DataFrame) -> pd.DataFrame:
-    """Salience at city × hub × category (Product newlaunchv2_full.compute_salience_category)."""
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-
-    df = _normalize_columns(df.copy())
-    city_col = _resolve_col(df, "city_name", "City Name", "city")
-    hub_col = _resolve_col(df, "hub_name", "Hub Name", "hub")
-    sc_col = _subcat_col(df)
-    if not city_col or not hub_col or sc_col not in df.columns or "Base_plan" not in df.columns:
-        return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-
-    if sc_col != "sub_category":
-        df = df.rename(columns={sc_col: "sub_category"})
-
-    hub_tot = (
-        df.groupby([city_col, hub_col, "sub_category"], as_index=False)["Base_plan"]
-        .sum()
-        .rename(columns={city_col: "city_name", hub_col: "hub_name", "Base_plan": "hub_total"})
-    )
-    city_tot = (
-        df.groupby([city_col, "sub_category"], as_index=False)["Base_plan"]
-        .sum()
-        .rename(columns={city_col: "city_name", "Base_plan": "city_total"})
-    )
-    merged = pd.merge(hub_tot, city_tot, on=["city_name", "sub_category"], how="left")
-    merged["salience"] = np.where(
-        merged["city_total"] > 0,
-        merged["hub_total"] / merged["city_total"],
-        0.0,
-    )
-    return merged[["city_name", "hub_name", "sub_category", "salience"]]
-
+    """Salience helper, fallback to category-agnostic salience."""
+    return df[["city_name", "hub_name", "sub_category", "salience"]] if not df.empty else df
 
 
 def load_hub_salience() -> pd.DataFrame:
     """
-    Returns city_name, hub_name, sub_category, salience (+ day when available).
-
-    Primary source: Google Sheets **Hub level Suggestion** (Product).
-    Fallback: outputs/hub_suggestion_latest.parquet if present and valid.
+    Returns city_name, hub_name, sub_category, salience.
+    Generated dynamically from Hub_Mapping active hubs (status == 'A') with equal salience split.
     """
-    raw = load_salience_source()
-    if not raw.empty:
-        return compute_salience_category(raw)
-
-    path = os.path.join(OUTPUTS_DIR, "hub_suggestion_latest.parquet")
-    if not os.path.exists(path):
+    hub_sku_df = load_hub_sku_master()
+    if hub_sku_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-
-    df = pd.read_parquet(path)
-    df = _normalize_columns(df)
-    sc = _subcat_col(df)
-    if sc != "sub_category":
-        df = df.rename(columns={sc: "sub_category"})
-
-    city_col = _resolve_col(df, "city_name")
-    hub_col = _resolve_col(df, "hub_name")
-    if not city_col or not hub_col or "sub_category" not in df.columns:
+    
+    # Filter only active hubs
+    active_df = hub_sku_df[hub_sku_df["Plan Flag"].astype(str).str.strip().str.upper() == "A"].copy()
+    if active_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-
-    if city_col != "city_name":
-        df = df.rename(columns={city_col: "city_name"})
-    if hub_col != "hub_name":
-        df = df.rename(columns={hub_col: "hub_name"})
-
-    if "Base_plan" in df.columns and "salience" not in df.columns:
-        return compute_salience_category(df)
-
-    if "salience" in df.columns:
-        cols = ["city_name", "hub_name", "sub_category", "salience"]
-        if "day" in df.columns:
-            cols.append("day")
-        return df[[c for c in cols if c in df.columns]]
-
-    return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
+    
+    # Get active hub count per city
+    city_counts = active_df.groupby("city_name")["hub_name"].count().to_dict()
+    
+    # Load categories from product master
+    master_df = load_product_master()
+    categories = get_categories(master_df)
+    if not categories:
+        categories = ["default"]
+        
+    # Build dynamic equal-weighted salience rows
+    rows = []
+    for _, row in active_df.iterrows():
+        city = str(row["city_name"]).strip()
+        hub = str(row["hub_name"]).strip()
+        count = city_counts.get(city, 1)
+        salience = 1.0 / count if count > 0 else 1.0
+        for cat in categories:
+            rows.append({
+                "city_name": city,
+                "hub_name": hub,
+                "sub_category": cat,
+                "salience": salience
+            })
+            
+    return pd.DataFrame(rows)
 
 
 def get_cities_from_salience(sal_df: pd.DataFrame) -> list:
@@ -532,14 +486,7 @@ def get_cities_from_salience(sal_df: pd.DataFrame) -> list:
 
 
 def _require_salience(sal_df: pd.DataFrame) -> bool:
-    if sal_df is not None and not sal_df.empty:
-        return True
-    print(
-        "Could not load hub salience from **Hub level Suggestion** on the Hub Level "
-        f"Planning sheet. Open the sheet and confirm tab **{SALIENCE_SHEET_NAME}** has "
-        "columns city_name, hub_name, sub category, and Base_plan with data."
-    )
-    return False
+    return sal_df is not None and not sal_df.empty
 
 
 def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> list:

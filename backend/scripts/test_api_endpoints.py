@@ -161,12 +161,12 @@ def test_npl_notes():
     with patch("core.database.engine.Database.get_npl_submissions", return_value=mock_df):
         resp = client.get(
             "/api/new-product-launch/submissions/log",
-            params={"view": "detail", "submission_id": "SUB123"},
+            params={"view": "summary", "submission_id": "SUB123"},
             headers=headers
         )
     assert resp.status_code == 200, f"Expected 200 for fetching log, got {resp.status_code}"
     rows = resp.json().get("rows", [])
-    assert len(rows) > 0, "Expected at least one row in submission log detail"
+    assert len(rows) > 0, "Expected at least one row in submission log summary"
     assert rows[0].get("Notes") == "Test NPL Note Content", f"Expected notes to match, got {rows[0].get('Notes')}"
     print("OK: Fetched log contains the updated note")
 

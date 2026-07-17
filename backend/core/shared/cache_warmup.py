@@ -80,7 +80,8 @@ def start_cache_warmup() -> None:
             sheets = GoogleSheetsManager()
             
             # Pre-warm hub mapping sheets cache
-            sheets.read_worksheet_uncached("demand_planning_masters", "hub_mapping", HUB_MASTER_READ_RANGE, use_cache=True)
+            from app.config import NPL_SOURCE_SHEET_KEY
+            sheets.batch_read_worksheets(NPL_SOURCE_SHEET_KEY, [("Hub_Mapping", HUB_MASTER_READ_RANGE)], use_cache=True)
             # Pre-warm heavy P-H master sheets cache
             sheets.read_worksheet_uncached("demand_planning_masters", "product_hub_master", PH_MASTER_READ_RANGE, use_cache=True)
             # Pre-warm FF input configurations cache

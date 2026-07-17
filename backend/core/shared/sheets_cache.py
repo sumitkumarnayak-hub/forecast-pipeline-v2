@@ -99,4 +99,14 @@ def store_cached_df(path: Path, df: pd.DataFrame) -> None:
 def raw_to_df(data: list) -> pd.DataFrame:
     if not data or len(data) < 2:
         return pd.DataFrame()
-    return clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+    headers = data[0]
+    num_cols = len(headers)
+    cleaned_rows = []
+    for r in data[1:]:
+        if len(r) < num_cols:
+            cleaned_rows.append(r + [""] * (num_cols - len(r)))
+        elif len(r) > num_cols:
+            cleaned_rows.append(r[:num_cols])
+        else:
+            cleaned_rows.append(r)
+    return clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))

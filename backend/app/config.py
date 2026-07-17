@@ -59,9 +59,11 @@ EA_TRACKER_SHEET_URL = _env_path("EA_TRACKER_SHEET_URL")
 INVENTORY_BUFFER_SHEET_URL = _env_path("INVENTORY_BUFFER_SHEET_URL")
 NEW_PRODUCT_LAUNCH_SHEET_URL = os.getenv("NEW_PRODUCT_LAUNCH_SHEET_URL", "").strip()
 PIPELINE_PARAMS_SHEET_URL = os.getenv("PIPELINE_PARAMS_SHEET_URL", "").strip()
+NPL_SOURCE_SHEET_URL = os.getenv("NPL_SOURCE_SHEET_URL", "").strip()
 PIPELINE_PARAMS_VARIABLES_TAB = os.getenv("PIPELINE_PARAMS_VARIABLES_TAB", "Variables").strip() or "Variables"
 PIPELINE_PARAMS_HUB_CHANGES_TAB = os.getenv("PIPELINE_PARAMS_HUB_CHANGES_TAB", "Hub_Changes").strip() or "Hub_Changes"
 
+# Hub changes columns schema (from Master Data UI settings)
 HUB_CHANGES_COLUMNS = [
     "city_name",
     "Type",
@@ -86,6 +88,7 @@ DP_LOGICS_SHEET_KEY = sheet_id_from_url(DP_LOGICS_SHEET_URL)
 INV_LOGICS_SHEET_KEY = sheet_id_from_url(INVENTORY_BUFFER_SHEET_URL)
 EA_TRACKER_SHEET_KEY = sheet_id_from_url(EA_TRACKER_SHEET_URL)
 NEW_PRODUCT_LAUNCH_SHEET_KEY = sheet_id_from_url(NEW_PRODUCT_LAUNCH_SHEET_URL)
+NPL_SOURCE_SHEET_KEY = sheet_id_from_url(NPL_SOURCE_SHEET_URL)
 
 SHEETS_CONFIG = {
     "hub_level_planning": {

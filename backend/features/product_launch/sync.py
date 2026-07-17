@@ -23,7 +23,7 @@ HUB_MASTER_READ_RANGE = "A:F"
 P_MASTER_REQUIRED_COLS = [
     "Product id", "Sub-category", "SKU Class Prod", "Anchor ID", "Anchor Name", "Cut Classification",
 ]
-HUB_MAPPING_REQUIRED_COLS = ["hub_name", "city_name", "Hub_active"]
+HUB_MAPPING_REQUIRED_COLS = ["hub_name", "city_name", "status"]
 PH_MASTER_REQUIRED_COLS = ["product_id", "hub_name", "city_name", "Plan Design"]
 P_MASTER_NONEMPTY_FIELDS = ["Product id", "Sub-category", "SKU Class Prod"]
 
@@ -136,7 +136,7 @@ def build_new_product_ph_preview(
     p_id_col = "Product id"
     hub_name_col = "hub_name"
     city_name_col = "city_name"
-    hub_active_col = "Hub_active"
+    hub_active_col = "status"
 
     if product_ids:
         requested = [str(x).strip() for x in product_ids if str(x).strip()]
@@ -214,30 +214,45 @@ def build_new_product_ph_preview(
 
 
 def load_masters_for_product_sync(sheets: GoogleSheetsManager) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    from app.config import DEMAND_PLANNING_SHEET_ID
+    from app.config import DEMAND_PLANNING_SHEET_ID, NPL_SOURCE_SHEET_KEY
     from core.utils.dataframe import clean_sheet_df
 
-
-    raw = sheets.batch_read_worksheets(
-        DEMAND_PLANNING_SHEET_ID,
+    raw_npl = sheets.batch_read_worksheets(
+        NPL_SOURCE_SHEET_KEY,
         [
             ("P Master", P_MASTER_READ_RANGE),
-            ("Hub Mapping", HUB_MASTER_READ_RANGE),
+            ("Hub_Mapping", HUB_MASTER_READ_RANGE),
+        ],
+    )
+    
+    raw_dp = sheets.batch_read_worksheets(
+        DEMAND_PLANNING_SHEET_ID,
+        [
             ("P-H Master", PH_MASTER_READ_RANGE),
         ],
     )
 
-    def _to_df(name: str) -> pd.DataFrame | None:
-        data = raw.get(name) or []
+    def _to_df(raw_dict: dict, name: str) -> pd.DataFrame:
+        data = raw_dict.get(name) or []
         if not data or len(data) < 2:
             return pd.DataFrame()
-        return clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+        headers = data[0]
+        num_cols = len(headers)
+        cleaned_rows = []
+        for r in data[1:]:
+            if len(r) < num_cols:
+                cleaned_rows.append(r + [""] * (num_cols - len(r)))
+            elif len(r) > num_cols:
+                cleaned_rows.append(r[:num_cols])
+            else:
+                cleaned_rows.append(r)
+        return clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
 
-    p_df = _to_df("P Master")
-    hub_df = _to_df("Hub Mapping")
-    ph_df = _to_df("P-H Master")
+    p_df = _to_df(raw_npl, "P Master")
+    hub_df = _to_df(raw_npl, "Hub_Mapping")
+    ph_df = _to_df(raw_dp, "P-H Master")
     if p_df is None or hub_df is None or ph_df is None:
-        raise RuntimeError("Could not load P Master, Hub Mapping, or P-H Master from Google Sheets.")
+        raise RuntimeError("Could not load P Master, Hub_Mapping, or P-H Master from Google Sheets.")
     return p_df, hub_df, ph_df
 
 

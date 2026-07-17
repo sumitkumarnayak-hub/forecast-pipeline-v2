@@ -15,8 +15,8 @@ from core.utils.dataframe import clean_sheet_df
 
 
 PH_KEY_COLUMNS = ["product_id", "hub_name", "city_name"]
-HUB_MAPPING_READ_RANGE = "A:F"  # match master_data.py — ignore duplicate columns past F
-HUB_MAPPING_REQUIRED = ["hub_id", "hub_name", "city_id", "city_name", "Hub_active"]
+HUB_MAPPING_READ_RANGE = "A:F"
+HUB_MAPPING_REQUIRED = ["hub_id", "hub_name", "city_id", "city_name", "status"]
 PRODUCT_ID_HEADER_CANDIDATES = ["product_id", "Product ID", "product id"]
 
 
@@ -75,13 +75,25 @@ def _find_header(headers: Sequence[str], candidates: Sequence[str]) -> str | Non
 
 
 def _read_hub_mapping_df(sheets_manager) -> pd.DataFrame | None:
-    """Read Hub Mapping using canonical A:F range (legacy Master Data behaviour)."""
-    raw = sheets_manager.read_worksheet_uncached(
-        "demand_planning_masters", "hub_mapping", HUB_MAPPING_READ_RANGE,
+    """Read Hub_Mapping from NPL_SOURCE_SHEET_KEY using canonical A:F range."""
+    from app.config import NPL_SOURCE_SHEET_KEY
+    raw_dict = sheets_manager.batch_read_worksheets(
+        NPL_SOURCE_SHEET_KEY, [("Hub_Mapping", HUB_MAPPING_READ_RANGE)]
     )
-    if raw is None or raw.empty:
-        return raw
-    return clean_sheet_df(raw)
+    raw = raw_dict.get("Hub_Mapping")
+    if not raw or len(raw) < 2:
+        return pd.DataFrame()
+    headers = raw[0]
+    num_cols = len(headers)
+    cleaned_rows = []
+    for r in raw[1:]:
+        if len(r) < num_cols:
+            cleaned_rows.append(r + [""] * (num_cols - len(r)))
+        elif len(r) > num_cols:
+            cleaned_rows.append(r[:num_cols])
+        else:
+            cleaned_rows.append(r)
+    return clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
 
 
 def _repair_misplaced_hub_mapping_rows(
@@ -274,7 +286,7 @@ def _apply_hub_changes_to_mapping_row(
     if hub_id_col and mapping.hub_id:
         new_row[hub_id_col] = mapping.hub_id
     active_col = _find_header(
-        headers, ["Hub_active", "hub_active", "Hub Active", "Hub_active (A?)"],
+        headers, ["status", "Hub_active", "hub_active", "Hub Active", "Hub_active (A?)"],
     )
     if active_col:
         new_row[active_col] = "A"

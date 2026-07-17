@@ -1967,11 +1967,11 @@ def _get_product_master_details_map() -> dict[str, dict]:
         from features.product_launch.sheet_reads import read_sheet_values_cached
 
         def _fetch_pm():
-            sheet = _open_sheet(cfg.DEMAND_PLANNING_SHEET_ID, "P Master")
+            sheet = _open_sheet(cfg.NPL_SOURCE_SHEET_KEY, "P Master")
             return sheet.get_all_values()
         
         pm_data = read_sheet_values_cached(
-            cfg.DEMAND_PLANNING_SHEET_ID,
+            cfg.NPL_SOURCE_SHEET_KEY,
             "P Master",
             "all",
             sheet_category="demand_planning_masters",
@@ -2017,10 +2017,10 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             from features.product_launch.sheet_reads import read_sheet_values_cached
 
             def _fetch_pm():
-                sheet = _open_sheet(cfg.DEMAND_PLANNING_SHEET_ID, "P Master")
+                sheet = _open_sheet(cfg.NPL_SOURCE_SHEET_KEY, "P Master")
                 return sheet.get_all_values()
             pm_data = read_sheet_values_cached(
-                cfg.DEMAND_PLANNING_SHEET_ID,
+                cfg.NPL_SOURCE_SHEET_KEY,
                 "P Master",
                 "all",
                 sheet_category="demand_planning_masters",
