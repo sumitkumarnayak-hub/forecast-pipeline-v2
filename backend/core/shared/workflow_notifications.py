@@ -923,6 +923,16 @@ def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
           </p>
         </div>
         {table_html}
+        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
+          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
+          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
+            <li><strong>P Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>P-L Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pricing:</strong> <a href='https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Hub SKU Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pan India Sheet:</strong> <a href='https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+          </ul>
+        </div>
         <p style='margin-top:16px;padding:12px;background:#EFF6FF;border-radius:8px;
                   border-left:4px solid #2563EB;font-size:12px;'>
           <strong>Action required:</strong> Open Planning Suite → <strong>Hub Launch</strong>
@@ -1071,6 +1081,16 @@ def notify_hub_sku_master_changed(version_entry: dict) -> NotifyResult:
           </p>
         </div>
         {table_html}
+        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
+          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
+          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
+            <li><strong>P Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>P-L Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pricing:</strong> <a href='https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Hub SKU Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pan India Sheet:</strong> <a href='https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+          </ul>
+        </div>
         <p style='margin-top:16px;padding:12px;background:#EFF6FF;border-radius:8px;
                   border-left:4px solid #2563EB;font-size:12px;'>
           <strong>Action required:</strong> Open Planning Suite → <strong>Hub Launch</strong>

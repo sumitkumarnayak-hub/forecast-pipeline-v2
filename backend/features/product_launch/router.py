@@ -915,16 +915,40 @@ def npl_append_hub_sku_master_row(
 
         ws.append_row(row_values, value_input_option="USER_ENTERED")
 
-        # Immediately append the new row to watcher memory cache so preview updates instantly
+        # Immediately append the new row to watcher memory cache and persist a Version History log in the DB
         try:
             new_row_dict = {}
             for idx, h in enumerate(headers):
                 new_row_dict[h] = row_values[idx] if idx < len(row_values) else ""
             
+            row_count_before = len(_sku_state["last_known_rows"])
             _sku_state["last_known_rows"].append(new_row_dict)
             _sku_state["last_known_hash"] = _rows_hash(_sku_state["last_known_rows"])
+
+            # Save version log to DB
+            from core.database.engine import get_shared_database
+            db = get_shared_database()
+            version_id = f"v{int(time.time())}"
+            detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            summary = f"+1 row added manually: {new_row_dict.get('sku class prod') or new_row_dict.get('sku_class_prod', '')}"
+            diff = {
+                "added": [new_row_dict],
+                "removed": [],
+                "modified": [],
+                "unchanged_count": row_count_before
+            }
+            db.save_hub_sku_master_version(
+                version_id=version_id,
+                detected_at=detected_at,
+                summary=summary,
+                diff=diff,
+                row_count_before=row_count_before,
+                row_count_after=row_count_before + 1,
+                headers=headers
+            )
+            logger.info("[HubSkuMaster] Manually appended row version %s saved to DB", version_id)
         except Exception as cache_err:
-            logger.warning("[HubSkuMaster] Failed to update memory cache: %s", cache_err)
+            logger.warning("[HubSkuMaster] Failed to update memory cache or DB version: %s", cache_err)
 
         try:
             cache_path = _sheets_cache.cache_path_for_category("hub_sku_master", "hub_sku_master", "A:O")

@@ -60,7 +60,8 @@ const relativeTime = (raw: string): string => {
 
 function VersionDiffTable({ version }: { version: VersionEntry }) {
   const { diff, headers } = version;
-  const cols = headers.length > 0 ? headers : Object.keys((diff.added[0] || diff.removed[0] || {}) as Record<string,unknown>);
+  const cols = (headers.length > 0 ? headers : Object.keys((diff.added[0] || diff.removed[0] || {}) as Record<string,unknown>))
+    .filter(c => c && c.trim() !== "" && c.trim().toLowerCase() !== "selection");
   const TH = () => (
     <thead>
       <tr>
@@ -599,14 +600,14 @@ interface AddSkuModalProps {
 }
 
 function AddSkuModal({ headers, onClose, onSuccess }: AddSkuModalProps) {
-  const finalHeaders = (headers && headers.length > 0)
+  const finalHeaders = ((headers && headers.length > 0)
     ? headers
     : [
         'Channel', 'city_name', 'hub_name', 'sub category', 'sku class prod',
         'HTT', 'Hub active', 'Plan Flag',
         'Active_Flag_Mon', 'Active_Flag_Tue', 'Active_Flag_Wed',
         'Active_Flag_Thu', 'Active_Flag_Fri', 'Active_Flag_Sat', 'Active_Flag_Sun'
-      ];
+      ]).filter(h => h && h.trim() !== "" && h.trim().toLowerCase() !== "selection");
 
   const [form, setForm] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
