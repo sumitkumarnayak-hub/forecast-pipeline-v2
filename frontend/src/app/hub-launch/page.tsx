@@ -8,6 +8,7 @@ import { ExternalLink, Clock } from "lucide-react";
 
 interface NplInfo {
   ff_input_sheet_url: string | null;
+  hub_mapping_sheet_url: string | null;
   hub_sku_sheet_url: string | null;
   last_synced: string | null;
 }
@@ -86,10 +87,10 @@ function HubLaunchHeaderActions() {
         </a>
       )}
 
-      {/* Hub SKU Master Sheet button */}
-      {info?.hub_sku_sheet_url && (
+      {/* Hub Mapping sheet (dedicated env: HUB_MAPPING_SHEET_URL) */}
+      {info?.hub_mapping_sheet_url && (
         <a
-          href={info.hub_sku_sheet_url}
+          href={info.hub_mapping_sheet_url}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -111,7 +112,7 @@ function HubLaunchHeaderActions() {
           onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
         >
           <ExternalLink size={11} />
-          Hub SKU Master
+          Hub Mapping
         </a>
       )}
     </div>

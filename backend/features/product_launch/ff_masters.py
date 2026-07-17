@@ -7,21 +7,31 @@ import pandas as pd
 from google.oauth2.service_account import Credentials
 import gspread
 
-from app.config import FF_AUTOMATION_SHEET_KEY, GOOGLE_CREDENTIALS_PATH
+from app.config import (
+    FF_AUTOMATION_SHEET_KEY,
+    GOOGLE_CREDENTIALS_PATH,
+    HUB_MAPPING_READ_RANGE,
+    HUB_MAPPING_SHEET_KEY,
+    HUB_MAPPING_TAB_ALT,
+    HUB_MAPPING_TAB_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
 SHEET_CATEGORY = "ff_automation"
 SPREADSHEET_KEY = FF_AUTOMATION_SHEET_KEY
 
+HUB_MAPPING_SHEET_CATEGORY = "hub_mapping_sheet"
+HUB_MAPPING_SPREADSHEET_KEY = HUB_MAPPING_SHEET_KEY
+
 PRODUCT_MASTER_TAB = "P Master"
 PL_MASTER_TAB = "P-L Master"
-HUB_MAPPING_TAB = "Hub_Mapping"
-HUB_MAPPING_ALT_TAB = "Hub Mapping"
+HUB_MAPPING_TAB = HUB_MAPPING_TAB_NAME
+HUB_MAPPING_ALT_TAB = HUB_MAPPING_TAB_ALT
+HUB_MAPPING_RANGE = HUB_MAPPING_READ_RANGE
 PH_MASTER_TAB = "P-H Master"
 
 PRODUCT_MASTER_RANGE = "A:K"
-HUB_MAPPING_RANGE = "A:F"
 PH_MASTER_RANGE = "A:AX"
 PL_MASTER_RANGE = "A:Z"
 WIZARD_MASTER_TAB = PL_MASTER_TAB
@@ -81,18 +91,24 @@ def _open_sheet(spreadsheet_id: str, sheet_name: str):
     return sh.worksheet(sheet_name)
 
 
-def _fetch_sheet_values(tab_name: str, range_notation: str, *, alternates: list[str] | None = None) -> list[list[str]]:
+def _fetch_sheet_values(
+    spreadsheet_id: str,
+    tab_name: str,
+    range_notation: str,
+    *,
+    alternates: list[str] | None = None,
+) -> list[list[str]]:
     names = [tab_name]
     if alternates:
         names.extend(n for n in alternates if n not in names)
     last_exc: Exception | None = None
     for name in names:
         try:
-            sheet = _open_sheet(SPREADSHEET_KEY, name)
+            sheet = _open_sheet(spreadsheet_id, name)
             return sheet.get_values(range_notation) if range_notation else sheet.get_all_values()
         except Exception as exc:
             last_exc = exc
-            logger.debug("FF Automation tab %r unavailable: %s", name, exc)
+            logger.debug("Sheet %r tab %r unavailable: %s", spreadsheet_id, name, exc)
     if last_exc:
         raise last_exc
     return []
@@ -107,13 +123,38 @@ def read_ff_sheet_cached(
     from features.product_launch.sheet_reads import read_sheet_values_cached
 
     def _fetch():
-        return _fetch_sheet_values(tab_name, range_notation, alternates=alternates)
+        return _fetch_sheet_values(SPREADSHEET_KEY, tab_name, range_notation, alternates=alternates)
 
     return read_sheet_values_cached(
         SPREADSHEET_KEY,
         tab_name,
         range_notation,
         sheet_category=SHEET_CATEGORY,
+        fetcher=_fetch,
+    )
+
+
+def read_hub_mapping_sheet_cached(
+    tab_name: str,
+    range_notation: str,
+    *,
+    alternates: list[str] | None = None,
+) -> list[list[str]]:
+    from features.product_launch.sheet_reads import read_sheet_values_cached
+
+    def _fetch():
+        return _fetch_sheet_values(
+            HUB_MAPPING_SPREADSHEET_KEY,
+            tab_name,
+            range_notation,
+            alternates=alternates,
+        )
+
+    return read_sheet_values_cached(
+        HUB_MAPPING_SPREADSHEET_KEY,
+        tab_name,
+        range_notation,
+        sheet_category=HUB_MAPPING_SHEET_CATEGORY,
         fetcher=_fetch,
     )
 
@@ -168,17 +209,48 @@ def load_p_master_df() -> pd.DataFrame:
     return df
 
 
+def _clean_hub_mapping_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Hub_Mapping: columns A–E only, no blank rows, require hub_id or hub_name."""
+    from core.utils.dataframe import clean_sheet_df
+
+    if df.empty:
+        return df
+
+    df = clean_sheet_df(df)
+    # Restrict to Hub_Mapping columns A:E (ignore stray columns from sheet drift)
+    if len(df.columns) > 5:
+        df = df.iloc[:, :5].copy()
+        df.columns = list(df.columns[:5])
+
+    hub_id_col = _resolve_col(df, "hub_id", "Hub ID", "hubid")
+    hub_name_col = _resolve_col(df, "hub_name", "Hub Name", "hubname", "hub")
+    if hub_id_col or hub_name_col:
+        has_hub_id = (
+            df[hub_id_col].astype(str).str.strip().ne("")
+            if hub_id_col
+            else pd.Series(False, index=df.index)
+        )
+        has_hub_name = (
+            df[hub_name_col].astype(str).str.strip().ne("")
+            if hub_name_col
+            else pd.Series(False, index=df.index)
+        )
+        df = df[has_hub_id | has_hub_name]
+
+    return df.reset_index(drop=True)
+
+
 def load_hub_mapping_df() -> pd.DataFrame:
     try:
-        data = read_ff_sheet_cached(
+        data = read_hub_mapping_sheet_cached(
             HUB_MAPPING_TAB,
             HUB_MAPPING_RANGE,
             alternates=[HUB_MAPPING_ALT_TAB],
         )
     except Exception as exc:
-        logger.warning("Failed to load Hub Mapping from FF Automation: %s", exc)
+        logger.warning("Failed to load Hub Mapping from %s: %s", HUB_MAPPING_SPREADSHEET_KEY, exc)
         return pd.DataFrame()
-    return _values_to_df(data)
+    return _clean_hub_mapping_df(_values_to_df(data))
 
 
 def load_ph_master_df() -> pd.DataFrame:
@@ -212,3 +284,55 @@ def hub_mapping_as_catalog(hub_df: pd.DataFrame | None = None) -> pd.DataFrame:
         out["Plan Flag"] = "A"
     keep = [c for c in ["city_name", "hub_name", "Plan Flag"] if c in out.columns]
     return out[keep].dropna(how="all") if keep else pd.DataFrame()
+
+
+def invalidate_hub_mapping_cache() -> None:
+    """Drop parquet cache for Hub_Mapping on HUB_MAPPING_SHEET_URL."""
+    from features.product_launch.sheet_reads import invalidate_npl_sheet_cache
+
+    for tab in (HUB_MAPPING_TAB, HUB_MAPPING_ALT_TAB):
+        invalidate_npl_sheet_cache(HUB_MAPPING_SPREADSHEET_KEY, tab, HUB_MAPPING_RANGE)
+
+
+def fetch_hub_mapping_snapshot(*, bypass_cache: bool = False) -> tuple[list[dict], list[str]]:
+    """Load Hub_Mapping rows from FF Automation (cached unless bypass_cache=True)."""
+    import time
+
+    if bypass_cache:
+        invalidate_hub_mapping_cache()
+        data = _fetch_sheet_values(
+            HUB_MAPPING_SPREADSHEET_KEY,
+            HUB_MAPPING_TAB,
+            HUB_MAPPING_RANGE,
+            alternates=[HUB_MAPPING_ALT_TAB],
+        )
+        df = _clean_hub_mapping_df(_values_to_df(data))
+    else:
+        df = load_hub_mapping_df()
+
+    if df is None or df.empty:
+        return [], []
+
+    headers = [str(c) for c in df.columns]
+    rows = df.where(df.notna(), "").astype(str).replace({"nan": "", "None": ""}).to_dict(orient="records")
+    return rows, headers
+
+
+def open_hub_mapping_worksheet():
+    """Open Hub_Mapping tab on HUB_MAPPING_SHEET_URL."""
+    last_exc: Exception | None = None
+    for name in (HUB_MAPPING_TAB, HUB_MAPPING_ALT_TAB):
+        try:
+            return _open_sheet(HUB_MAPPING_SPREADSHEET_KEY, name)
+        except Exception as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Hub_Mapping worksheet not found on Hub Mapping sheet.")
+
+
+def append_hub_mapping_row(row_values: list[str]) -> None:
+    """Append one row to Hub_Mapping and invalidate cache."""
+    ws = open_hub_mapping_worksheet()
+    ws.append_row(row_values, value_input_option="USER_ENTERED")
+    invalidate_hub_mapping_cache()

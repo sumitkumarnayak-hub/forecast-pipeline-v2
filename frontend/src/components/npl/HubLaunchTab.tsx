@@ -40,6 +40,34 @@ interface PreviewData {
   total_to_insert: number; _elapsed_ms?: number;
 }
 
+const HUB_MAPPING_API = "/api/new-product-launch/sync-new-hub/hub-mapping";
+const HUB_MAPPING_API_LEGACY = "/api/new-product-launch/sync-new-hub/hub-sku-master";
+
+/** Try hub-mapping routes; fall back to deprecated hub-sku-master alias if backend not deployed yet. */
+async function hubMappingGet<T>(path: string, params?: Record<string, string | boolean>) {
+  try {
+    return await api.get<T>(`${HUB_MAPPING_API}${path}`, { params });
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) {
+      return await api.get<T>(`${HUB_MAPPING_API_LEGACY}${path}`, { params });
+    }
+    throw err;
+  }
+}
+
+async function hubMappingPost<T>(path: string, body?: object) {
+  try {
+    return await api.post<T>(`${HUB_MAPPING_API}${path}`, body ?? {});
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) {
+      return await api.post<T>(`${HUB_MAPPING_API_LEGACY}${path}`, body ?? {});
+    }
+    throw err;
+  }
+}
+
 const formatIST = (raw: string | null | undefined): string => {
   if (!raw) return "Never";
   try {
@@ -117,13 +145,13 @@ function VersionDiffTable({ version }: { version: VersionEntry }) {
 // ── Task 4: Version History with batch-5 pagination ──────────────────────────
 const VERSION_BATCH = 5;
 
-function VersionHistoryPanel({ history }: { history: VersionEntry[] }) {
+function VersionHistoryPanel({ history, sheetLabel = "FF Input" }: { history: VersionEntry[]; sheetLabel?: string }) {
   const [expandedId, setExpandedId] = useState<string|null>(history.length > 0 ? history[0].version_id : null);
   const [visibleCount, setVisibleCount] = useState(VERSION_BATCH);
 
   if (history.length === 0) return (
     <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
-      No version history yet. Changes to FF Input will appear here automatically.
+      No version history yet. Changes to {sheetLabel} will appear here automatically.
     </div>
   );
 
@@ -497,135 +525,23 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
 }
 
 
-// ── SkuVersionHistoryPanel ──────────────────────────────────────────────────
-function SkuVersionHistoryPanel({ history }: { history: VersionEntry[] }) {
-  const [expandedId, setExpandedId] = useState<string|null>(history.length > 0 ? history[0].version_id : null);
-  const [visibleCount, setVisibleCount] = useState(VERSION_BATCH);
-
-  if (history.length === 0) return (
-    <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
-      No version history yet. Changes to Hub SKU Master will appear here automatically.
-    </div>
-  );
-
-  const visibleHistory = history.slice(0, visibleCount);
-  const hasMore = visibleCount < history.length;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      {visibleHistory.map((ver, idx) => {
-        const isExpanded = expandedId === ver.version_id;
-        const isLatest = idx === 0;
-        return (
-          <div key={ver.version_id} style={{ display: "flex", gap: 0 }}>
-            <div style={{ width: 28, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0, marginTop: 14, background: isLatest ? "#a855f7" : "var(--text-muted)", border: isLatest ? "2px solid rgba(168,85,247,0.4)" : "2px solid var(--border)", boxShadow: isLatest ? "0 0 8px rgba(168,85,247,0.4)" : "none" }} />
-              {idx < visibleHistory.length - 1 && <div style={{ width: 1, flex: 1, background: "var(--border)", margin: "2px 0" }} />}
-            </div>
-            <div style={{ flex: 1, marginBottom: 8, paddingLeft: 8 }}>
-              <button type="button" onClick={() => setExpandedId(isExpanded ? null : ver.version_id)} style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", cursor: "pointer", padding: "8px 0 4px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-primary)" }}>{formatIST(ver.detected_at)}</span>
-                    {isLatest && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "4px", background: "rgba(168,85,247,0.15)", color: "#a855f7", fontWeight: 700 }}>Latest</span>}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
-                    <span style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>{ver.summary}</span>
-                    <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>- {relativeTime(ver.detected_at)}</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                    {ver.diff.added.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(16,185,129,0.1)", color: "#10b981", fontWeight: 600 }}>+{ver.diff.added.length} added</span>}
-                    {ver.diff.removed.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(239,68,68,0.1)", color: "#ef4444", fontWeight: 600 }}>-{ver.diff.removed.length} removed</span>}
-                    {ver.diff.modified.length > 0 && <span style={{ fontSize: "0.6rem", padding: "1px 5px", borderRadius: "3px", background: "rgba(234,179,8,0.1)", color: "#eab308", fontWeight: 600 }}>~{ver.diff.modified.length} modified</span>}
-                    <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", padding: "1px 5px" }}>{ver.row_count_before} → {ver.row_count_after} rows</span>
-                  </div>
-                </div>
-                {isExpanded ? <ChevronUp size={13} style={{ color: "var(--text-muted)", marginTop: 4, flexShrink: 0 }} /> : <ChevronDown size={13} style={{ color: "var(--text-muted)", marginTop: 4, flexShrink: 0 }} />}
-              </button>
-              {isExpanded && <div style={{ marginBottom: 8 }}><VersionDiffTable version={ver} /></div>}
-            </div>
-          </div>
-        );
-      })}
-
-      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4, paddingLeft: 28 }}>
-        {hasMore && (
-          <button
-            type="button"
-            onClick={() => setVisibleCount(c => c + VERSION_BATCH)}
-            style={{
-              fontSize: "0.7rem", padding: "4px 12px", borderRadius: "6px",
-              border: "1px solid var(--border)", background: "var(--bg-elevated)",
-              color: "var(--text-secondary)", cursor: "pointer",
-              display: "flex", alignItems: "center", gap: 4,
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
-          >
-            <ChevronDown size={11} />
-            Load {Math.min(VERSION_BATCH, history.length - visibleCount)} more
-            <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>({history.length - visibleCount} remaining)</span>
-          </button>
-        )}
-        {visibleCount > VERSION_BATCH && (
-          <button
-            type="button"
-            onClick={() => setVisibleCount(VERSION_BATCH)}
-            style={{
-              fontSize: "0.7rem", padding: "4px 10px", borderRadius: "6px",
-              border: "1px solid var(--border)", background: "transparent",
-              color: "var(--text-muted)", cursor: "pointer",
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-          >
-            Collapse
-          </button>
-        )}
-        {!hasMore && history.length > VERSION_BATCH && (
-          <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>All {history.length} versions shown</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── AddSkuModal ─────────────────────────────────────────────────────────────
-interface AddSkuModalProps {
+// ── AddHubMappingModal ──────────────────────────────────────────────────────
+interface AddHubMappingModalProps {
   headers?: string[];
   onClose: () => void;
   onSuccess: () => void;
 }
 
-function AddSkuModal({ headers, onClose, onSuccess }: AddSkuModalProps) {
-  const finalHeaders = ((headers && headers.length > 0)
-    ? headers
-    : [
-        'Channel', 'city_name', 'hub_name', 'sub category', 'sku class prod',
-        'HTT', 'Hub active', 'Plan Flag',
-        'Active_Flag_Mon', 'Active_Flag_Tue', 'Active_Flag_Wed',
-        'Active_Flag_Thu', 'Active_Flag_Fri', 'Active_Flag_Sat', 'Active_Flag_Sun'
-      ]).filter(h => h && h.trim() !== "" && h.trim().toLowerCase() !== "selection");
+function AddHubMappingModal({ headers, onClose, onSuccess }: AddHubMappingModalProps) {
+  const finalHeaders = (headers && headers.length > 0)
+    ? headers.filter(h => h && h.trim() !== "" && h.trim().toLowerCase() !== "selection")
+    : ["hub_id", "hub_name", "city_id", "city_name", "status"];
 
   const [form, setForm] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     finalHeaders.forEach(h => {
       const hLower = h.toLowerCase().trim().replace(/_/g, " ");
-      if (hLower === "channel") {
-        init[h] = "Online";
-      } else if (hLower === "htt") {
-        init[h] = "tail";
-      } else if (hLower === "hub active") {
-        init[h] = "1";
-      } else if (hLower === "plan flag") {
-        init[h] = "A";
-      } else if (hLower.startsWith("active flag")) {
-        init[h] = "1";
-      } else {
-        init[h] = "";
-      }
+      init[h] = (hLower === "status" || hLower === "plan flag") ? "A" : "";
     });
     return init;
   });
@@ -634,231 +550,93 @@ function AddSkuModal({ headers, onClose, onSuccess }: AddSkuModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     for (const h of finalHeaders) {
       const val = form[h]?.trim() ?? "";
       const hLower = h.toLowerCase().trim().replace(/_/g, " ");
-      if (!val) {
-        setError(`"${h}" is required.`);
-        return;
+      if (!val) { setError(`"${h}" is required.`); return; }
+      if (hLower === "hub id" || hLower === "hubid" || hLower === "city id" || hLower === "cityid") {
+        if (!/^\d+$/.test(val)) { setError(`"${h}" must contain numbers only.`); return; }
       }
-      if (hLower === "plan flag") {
-        if (val.toUpperCase() !== "A" && val.toUpperCase() !== "I") {
-          setError('"Plan Flag" must be "A" or "I".');
-          return;
-        }
-      }
-      if (hLower === "hub active" || hLower.startsWith("active flag")) {
-        if (!/^\d+$/.test(val)) {
-          setError(`"${h}" must contain numbers only.`);
-          return;
+      if (hLower === "status" || hLower === "plan flag") {
+        const up = val.toUpperCase();
+        if (!["A", "I", "1", "0", "ACTIVE", "INACTIVE"].includes(up)) {
+          setError('"Status" must be A/I (or 1/0).'); return;
         }
       }
     }
-
     setError("");
     setSubmitting(true);
     try {
-      await api.post("/api/new-product-launch/sync-new-hub/hub-sku-master/append", { row: form });
+      await hubMappingPost("/append", { row: form });
       onSuccess();
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } } };
-      setError(e?.response?.data?.detail || "Failed to add SKU configuration. Please try again.");
+      setError(e?.response?.data?.detail || "Failed to add hub mapping. Please try again.");
     } finally {
       setSubmitting(false);
     }
   };
 
+  const getInputType = (h: string) => h.toLowerCase().replace(/[\s_]/g, "").includes("id") ? "number" : "text";
+  const getPlaceholder = (h: string) => {
+    const norm = h.toLowerCase().replace(/[\s_]/g, "");
+    if (norm.includes("hubid")) return "e.g. 2606";
+    if (norm.includes("cityid")) return "e.g. 12";
+    if (norm.includes("hub")) return "e.g. AGC";
+    if (norm.includes("city")) return "e.g. NCR";
+    return `Enter ${h}`;
+  };
+
   return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 1000,
-      background: "rgba(15, 23, 42, 0.4)", backdropFilter: "blur(4px)",
-      display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
-    }}>
-      <div style={{
-        background: "#ffffff", border: "1px solid #e2e8f0",
-        borderRadius: "12px", width: "100%", maxWidth: 640,
-        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-        display: "flex", flexDirection: "column", maxHeight: "90vh",
-        animation: "fadeInScale 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-        color: "#1e293b"
-      }}>
-        <div style={{
-          padding: "1.25rem 1.5rem", borderBottom: "1px solid #e2e8f0",
-          display: "flex", alignItems: "center", gap: 12,
-          background: "#f8fafc", borderTopLeftRadius: "12px", borderTopRightRadius: "12px"
-        }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: "8px",
-            background: "rgba(124, 58, 237, 0.08)",
-            border: "1px solid rgba(124, 58, 237, 0.15)",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15, 23, 42, 0.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+      <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "12px", width: "100%", maxWidth: 540, boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", display: "flex", flexDirection: "column", maxHeight: "90vh", color: "#1e293b" }}>
+        <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid #e2e8f0", display: "flex", alignItems: "center", gap: 12, background: "#f8fafc" }}>
+          <div style={{ width: 36, height: 36, borderRadius: "8px", background: "rgba(124, 58, 237, 0.08)", border: "1px solid rgba(124, 58, 237, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Plus size={16} style={{ color: "#7c3aed" }} />
           </div>
           <div style={{ flex: 1 }}>
-            <h3 style={{ margin: 0, fontWeight: 600, fontSize: "0.95rem", color: "#0f172a" }}>Add New SKU Mapping</h3>
-            <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>Append a validated row to the Hub SKU Master sheet</p>
+            <h3 style={{ margin: 0, fontWeight: 600, fontSize: "0.95rem", color: "#0f172a" }}>Add Hub Mapping</h3>
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>Append a validated row to FF Automation → Hub_Mapping</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: "transparent", border: "none",
-              cursor: "pointer", color: "#64748b", padding: "6px", borderRadius: "8px",
-              transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center"
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = "#f1f5f9";
-              e.currentTarget.style.color = "#0f172a";
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "#64748b";
-            }}
-          >
-            <X size={16} />
-          </button>
+          <button type="button" onClick={onClose} style={{ background: "transparent", border: "none", cursor: "pointer", color: "#64748b", padding: "6px" }}><X size={16} /></button>
         </div>
-
         <form onSubmit={handleSubmit} style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
             {error && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: "0.75rem 1rem", borderRadius: "6px",
-                background: "#fef2f2", border: "1px solid #fee2e2",
-                fontSize: "0.78rem", color: "#b91c1c",
-              }}>
-                <XCircle size={14} style={{ flexShrink: 0 }} />
-                <span>{error}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0.75rem 1rem", borderRadius: "6px", background: "#fef2f2", border: "1px solid #fee2e2", fontSize: "0.78rem", color: "#b91c1c" }}>
+                <XCircle size={14} /><span>{error}</span>
               </div>
             )}
-            
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
               {finalHeaders.map(header => {
-                const isDropdown = ["channel", "htt", "plan flag"].includes(header.toLowerCase().trim().replace(/_/g, " "));
-                const isFullWidth = ["sku class prod"].includes(header.toLowerCase().trim().replace(/_/g, " "));
-                
+                const hLower = header.toLowerCase().trim().replace(/_/g, " ");
+                const isStatus = hLower === "status" || hLower === "plan flag";
+                const isFullWidth = hLower === "hub name" || hLower === "city name";
                 return (
                   <div key={header} style={{ gridColumn: isFullWidth ? "span 2" : "auto" }}>
-                    <label style={{
-                      display: "flex", alignItems: "center", gap: 4,
-                      fontSize: "0.72rem", fontWeight: 600,
-                      color: "#475569",
-                      marginBottom: "0.25rem",
-                    }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.75rem", fontWeight: 600, color: "#475569", marginBottom: "0.35rem" }}>
                       {header.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
-                      <span style={{ color: "#ef4444", fontSize: "0.75rem" }}>*</span>
+                      <span style={{ color: "#ef4444" }}>*</span>
                     </label>
-                    
-                    {isDropdown ? (
-                      <select
-                        value={form[header] ?? ""}
-                        onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))}
-                        className="form-input"
-                        style={{
-                          width: "100%", boxSizing: "border-box", fontSize: "0.82rem",
-                          background: "#ffffff", border: "1px solid #cbd5e1",
-                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
-                          outline: "none"
-                        }}
-                      >
-                        {header.toLowerCase().trim().replace(/_/g, " ") === "channel" ? (
-                          <>
-                            <option value="Online">Online</option>
-                            <option value="Store">Store</option>
-                            <option value="All">All</option>
-                          </>
-                        ) : header.toLowerCase().trim().replace(/_/g, " ") === "plan flag" ? (
-                          <>
-                            <option value="A">Active (A)</option>
-                            <option value="I">Inactive (I)</option>
-                          </>
-                        ) : (
-                          <>
-                            <option value="tail">tail</option>
-                            <option value="head">head</option>
-                          </>
-                        )}
+                    {isStatus ? (
+                      <select value={form[header] ?? "A"} onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))} className="form-input" style={{ width: "100%", fontSize: "0.82rem", padding: "0.5rem 0.75rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
+                        <option value="A">Active (A)</option>
+                        <option value="I">Inactive (I)</option>
                       </select>
                     ) : (
-                      <input
-                        type="text"
-                        value={form[header] ?? ""}
-                        onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))}
-                        placeholder={`Enter ${header}`}
-                        className="form-input"
-                        style={{
-                          width: "100%", boxSizing: "border-box", fontSize: "0.82rem",
-                          background: "#ffffff", border: "1px solid #cbd5e1",
-                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
-                          transition: "border-color 0.15s, box-shadow 0.15s",
-                          outline: "none"
-                        }}
-                        onFocus={e => {
-                          e.currentTarget.style.borderColor = "#7c3aed";
-                          e.currentTarget.style.boxShadow = "0 0 0 3px rgba(124, 58, 237, 0.1)";
-                        }}
-                        onBlur={e => {
-                          e.currentTarget.style.borderColor = "#cbd5e1";
-                          e.currentTarget.style.boxShadow = "none";
-                        }}
-                      />
+                      <input type={getInputType(header)} value={form[header] ?? ""} onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))} placeholder={getPlaceholder(header)} className="form-input" style={{ width: "100%", fontSize: "0.82rem", padding: "0.5rem 0.75rem", borderRadius: "6px", border: "1px solid #cbd5e1" }} />
                     )}
                   </div>
                 );
               })}
             </div>
           </div>
-
-          <div style={{
-            padding: "1rem 1.5rem", borderTop: "1px solid #e2e8f0",
-            display: "flex", gap: 10, justifyContent: "flex-end",
-            background: "#f8fafc", borderBottomLeftRadius: "12px", borderBottomRightRadius: "12px"
-          }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={onClose}
-              disabled={submitting}
-              style={{
-                borderRadius: "6px", padding: "0.5rem 1rem", fontSize: "0.8rem",
-                background: "#ffffff", border: "1px solid #cbd5e1", color: "#475569"
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = "#f8fafc";
-                e.currentTarget.style.color = "#0f172a";
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = "#ffffff";
-                e.currentTarget.style.color = "#475569";
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "0.5rem 1.25rem", borderRadius: "6px", border: "none",
-                background: "#7c3aed",
-                color: "#fff", fontWeight: 600, fontSize: "0.8rem",
-                cursor: submitting ? "not-allowed" : "pointer",
-                boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
-                opacity: submitting ? 0.7 : 1, transition: "all 0.15s",
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = "#6d28d9";
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = "#7c3aed";
-              }}
-            >
+          <div style={{ padding: "1rem 1.5rem", borderTop: "1px solid #e2e8f0", display: "flex", gap: 10, justifyContent: "flex-end", background: "#f8fafc" }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onClose} disabled={submitting}>Cancel</button>
+            <button type="submit" disabled={submitting} style={{ display: "flex", alignItems: "center", gap: 6, padding: "0.5rem 1.25rem", borderRadius: "6px", border: "none", background: "#7c3aed", color: "#fff", fontWeight: 600, fontSize: "0.8rem", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.7 : 1 }}>
               {submitting ? <RefreshCw size={13} className="animate-spin" /> : <Plus size={13} />}
-              {submitting ? "Adding…" : "Add SKU Mapping"}
+              {submitting ? "Adding…" : "Add Hub Mapping"}
             </button>
           </div>
         </form>
@@ -885,14 +663,14 @@ export default function HubLaunchTab() {
   const [lastUpdate, setLastUpdate] = useState<{ ts: string | null; user_id: string | null } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Hub SKU Master replica state variables
-  const [skuData, setSkuData] = useState<FFInputData | null>(null);
-  const [loadingSku, setLoadingSku] = useState(false);
-  const [skuChangeStatus, setSkuChangeStatus] = useState<ChangeStatus | null>(null);
-  const [showSkuHistory, setShowSkuHistory] = useState(false);
-  const [showAddSku, setShowAddSku] = useState(false);
-  const [skuLastUpdate, setSkuLastUpdate] = useState<{ ts: string | null; user_id: string | null } | null>(null);
-  const skuPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Hub Mapping (FF Automation → Hub_Mapping) state
+  const [hubMappingData, setHubMappingData] = useState<FFInputData | null>(null);
+  const [loadingHubMapping, setLoadingHubMapping] = useState(false);
+  const [hubMappingChangeStatus, setHubMappingChangeStatus] = useState<ChangeStatus | null>(null);
+  const [showHubMappingHistory, setShowHubMappingHistory] = useState(false);
+  const [showAddHubMapping, setShowAddHubMapping] = useState(false);
+  const [hubMappingLastUpdate, setHubMappingLastUpdate] = useState<{ ts: string | null; user_id: string | null } | null>(null);
+  const hubMappingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchFFInput = useCallback(async (bypass: boolean) => {
     setLoadingFf(true);
@@ -928,46 +706,46 @@ export default function HubLaunchTab() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchFFInput, fetchChangeStatus, fetchLastUpdate]);
 
-  // Hub SKU Master data fetching callbacks
-  const fetchSkuMaster = useCallback(async (bypass: boolean) => {
-    setLoadingSku(true);
+  // Hub Mapping data fetching callbacks
+  const fetchHubMapping = useCallback(async (bypass: boolean) => {
+    setLoadingHubMapping(true);
     const t0 = performance.now();
     try {
-      const { data } = await api.get<FFInputData>(`/api/new-product-launch/sync-new-hub/hub-sku-master?bypass_cache=${bypass}`);
-      console.info(`[HubLaunchTab] SKU Master: ${data.row_count} rows in ${Math.round(performance.now()-t0)}ms`);
-      setSkuData(data);
-    } catch(e) { console.error("[HubLaunchTab] Hub SKU Master fetch failed:", e); }
-    finally { setLoadingSku(false); }
+      const { data } = await hubMappingGet<FFInputData>("", { bypass_cache: bypass });
+      console.info(`[HubLaunchTab] Hub Mapping: ${data.row_count} rows in ${Math.round(performance.now()-t0)}ms`);
+      setHubMappingData(data);
+    } catch(e) { console.error("[HubLaunchTab] Hub Mapping fetch failed:", e); }
+    finally { setLoadingHubMapping(false); }
   }, []);
 
-  const fetchSkuChangeStatus = useCallback(async () => {
+  const fetchHubMappingChangeStatus = useCallback(async () => {
     try {
-      const { data } = await api.get<ChangeStatus>("/api/new-product-launch/sync-new-hub/hub-sku-master/change-status");
-      setSkuChangeStatus(data);
-    } catch(e) { console.warn("[HubLaunchTab] SKU change-status poll failed:", e); }
+      const { data } = await hubMappingGet<ChangeStatus>("/change-status");
+      setHubMappingChangeStatus(data);
+    } catch(e) { console.warn("[HubLaunchTab] Hub Mapping change-status poll failed:", e); }
   }, []);
 
-  const fetchSkuLastUpdate = useCallback(async () => {
+  const fetchHubMappingLastUpdate = useCallback(async () => {
     try {
-      const { data } = await api.get<{ ts: string | null; user_id: string | null }>("/api/new-product-launch/sync-new-hub/hub-sku-master/last-update");
-      setSkuLastUpdate(data);
-    } catch(e) { console.warn("[HubLaunchTab] Failed to fetch SKU last update:", e); }
+      const { data } = await hubMappingGet<{ ts: string | null; user_id: string | null }>("/last-update");
+      setHubMappingLastUpdate(data);
+    } catch(e) { console.warn("[HubLaunchTab] Failed to fetch Hub Mapping last update:", e); }
   }, []);
 
-  const dismissSkuChanges = async () => {
+  const dismissHubMappingChanges = async () => {
     try {
-      await api.post("/api/new-product-launch/sync-new-hub/hub-sku-master/dismiss-changes", {});
-      setSkuChangeStatus(prev => prev ? { ...prev, change_detected: false } : prev);
-    } catch(e) { console.error("[HubLaunchTab] SKU dismiss failed:", e); }
+      await hubMappingPost("/dismiss-changes", {});
+      setHubMappingChangeStatus(prev => prev ? { ...prev, change_detected: false } : prev);
+    } catch(e) { console.error("[HubLaunchTab] Hub Mapping dismiss failed:", e); }
   };
 
   useEffect(() => {
-    fetchSkuMaster(false);
-    fetchSkuChangeStatus();
-    fetchSkuLastUpdate();
-    skuPollRef.current = setInterval(fetchSkuChangeStatus, 15_000);
-    return () => { if (skuPollRef.current) clearInterval(skuPollRef.current); };
-  }, [fetchSkuMaster, fetchSkuChangeStatus, fetchSkuLastUpdate]);
+    fetchHubMapping(false);
+    fetchHubMappingChangeStatus();
+    fetchHubMappingLastUpdate();
+    hubMappingPollRef.current = setInterval(fetchHubMappingChangeStatus, 15_000);
+    return () => { if (hubMappingPollRef.current) clearInterval(hubMappingPollRef.current); };
+  }, [fetchHubMapping, fetchHubMappingChangeStatus, fetchHubMappingLastUpdate]);
 
   const fetchPreview = async (bypassCache: boolean) => {
     setRunning(true); setMsg({ text: "", type: "" }); setPreview(null);
@@ -1027,12 +805,12 @@ export default function HubLaunchTab() {
         />
       )}
 
-      {/* Add Sku Modal */}
-      {showAddSku && (
-        <AddSkuModal
-          headers={skuData?.headers}
-          onClose={() => setShowAddSku(false)}
-          onSuccess={() => { fetchSkuMaster(true); fetchSkuLastUpdate(); }}
+      {/* Add Hub Mapping Modal */}
+      {showAddHubMapping && (
+        <AddHubMappingModal
+          headers={hubMappingData?.headers}
+          onClose={() => setShowAddHubMapping(false)}
+          onSuccess={() => { fetchHubMapping(true); fetchHubMappingLastUpdate(); }}
         />
       )}
 
@@ -1150,41 +928,39 @@ export default function HubLaunchTab() {
         {showHistory && <div style={{ padding: "1rem 1rem 0.75rem" }}><VersionHistoryPanel history={history} /></div>}
       </div>
 
-      {/* Sku Master Change Banner */}
-      {skuChangeStatus?.change_detected && (
+      {/* Hub Mapping Change Banner */}
+      {hubMappingChangeStatus?.change_detected && (
         <div style={{ background: "rgba(168,85,247,0.07)", border: "1px solid rgba(168,85,247,0.35)", borderRadius: "12px", padding: "0.9rem 1rem" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
             <Bell size={16} style={{ color: "#a855f7", marginTop: 2, flexShrink: 0 }} />
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <strong style={{ fontSize: "0.83rem", color: "var(--text-primary)" }}>Hub SKU Master Sheet Changed</strong>
-                {skuChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.15)", color: "#a855f7", fontWeight: 700 }}>{skuChangeStatus.change_history[0].summary}</span>}
-                {skuChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>{relativeTime(skuChangeStatus.change_history[0].detected_at)}</span>}
+                <strong style={{ fontSize: "0.83rem", color: "var(--text-primary)" }}>Hub Mapping Sheet Changed</strong>
+                {hubMappingChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.15)", color: "#a855f7", fontWeight: 700 }}>{hubMappingChangeStatus.change_history[0].summary}</span>}
+                {hubMappingChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>{relativeTime(hubMappingChangeStatus.change_history[0].detected_at)}</span>}
               </div>
-              <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", margin: "0 0 8px" }}>The Hub SKU Master configuration was updated. Email alert has been sent.</p>
+              <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", margin: "0 0 8px" }}>The Hub Mapping configuration was updated. Email alert has been sent.</p>
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => { setShowSkuHistory(true); dismissSkuChanges(); }} style={{ fontSize: "0.72rem", padding: "4px 12px", background: "#a855f7", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                  <ArrowLeftRight size={11} /> View Sku Version History
+                <button type="button" onClick={() => { setShowHubMappingHistory(true); dismissHubMappingChanges(); }} style={{ fontSize: "0.72rem", padding: "4px 12px", background: "#a855f7", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                  <ArrowLeftRight size={11} /> View Hub Mapping Version History
                 </button>
-                <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.72rem", padding: "4px 12px", height: "auto" }} onClick={dismissSkuChanges}>Dismiss</button>
+                <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.72rem", padding: "4px 12px", height: "auto" }} onClick={dismissHubMappingChanges}>Dismiss</button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Hub SKU Master Sheet Table */}
+      {/* Hub Mapping Sheet Table */}
       <div className="card" style={{ borderRadius: "12px", padding: 0, overflow: "hidden" }}>
         <div style={{ display: "flex", flexDirection: "column", padding: "0.65rem 1rem", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Database size={14} style={{ color: "#a855f7" }} />
-              <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>Hub SKU Master Sheet</span>
-              {skuData && (
+              <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>Hub Mapping Sheet</span>
+              {hubMappingData && (
                 <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.12)", color: "#a855f7", fontWeight: 600 }}>
-                  {skuData.total_row_count
-                    ? `Showing ${skuData.row_count} rows out of ${skuData.total_row_count} rows`
-                    : `${skuData.row_count} rows`}
+                  {`${hubMappingData.row_count} rows`}
                 </span>
               )}
             </div>
@@ -1192,7 +968,7 @@ export default function HubLaunchTab() {
               {canWrite && (
                 <button
                   type="button"
-                  onClick={() => setShowAddSku(true)}
+                  onClick={() => setShowAddHubMapping(true)}
                   style={{
                     fontSize: "0.78rem", padding: "6px 14px", height: "auto",
                     display: "flex", alignItems: "center", gap: 5,
@@ -1211,55 +987,55 @@ export default function HubLaunchTab() {
                   }}
                 >
                   <Plus size={12} />
-                  Add SKU
+                  Add Hub Mapping
                 </button>
               )}
 
-              <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.68rem", padding: "4px 10px", height: "auto", display: "flex", alignItems: "center", gap: 3 }} onClick={() => fetchSkuMaster(true)} disabled={loadingSku}>
-                <RefreshCw size={10} className={loadingSku ? "animate-spin" : ""} /> {loadingSku ? "Fetching..." : "Refresh Live"}
+              <button type="button" className="btn btn-sm btn-ghost" style={{ fontSize: "0.68rem", padding: "4px 10px", height: "auto", display: "flex", alignItems: "center", gap: 3 }} onClick={() => fetchHubMapping(true)} disabled={loadingHubMapping}>
+                <RefreshCw size={10} className={loadingHubMapping ? "animate-spin" : ""} /> {loadingHubMapping ? "Fetching..." : "Refresh Live"}
               </button>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.64rem", color: "var(--text-muted)", flexWrap: "wrap", gap: 8, borderTop: "1px solid rgba(255,255,255,0.03)", paddingTop: "6px" }}>
-            {skuLastUpdate && skuLastUpdate.ts ? (
+            {hubMappingLastUpdate && hubMappingLastUpdate.ts ? (
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <Clock size={10} />
-                Last updated by : <strong style={{ color: "var(--text-secondary)" }}>{skuLastUpdate.user_id}</strong> at {formatIST(skuLastUpdate.ts)}
+                Last updated by : <strong style={{ color: "var(--text-secondary)" }}>{hubMappingLastUpdate.user_id}</strong> at {formatIST(hubMappingLastUpdate.ts)}
               </span>
             ) : (
               <span />
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {skuChangeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(skuChangeStatus.last_checked_at)}</span>}
-              {skuData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(skuData.cache_last_updated)}</span>}
+              {hubMappingChangeStatus?.last_checked_at && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 3 }}><Clock size={9} /> Checked {relativeTime(hubMappingChangeStatus.last_checked_at)}</span>}
+              {hubMappingData?.cache_last_updated && <span style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>Cached: {formatIST(hubMappingData.cache_last_updated)}</span>}
             </div>
           </div>
         </div>
-        {loadingSku && !skuData ? (
-          <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}><RefreshCw size={13} className="animate-spin inline mr-2" />Loading Hub SKU Master...</div>
-        ) : skuData && skuData.rows.length > 0 ? (
+        {loadingHubMapping && !hubMappingData ? (
+          <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}><RefreshCw size={13} className="animate-spin inline mr-2" />Loading Hub Mapping...</div>
+        ) : hubMappingData && hubMappingData.rows.length > 0 ? (
           <div style={{ overflowX: "auto", maxHeight: "210px", overflowY: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.71rem" }}>
-              <thead><tr style={{ background: "rgba(255,255,255,0.04)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0 }}>{skuData.headers.map(h => <th key={h} style={{ padding: "0.38rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.04em", fontSize: "0.62rem" }}>{h}</th>)}</tr></thead>
-              <tbody>{skuData.rows.map((row, i) => <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>{skuData.headers.map(h => <td key={h} style={{ padding: "0.33rem 0.75rem", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{String(row[h] ?? "")}</td>)}</tr>)}</tbody>
+              <thead><tr style={{ background: "rgba(255,255,255,0.04)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0 }}>{hubMappingData.headers.map(h => <th key={h} style={{ padding: "0.38rem 0.75rem", textAlign: "left", fontWeight: 600, color: "var(--text-secondary)", whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.04em", fontSize: "0.62rem" }}>{h}</th>)}</tr></thead>
+              <tbody>{hubMappingData.rows.map((row, i) => <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>{hubMappingData.headers.map(h => <td key={h} style={{ padding: "0.33rem 0.75rem", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{String(row[h] ?? "")}</td>)}</tr>)}</tbody>
             </table>
           </div>
         ) : (
-          <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>No SKU Master rows. Click Refresh Live to fetch from sheet.</div>
+          <div style={{ padding: "1.25rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>No Hub Mapping rows. Click Refresh Live to fetch from sheet.</div>
         )}
       </div>
 
-      {/* Hub SKU Master Version History */}
+      {/* Hub Mapping Version History */}
       <div className="card" style={{ borderRadius: "12px", padding: 0, overflow: "hidden" }}>
-        <button type="button" onClick={() => setShowSkuHistory(!showSkuHistory)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 1rem", background: "transparent", border: "none", borderBottom: showSkuHistory ? "1px solid var(--border)" : "none", cursor: "pointer", gap: 8 }}>
+        <button type="button" onClick={() => setShowHubMappingHistory(!showHubMappingHistory)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 1rem", background: "transparent", border: "none", borderBottom: showHubMappingHistory ? "1px solid var(--border)" : "none", cursor: "pointer", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <ArrowLeftRight size={13} style={{ color: "var(--text-secondary)" }} />
-            <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>Hub SKU Master Version History</span>
-            {skuChangeStatus && skuChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.12)", color: "#a855f7", fontWeight: 600 }}>{skuChangeStatus.change_history.length} version{skuChangeStatus.change_history.length !== 1 ? "s" : ""}</span>}
+            <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>Hub Mapping Version History</span>
+            {hubMappingChangeStatus && hubMappingChangeStatus.change_history.length > 0 && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.12)", color: "#a855f7", fontWeight: 600 }}>{hubMappingChangeStatus.change_history.length} version{hubMappingChangeStatus.change_history.length !== 1 ? "s" : ""}</span>}
           </div>
-          {showSkuHistory ? <ChevronUp size={13} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={13} style={{ color: "var(--text-muted)" }} />}
+          {showHubMappingHistory ? <ChevronUp size={13} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={13} style={{ color: "var(--text-muted)" }} />}
         </button>
-        {showSkuHistory && skuChangeStatus && <div style={{ padding: "1rem 1rem 0.75rem" }}><SkuVersionHistoryPanel history={skuChangeStatus.change_history} /></div>}
+        {showHubMappingHistory && hubMappingChangeStatus && <div style={{ padding: "1rem 1rem 0.75rem" }}><VersionHistoryPanel history={hubMappingChangeStatus.change_history} sheetLabel="Hub Mapping" /></div>}
       </div>
 
       {msg.text && (

@@ -34,7 +34,7 @@ _state: dict[str, Any] = {
     "poll_interval_seconds": 45,
 }
 
-_sku_state: dict[str, Any] = {
+_hub_mapping_state: dict[str, Any] = {
     "last_known_hash": None,
     "last_known_rows": [],
     "change_detected": False,
@@ -58,16 +58,21 @@ def _row_key(row: dict, headers: list[str]) -> str:
     return f"{hub_val.lower()}|{src_val.lower()}"
 
 
-def _sku_row_key(row: dict, headers: list[str]) -> str:
-    """Build a composite key for Hub Sku Master (hub_name + sku_class_prod + channel)."""
-    hub_col = next((h for h in headers if h.strip().lower() in ("hub_name", "hub name")), None)
-    sku_col = next((h for h in headers if h.strip().lower() in ("sku class prod", "sku_class_prod", "sku")), None)
-    chan_col = next((h for h in headers if h.strip().lower() in ("channel")), None)
-    
-    hub_val = str(row.get(hub_col or "", "") or "").strip()
-    sku_val = str(row.get(sku_col or "", "") or "").strip()
-    chan_val = str(row.get(chan_col or "", "") or "").strip()
-    return f"{hub_val.lower()}|{sku_val.lower()}|{chan_val.lower()}"
+def _hub_mapping_row_key(row: dict, headers: list[str]) -> str:
+    """Composite key for FF Automation Hub_Mapping (hub_id + hub_name)."""
+    def _pick(*names: str) -> str:
+        for name in names:
+            col = next((h for h in headers if h.strip().lower().replace(" ", "_") == name), None)
+            if col:
+                return str(row.get(col, "") or "").strip()
+        return ""
+
+    hub_id = _pick("hub_id", "hubid")
+    hub_name = _pick("hub_name", "hubname", "hub")
+    city_name = _pick("city_name", "cityname", "city")
+    if hub_id and hub_name:
+        return f"{hub_id.lower()}|{hub_name.lower()}"
+    return f"{hub_name.lower()}|{city_name.lower()}"
 
 
 def _rows_hash(rows: list[dict]) -> str:
@@ -356,84 +361,66 @@ def start_ff_input_watcher(interval_seconds: int = 45) -> None:
     t.start()
 
 
-def get_hub_sku_master_change_status() -> dict:
-    """Return current Hub SKU Master watcher state — called by API endpoint."""
+def get_hub_mapping_change_status() -> dict:
+    """Return current FF Automation Hub_Mapping watcher state."""
     from core.database.engine import get_shared_database
 
     db = get_shared_database()
-    
-    db_status = db.get_latest_hub_sku_master_status()
-    db_history = db.get_hub_sku_master_versions(limit=_MAX_HISTORY)
-    
+
+    db_status = db.get_latest_hub_mapping_status()
+    db_history = db.get_hub_mapping_versions(limit=_MAX_HISTORY)
+
     return {
         "change_detected": db_status.get("change_detected", False),
-        "change_history":  db_history,
-        "last_checked_at": _sku_state["last_checked_at"],
-        "watcher_started": _sku_state["watcher_started"],
-        "poll_interval_seconds": _sku_state["poll_interval_seconds"],
+        "change_history": db_history,
+        "last_checked_at": _hub_mapping_state["last_checked_at"],
+        "watcher_started": _hub_mapping_state["watcher_started"],
+        "poll_interval_seconds": _hub_mapping_state["poll_interval_seconds"],
     }
 
 
-def dismiss_hub_sku_master_changes() -> None:
+def dismiss_hub_mapping_changes() -> None:
     """Clear the change_detected flag (history persists)."""
     from core.database.engine import get_shared_database
 
     db = get_shared_database()
-    db.dismiss_hub_sku_master_alerts()
-    _sku_state["change_detected"] = False
+    db.dismiss_hub_mapping_alerts()
+    _hub_mapping_state["change_detected"] = False
 
 
-def _poll_sku_once() -> None:
-    """Single poll: fetch Hub SKU Master, compare hash, emit diff + email on change."""
+def _poll_hub_mapping_once() -> None:
+    """Single poll: fetch FF Automation Hub_Mapping, compare hash, emit diff + email on change."""
     t0 = time.perf_counter()
     try:
-        from core.shared.sheets_session import get_sheets_manager
-        from app import config as cfg
+        from features.product_launch.ff_masters import fetch_hub_mapping_snapshot
 
-        gsm = get_sheets_manager()
-        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=False)
+        new_rows, headers = fetch_hub_mapping_snapshot(bypass_cache=True)
 
-        if sku_df is None or sku_df.empty:
-            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
-            data = raw.get("Hub Sku Master") or []
-            if len(data) >= 2:
-                import pandas as pd
-                from core.utils.dataframe import clean_sheet_df
-                headers = data[0]
-                num_cols = len(headers)
-                cleaned_rows = []
-                for r in data[1:]:
-                    if len(r) < num_cols:
-                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
-                    elif len(r) > num_cols:
-                        cleaned_rows.append(r[:num_cols])
-                    else:
-                        cleaned_rows.append(r)
-                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
-
-        if sku_df is None or sku_df.empty:
-            logger.debug("[SKUWatcher] Hub SKU Master sheet is empty or unreadable — skipping diff")
+        if not new_rows:
+            logger.debug("[HubMappingWatcher] Hub_Mapping sheet is empty or unreadable — skipping diff")
             return
 
-        sku_df = sku_df.dropna(how="all")
-        headers = list(sku_df.columns)
-        new_rows: list[dict] = sku_df.where(sku_df.notna(), "").to_dict(orient="records")
         new_hash = _rows_hash(new_rows)
 
         elapsed = round((time.perf_counter() - t0) * 1000)
-        _sku_state["last_checked_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _hub_mapping_state["last_checked_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        if _sku_state["last_known_hash"] is None:
-            _sku_state["last_known_hash"] = new_hash
-            _sku_state["last_known_rows"] = new_rows
-            logger.info("[SKUWatcher] Baseline snapshot stored — %d rows (%dms)", len(new_rows), elapsed)
+        if _hub_mapping_state["last_known_hash"] is None:
+            _hub_mapping_state["last_known_hash"] = new_hash
+            _hub_mapping_state["last_known_rows"] = new_rows
+            logger.info("[HubMappingWatcher] Baseline snapshot stored — %d rows (%dms)", len(new_rows), elapsed)
             return
 
-        if new_hash == _sku_state["last_known_hash"]:
-            logger.debug("[SKUWatcher] No change detected (%dms)", elapsed)
+        if new_hash == _hub_mapping_state["last_known_hash"]:
+            logger.debug("[HubMappingWatcher] No change detected (%dms)", elapsed)
             return
 
-        diff = compute_diff(_sku_state["last_known_rows"], new_rows, headers, row_key_fn=_sku_row_key)
+        diff = compute_diff(
+            _hub_mapping_state["last_known_rows"],
+            new_rows,
+            headers,
+            row_key_fn=_hub_mapping_row_key,
+        )
         summary = _diff_summary(diff)
         detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         version_id = f"v{int(time.time())}"
@@ -443,7 +430,7 @@ def _poll_sku_once() -> None:
             "detected_at": detected_at,
             "summary": summary,
             "diff": diff,
-            "row_count_before": len(_sku_state["last_known_rows"]),
+            "row_count_before": len(_hub_mapping_state["last_known_rows"]),
             "row_count_after": len(new_rows),
             "headers": headers,
         }
@@ -452,90 +439,111 @@ def _poll_sku_once() -> None:
             from core.database.engine import get_shared_database
 
             db = get_shared_database()
-            db.save_hub_sku_master_version(
+            db.save_hub_mapping_version(
                 version_id=version_id,
                 detected_at=detected_at,
                 summary=summary,
                 diff=diff,
-                row_count_before=len(_sku_state["last_known_rows"]),
+                row_count_before=len(_hub_mapping_state["last_known_rows"]),
                 row_count_after=len(new_rows),
-                headers=headers
+                headers=headers,
             )
         except Exception as e:
-            logger.warning("[SKUWatcher] Failed to persist change version in DB: %s", e)
+            logger.warning("[HubMappingWatcher] Failed to persist change version in DB: %s", e)
 
-        _sku_state["change_history"] = ([version_entry] + _sku_state["change_history"])[:_MAX_HISTORY]
-        _sku_state["change_detected"] = True
-        _sku_state["last_known_hash"] = new_hash
-        _sku_state["last_known_rows"] = new_rows
+        _hub_mapping_state["change_history"] = ([version_entry] + _hub_mapping_state["change_history"])[:_MAX_HISTORY]
+        _hub_mapping_state["change_detected"] = True
+        _hub_mapping_state["last_known_hash"] = new_hash
+        _hub_mapping_state["last_known_rows"] = new_rows
 
         logger.info(
-            "[SKUWatcher] Change detected in Hub SKU Master: %s — firing email (%dms)",
+            "[HubMappingWatcher] Change detected in Hub_Mapping: %s — firing email (%dms)",
             summary, elapsed,
         )
 
         threading.Thread(
-            target=_send_sku_change_email,
+            target=_send_hub_mapping_change_email,
             args=(version_entry,),
             daemon=True,
-            name="sku-watcher-email",
+            name="hub-mapping-watcher-email",
         ).start()
 
     except Exception as exc:
         elapsed = round((time.perf_counter() - t0) * 1000)
-        logger.warning("[SKUWatcher] Poll failed in %dms: %s", elapsed, exc)
+        logger.warning("[HubMappingWatcher] Poll failed in %dms: %s", elapsed, exc)
 
 
-def _send_sku_change_email(version_entry: dict) -> None:
-    """Fire email notification for a detected Hub SKU Master change."""
+def _send_hub_mapping_change_email(version_entry: dict) -> None:
+    """Fire email notification for a detected Hub_Mapping change."""
     try:
-        from core.shared.workflow_notifications import notify_hub_sku_master_changed
+        from core.shared.workflow_notifications import notify_hub_mapping_changed
 
-        notify_hub_sku_master_changed(version_entry)
+        notify_hub_mapping_changed(version_entry)
     except Exception as exc:
-        logger.error("[SKUWatcher] Email send failed: %s", exc)
+        logger.error("[HubMappingWatcher] Email send failed: %s", exc)
 
 
-def _poll_sku_loop(interval_seconds: int) -> None:
-    """Infinite daemon loop — polls Hub SKU Master."""
-    logger.info("[SKUWatcher] Started — polling every %ds", interval_seconds)
-    _sku_state["watcher_started"] = True
-    _sku_state["poll_interval_seconds"] = interval_seconds
+def _poll_hub_mapping_loop(interval_seconds: int) -> None:
+    """Infinite daemon loop — polls FF Automation Hub_Mapping."""
+    logger.info("[HubMappingWatcher] Started — polling every %ds", interval_seconds)
+    _hub_mapping_state["watcher_started"] = True
+    _hub_mapping_state["poll_interval_seconds"] = interval_seconds
 
     time.sleep(15)
-    _poll_sku_once()
+    _poll_hub_mapping_once()
 
     while True:
         time.sleep(interval_seconds)
-        _poll_sku_once()
+        _poll_hub_mapping_once()
 
 
-def start_hub_sku_master_watcher(interval_seconds: int = 45) -> None:
-    """Start the background Hub SKU Master watcher daemon thread."""
+def start_hub_mapping_watcher(interval_seconds: int = 45) -> None:
+    """Start the background Hub_Mapping watcher daemon thread."""
     import os
     if os.getenv("DISABLE_FF_WATCHER", "").strip().lower() in {"1", "true", "yes"}:
-        logger.info("[SKUWatcher] Disabled via DISABLE_FF_WATCHER env var")
+        logger.info("[HubMappingWatcher] Disabled via DISABLE_FF_WATCHER env var")
         return
 
-    if _sku_state["watcher_started"]:
-        logger.warning("[SKUWatcher] Already running — skipping duplicate start")
+    if _hub_mapping_state["watcher_started"]:
+        logger.warning("[HubMappingWatcher] Already running — skipping duplicate start")
         return
 
     t = threading.Thread(
-        target=_poll_sku_loop,
+        target=_poll_hub_mapping_loop,
         args=(interval_seconds,),
         daemon=True,
-        name="hub-sku-master-watcher",
+        name="hub-mapping-watcher",
     )
     t.start()
 
 
-def get_latest_sku_rows() -> list[dict]:
-    """Return the cached in-memory rows from the watcher, fetching synchronously if empty."""
-    if not _sku_state.get("last_known_rows"):
-        logger.info("[SKUWatcher] Cache empty on request — executing synchronous poll once")
+def get_latest_hub_mapping_rows() -> list[dict]:
+    """Return cached in-memory Hub_Mapping rows; poll once if empty."""
+    if not _hub_mapping_state.get("last_known_rows"):
+        logger.info("[HubMappingWatcher] Cache empty on request — executing synchronous poll once")
         try:
-            _poll_sku_once()
+            _poll_hub_mapping_once()
         except Exception as exc:
-            logger.warning("[SKUWatcher] Synchronous poll failed: %s", exc)
-    return list(_sku_state.get("last_known_rows") or [])
+            logger.warning("[HubMappingWatcher] Synchronous poll failed: %s", exc)
+    return list(_hub_mapping_state.get("last_known_rows") or [])
+
+
+# Backward-compatible aliases (deprecated — Hub SKU Master replaced by Hub_Mapping)
+def get_hub_sku_master_change_status() -> dict:
+    return get_hub_mapping_change_status()
+
+
+def dismiss_hub_sku_master_changes() -> None:
+    dismiss_hub_mapping_changes()
+
+
+def _poll_sku_once() -> None:
+    _poll_hub_mapping_once()
+
+
+def start_hub_sku_master_watcher(interval_seconds: int = 45) -> None:
+    start_hub_mapping_watcher(interval_seconds=interval_seconds)
+
+
+def get_latest_sku_rows() -> list[dict]:
+    return get_latest_hub_mapping_rows()

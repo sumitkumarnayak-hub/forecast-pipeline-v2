@@ -96,7 +96,7 @@ def _load_master_sheet(sheet_key: str) -> pd.DataFrame:
     range_map = {
         "product_master": "A:K",
         "product_hub_master": "A:AX",
-        "hub_mapping": "A:F",
+        "hub_mapping": "A:E",
     }
     rng = range_map.get(sheet_key, "A:Z")
     df = gsm.read_worksheet_to_df("demand_planning_masters", sheet_key, rng)

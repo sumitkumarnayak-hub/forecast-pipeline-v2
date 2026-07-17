@@ -18,7 +18,7 @@ from core.shared.google_sheets import GoogleSheetsManager
 
 P_MASTER_READ_RANGE = "A:K"
 PH_MASTER_READ_RANGE = "A:AX"
-HUB_MASTER_READ_RANGE = "A:F"
+HUB_MASTER_READ_RANGE = "A:E"
 
 P_MASTER_REQUIRED_COLS = [
     "Product id", "Sub-category", "SKU Class Prod", "Anchor ID", "Anchor Name", "Cut Classification",

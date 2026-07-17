@@ -62,11 +62,17 @@ PIPELINE_PARAMS_SHEET_URL = os.getenv("PIPELINE_PARAMS_SHEET_URL", "").strip()
 _DEFAULT_FF_AUTOMATION_SHEET_URL = (
     "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"
 )
+_DEFAULT_HUB_MAPPING_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit?gid=272986515#gid=272986515"
+)
 FF_AUTOMATION_SHEET_URL = (
     os.getenv("FF_AUTOMATION_SHEET_URL", "").strip() or _DEFAULT_FF_AUTOMATION_SHEET_URL
 )
-# Product Launch masters (P / P-L / Hub Mapping / P-H) read only from FF Automation.
-NPL_SOURCE_SHEET_URL = os.getenv("NPL_SOURCE_SHEET_URL", "").strip() or FF_AUTOMATION_SHEET_URL
+HUB_MAPPING_SHEET_URL = (
+    os.getenv("HUB_MAPPING_SHEET_URL", "").strip() or _DEFAULT_HUB_MAPPING_SHEET_URL
+)
+# NPL masters source (P / P-L / P-H on legacy workbook) — separate from Hub Mapping sheet.
+NPL_SOURCE_SHEET_URL = os.getenv("NPL_SOURCE_SHEET_URL", "").strip()
 HUB_SKU_MASTER_SHEET_URL = os.getenv("HUB_SKU_MASTER_SHEET_URL", "").strip()
 PIPELINE_PARAMS_VARIABLES_TAB = os.getenv("PIPELINE_PARAMS_VARIABLES_TAB", "Variables").strip() or "Variables"
 PIPELINE_PARAMS_HUB_CHANGES_TAB = os.getenv("PIPELINE_PARAMS_HUB_CHANGES_TAB", "Hub_Changes").strip() or "Hub_Changes"
@@ -98,7 +104,14 @@ EA_TRACKER_SHEET_KEY = sheet_id_from_url(EA_TRACKER_SHEET_URL)
 NEW_PRODUCT_LAUNCH_SHEET_KEY = sheet_id_from_url(NEW_PRODUCT_LAUNCH_SHEET_URL)
 NPL_SOURCE_SHEET_KEY = sheet_id_from_url(NPL_SOURCE_SHEET_URL)
 HUB_SKU_MASTER_SHEET_KEY = sheet_id_from_url(HUB_SKU_MASTER_SHEET_URL)
+HUB_MAPPING_SHEET_KEY = sheet_id_from_url(HUB_MAPPING_SHEET_URL)
 FF_AUTOMATION_SHEET_KEY = sheet_id_from_url(FF_AUTOMATION_SHEET_URL)
+
+# Hub_Mapping tab on HUB_MAPPING_SHEET_URL — columns A:E
+HUB_MAPPING_TAB_NAME = os.getenv("HUB_MAPPING_TAB_NAME", "Hub_Mapping").strip() or "Hub_Mapping"
+HUB_MAPPING_TAB_ALT = os.getenv("HUB_MAPPING_TAB_ALT", "Hub Mapping").strip() or "Hub Mapping"
+HUB_MAPPING_READ_RANGE = os.getenv("HUB_MAPPING_READ_RANGE", "A:E").strip() or "A:E"
+HUB_MAPPING_CANONICAL_COLUMNS = ("hub_id", "hub_name", "city_id", "city_name", "status")
 
 SHEETS_CONFIG = {
     "hub_level_planning": {
@@ -133,7 +146,12 @@ SHEETS_CONFIG = {
             "product_master": "P Master",
             "product_location_master": "P-L Master",
             "product_hub_master": "P-H Master",
-            "hub_mapping": "Hub_Mapping",
+        }
+    },
+    "hub_mapping_sheet": {
+        "url": HUB_MAPPING_SHEET_URL,
+        "worksheets": {
+            "hub_mapping": HUB_MAPPING_TAB_NAME,
         }
     },
     "demand_planning_masters": {

@@ -144,12 +144,12 @@ async def lifespan(app: FastAPI):
         logger.warning("Cache warmup warning: %s", exc)
 
     try:
-        from features.product_launch.watcher import start_ff_input_watcher, start_hub_sku_master_watcher
+        from features.product_launch.watcher import start_ff_input_watcher, start_hub_mapping_watcher
 
         start_ff_input_watcher(interval_seconds=60)
         logger.info("FF Input change watcher started (60s interval)")
-        start_hub_sku_master_watcher(interval_seconds=60)
-        logger.info("Hub SKU Master change watcher started (60s interval)")
+        start_hub_mapping_watcher(interval_seconds=60)
+        logger.info("Hub_Mapping change watcher started (60s interval)")
     except Exception as exc:
         logger.warning("FF Input watcher startup warning: %s", exc)
 

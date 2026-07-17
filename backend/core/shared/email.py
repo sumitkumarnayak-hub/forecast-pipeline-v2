@@ -78,9 +78,8 @@ def build_master_links_card(*, title: str = "Update these master sheets") -> str
     links = [
         ("P Master", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"),
         ("P-L Master", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"),
-        ("Hub Mapping", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"),
+        ("Hub Mapping", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit?gid=272986515#gid=272986515"),
         ("Pricing", "https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI"),
-        ("Hub SKU Master", "https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo"),
         ("Pan India", "https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit"),
     ]
     rows = "".join(

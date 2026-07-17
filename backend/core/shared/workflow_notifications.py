@@ -926,7 +926,12 @@ def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
 
 
 def notify_hub_sku_master_changed(version_entry: dict) -> NotifyResult:
-    """Send an immediate email when the Hub SKU Master sheet changes are detected."""
+    """Deprecated alias — Hub SKU Master replaced by FF Automation Hub_Mapping."""
+    return notify_hub_mapping_changed(version_entry)
+
+
+def notify_hub_mapping_changed(version_entry: dict) -> NotifyResult:
+    """Send an immediate email when FF Automation Hub_Mapping changes are detected."""
     diff = version_entry.get("diff", {})
     summary = version_entry.get("summary", "changes detected")
     det_at = version_entry.get("detected_at", "")
@@ -936,21 +941,21 @@ def notify_hub_sku_master_changed(version_entry: dict) -> NotifyResult:
     ts_str = _format_ist_timestamp(det_at)
 
     html_body = build_sheet_change_email(
-        headline="Hub SKU Master updated",
-        intro="The Hub SKU Master sheet changed. Review the diff below and confirm downstream planning sheets are still correct.",
+        headline="Hub Mapping updated",
+        intro="The Hub_Mapping tab on the FF Automation worksheet changed. Review the diff below before syncing new hubs.",
         summary=summary,
         detected_at=ts_str,
         row_count_before=before,
         row_count_after=after,
         diff_table_html=_build_sheet_diff_table_html(diff, headers),
-        badge="Hub SKU",
-        action="Open <strong>Planning Suite → Hub Launch</strong> to review the updated Hub SKU Master configuration.",
+        badge="Hub Mapping",
+        action="Open <strong>Planning Suite → Hub Launch</strong> to review Hub Mapping and run sync when ready.",
     )
 
     return _safe_operational_send(
-        event="hub_sku_master_changed",
+        event="hub_mapping_changed",
         category="general",
-        subject=f"[Hub Launch] Hub SKU Master updated — {summary}",
+        subject=f"[Hub Launch] Hub Mapping updated — {summary}",
         html_body=html_body,
         triggered_by_user_id=None,
         metadata={
