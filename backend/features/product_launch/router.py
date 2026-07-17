@@ -591,6 +591,403 @@ def get_last_hub_update(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+class AppendHubSkuMasterRowBody(BaseModel):
+    row: dict  # {header: value} pairs matching Hub SKU Master sheet columns
+
+
+@router.get("/sync-new-hub/hub-sku-master")
+def npl_hub_sku_master_data(
+    bypass_cache: bool = Query(False),
+    current_user: dict = Depends(require_write),
+):
+    """
+    Returns raw Hub SKU Master sheet data rows for display,
+    along with a content hash for client-side change detection.
+    """
+    import hashlib, json
+    t0 = time.perf_counter()
+    try:
+        from core.shared.sheets_session import get_sheets_manager
+        from core.shared import sheets_cache as sheets_cache
+        from app import config as cfg
+
+        gsm = get_sheets_manager()
+        use_cache = not bypass_cache
+
+        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=use_cache)
+
+        if sku_df is None or sku_df.empty:
+            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
+            data = raw.get("Hub Sku Master") or []
+            if len(data) >= 2:
+                import pandas as pd
+                from core.utils.dataframe import clean_sheet_df
+                headers = data[0]
+                num_cols = len(headers)
+                cleaned_rows = []
+                for r in data[1:]:
+                    if len(r) < num_cols:
+                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
+                    elif len(r) > num_cols:
+                        cleaned_rows.append(r[:num_cols])
+                    else:
+                        cleaned_rows.append(r)
+                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
+
+        rows = []
+        headers = []
+        content_hash = ""
+        cache_last_updated = None
+
+        if sku_df is not None and not sku_df.empty:
+            sku_df = sku_df.dropna(how="all")
+            headers = list(sku_df.columns)
+            rows = sku_df.where(sku_df.notna(), "").to_dict(orient="records")
+            serialized = json.dumps(rows, sort_keys=True, default=str)
+            content_hash = hashlib.sha256(serialized.encode()).hexdigest()
+
+        cache_path = sheets_cache.cache_path_for_category("hub_sku_master", "hub_sku_master", "A:O")
+        if cache_path.exists():
+            try:
+                mtime = cache_path.stat().st_mtime
+                cache_last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
+            except Exception:
+                pass
+
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[HubSync] hub-sku-master fetched %d rows in %dms", len(rows), elapsed)
+
+        return {
+            "rows": rows,
+            "headers": headers,
+            "row_count": len(rows),
+            "content_hash": content_hash,
+            "cache_last_updated": cache_last_updated,
+            "_elapsed_ms": elapsed,
+        }
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[HubSync] hub-sku-master failed in %dms: %s", elapsed, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/sync-new-hub/hub-sku-master/change-status")
+def npl_hub_sku_master_change_status(current_user: dict = Depends(get_current_user)):
+    """Returns the current Hub SKU Master change watcher state."""
+    try:
+        from features.product_launch.watcher import get_hub_sku_master_change_status
+
+        status = get_hub_sku_master_change_status()
+        return {
+            "change_detected": status["change_detected"],
+            "change_history": status["change_history"],
+            "last_checked_at": status["last_checked_at"],
+            "watcher_started": status["watcher_started"],
+            "poll_interval_seconds": status["poll_interval_seconds"],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/sync-new-hub/hub-sku-master/dismiss-changes")
+def npl_dismiss_hub_sku_master_changes(current_user: dict = Depends(require_write)):
+    """Clears the change_detected flag for Hub SKU Master."""
+    try:
+        from features.product_launch.watcher import dismiss_hub_sku_master_changes
+
+        dismiss_hub_sku_master_changes()
+        return {"ok": True, "message": "Change notification dismissed. History preserved."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/sync-new-hub/hub-sku-master/last-update")
+def get_last_hub_sku_master_update(current_user: dict = Depends(get_current_user)):
+    """Get the details of the last added SKU master configuration."""
+    from core.database.models import AuditLog
+    from sqlalchemy.orm import Session
+    from core.database.engine import get_shared_database
+    from datetime import timezone
+    
+    db = get_shared_database()
+    try:
+        from app import config as cfg
+        actual = _fetch_actual_drive_last_update(cfg.HUB_SKU_MASTER_SHEET_KEY)
+        
+        db_entry = None
+        with Session(db.engine) as session:
+            db_entry = (
+                session.query(AuditLog)
+                .filter(AuditLog.action == "append_hub_sku_master")
+                .order_by(AuditLog.ts.desc())
+                .first()
+            )
+            
+        if actual.get("ts"):
+            from dateutil.parser import parse as parse_date
+            try:
+                drive_dt = parse_date(actual["ts"])
+                if db_entry and db_entry.ts:
+                    db_ts = db_entry.ts
+                    if db_ts.tzinfo is None:
+                        db_ts = db_ts.replace(tzinfo=timezone.utc)
+                    if drive_dt.tzinfo is None:
+                        drive_dt = drive_dt.replace(tzinfo=timezone.utc)
+                        
+                    time_diff = abs((drive_dt - db_ts).total_seconds())
+                    is_service_acct = "gserviceaccount.com" in str(actual.get("user_id", "")).lower()
+                    if time_diff < 90 or is_service_acct:
+                        if db_entry.user_id:
+                            actual["user_id"] = db_entry.user_id
+            except Exception as e:
+                logger.warning("[LastUpdateCompare] Failed to match Drive mtime with audit log: %s", e)
+            return actual
+
+        if db_entry:
+            return {
+                "ts": db_entry.ts.isoformat() if db_entry.ts else None,
+                "user_id": db_entry.user_id
+            }
+        return {"ts": None, "user_id": None}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/sync-new-hub/hub-sku-master/append")
+def npl_append_hub_sku_master_row(
+    body: AppendHubSkuMasterRowBody,
+    current_user: dict = Depends(require_write),
+):
+    """
+    Append a new row to the Hub SKU Master sheet.
+    """
+    t0 = time.perf_counter()
+    try:
+        from app import config as cfg
+        from core.shared.sheets_session import get_sheets_manager
+        from core.shared import sheets_cache as _sheets_cache
+        from core.database.models import AuditLog
+        from sqlalchemy.orm import Session
+        import uuid
+        from datetime import datetime, timezone
+
+        try:
+            canonical_map = {
+                "Channel": ["channel"],
+                "city_name": ["city_name", "city name", "city", "cityname"],
+                "hub_name": ["hub_name", "hub name", "hubname", "hub"],
+                "sub category": ["sub_category", "sub category", "subcategory", "category"],
+                "sku class prod": ["sku_class_prod", "sku class prod", "skuclassprod", "sku"],
+                "HTT": ["htt"],
+                "Hub active": ["hub_active", "hub active", "hubactive"],
+                "Plan Flag": ["plan_flag", "plan flag", "planflag"],
+                "Active_Flag_Mon": ["active_flag_mon", "active flag mon", "activeflagmon", "mon"],
+                "Active_Flag_Tue": ["active_flag_tue", "active flag tue", "activeflagtue", "tue"],
+                "Active_Flag_Wed": ["active_flag_wed", "active flag wed", "activeflagwed", "wed"],
+                "Active_Flag_Thu": ["active_flag_thu", "active flag thu", "activeflagthu", "thu"],
+                "Active_Flag_Fri": ["active_flag_fri", "active flag fri", "activeflagfri", "fri"],
+                "Active_Flag_Sat": ["active_flag_sat", "active flag sat", "activeflagsat", "sat"],
+                "Active_Flag_Sun": ["active_flag_sun", "active flag sun", "activeflagsun", "sun"]
+            }
+            
+            normalized = {}
+            for key, val in body.row.items():
+                k_clean = str(key).strip().lower().replace("_", " ")
+                matched = False
+                for canonical_key, aliases in canonical_map.items():
+                    if k_clean == canonical_key.lower().replace("_", " ") or k_clean in [a.lower().replace("_", " ") for a in aliases]:
+                        normalized[canonical_key] = val
+                        matched = True
+                        break
+                if not matched:
+                    normalized[key] = val
+            
+            from pydantic import BaseModel, Field, field_validator
+            import re
+            
+            class HubSkuMasterPydanticRow(BaseModel):
+                Channel: str = Field(..., min_length=1)
+                city_name: str = Field(..., min_length=1)
+                hub_name: str = Field(..., min_length=1)
+                sub_category: str = Field(..., alias="sub category", min_length=1)
+                sku_class_prod: str = Field(..., alias="sku class prod", min_length=1)
+                HTT: str = Field(..., min_length=1)
+                Hub_active: str = Field(..., alias="Hub active", min_length=1)
+                Plan_Flag: str = Field(..., alias="Plan Flag", min_length=1)
+                Active_Flag_Mon: str = Field(..., alias="Active_Flag_Mon", min_length=1)
+                Active_Flag_Tue: str = Field(..., alias="Active_Flag_Tue", min_length=1)
+                Active_Flag_Wed: str = Field(..., alias="Active_Flag_Wed", min_length=1)
+                Active_Flag_Thu: str = Field(..., alias="Active_Flag_Thu", min_length=1)
+                Active_Flag_Fri: str = Field(..., alias="Active_Flag_Fri", min_length=1)
+                Active_Flag_Sat: str = Field(..., alias="Active_Flag_Sat", min_length=1)
+                Active_Flag_Sun: str = Field(..., alias="Active_Flag_Sun", min_length=1)
+                
+                @field_validator("Hub_active", "Active_Flag_Mon", "Active_Flag_Tue", "Active_Flag_Wed", "Active_Flag_Thu", "Active_Flag_Fri", "Active_Flag_Sat", "Active_Flag_Sun")
+                @classmethod
+                def validate_numeric(cls, v):
+                    v_str = str(v).strip()
+                    if not re.match(r"^\d+$", v_str):
+                        raise ValueError("Must contain only digits")
+                    return v_str
+
+                @field_validator("Plan_Flag")
+                @classmethod
+                def validate_plan_flag(cls, v):
+                    v_str = str(v).strip().upper()
+                    if v_str not in ("A", "I"):
+                        raise ValueError("Plan Flag must be 'A' or 'I'")
+                    return v_str
+                    
+            pydantic_obj = HubSkuMasterPydanticRow(**normalized)
+            
+            import pandas as pd
+            import pandera as pa
+            from pandera import Column, Check, DataFrameSchema
+            
+            schema = DataFrameSchema(
+                columns={
+                    "Channel": Column(str, checks=Check.str_length(min_value=1)),
+                    "city_name": Column(str, checks=Check.str_length(min_value=1)),
+                    "hub_name": Column(str, checks=Check.str_length(min_value=1)),
+                    "sub category": Column(str, checks=Check.str_length(min_value=1)),
+                    "sku class prod": Column(str, checks=Check.str_length(min_value=1)),
+                    "HTT": Column(str, checks=Check.str_length(min_value=1)),
+                    "Hub active": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Plan Flag": Column(str, checks=Check.isin(["A", "I", "a", "i"])),
+                    "Active_Flag_Mon": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Tue": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Wed": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Thu": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Fri": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Sat": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                    "Active_Flag_Sun": Column(str, checks=Check(lambda s: s.str.match(r"^\d+$"))),
+                },
+                coerce=True,
+                strict=False
+            )
+            
+            row_for_pandas = {
+                "Channel": pydantic_obj.Channel,
+                "city_name": pydantic_obj.city_name,
+                "hub_name": pydantic_obj.hub_name,
+                "sub category": pydantic_obj.sub_category,
+                "sku class prod": pydantic_obj.sku_class_prod,
+                "HTT": pydantic_obj.HTT,
+                "Hub active": pydantic_obj.Hub_active,
+                "Plan Flag": pydantic_obj.Plan_Flag,
+                "Active_Flag_Mon": pydantic_obj.Active_Flag_Mon,
+                "Active_Flag_Tue": pydantic_obj.Active_Flag_Tue,
+                "Active_Flag_Wed": pydantic_obj.Active_Flag_Wed,
+                "Active_Flag_Thu": pydantic_obj.Active_Flag_Thu,
+                "Active_Flag_Fri": pydantic_obj.Active_Flag_Fri,
+                "Active_Flag_Sat": pydantic_obj.Active_Flag_Sat,
+                "Active_Flag_Sun": pydantic_obj.Active_Flag_Sun,
+            }
+            schema.validate(pd.DataFrame([row_for_pandas]))
+            
+            validated_row = {
+                "Channel": pydantic_obj.Channel,
+                "city_name": pydantic_obj.city_name,
+                "hub_name": pydantic_obj.hub_name,
+                "sub category": pydantic_obj.sub_category,
+                "sku class prod": pydantic_obj.sku_class_prod,
+                "HTT": pydantic_obj.HTT,
+                "Hub active": pydantic_obj.Hub_active,
+                "Plan Flag": pydantic_obj.Plan_Flag,
+                "Active_Flag_Mon": pydantic_obj.Active_Flag_Mon,
+                "Active_Flag_Tue": pydantic_obj.Active_Flag_Tue,
+                "Active_Flag_Wed": pydantic_obj.Active_Flag_Wed,
+                "Active_Flag_Thu": pydantic_obj.Active_Flag_Thu,
+                "Active_Flag_Fri": pydantic_obj.Active_Flag_Fri,
+                "Active_Flag_Sat": pydantic_obj.Active_Flag_Sat,
+                "Active_Flag_Sun": pydantic_obj.Active_Flag_Sun,
+            }
+        except Exception as err:
+            raise HTTPException(status_code=400, detail=f"Validation failed: {str(err)}")
+
+        gsm = get_sheets_manager()
+
+        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=False)
+        if sku_df is None or sku_df.empty:
+            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
+            data = raw.get("Hub Sku Master") or []
+            if len(data) >= 2:
+                import pandas as pd
+                from core.utils.dataframe import clean_sheet_df
+                headers = data[0]
+                num_cols = len(headers)
+                cleaned_rows = []
+                for r in data[1:]:
+                    if len(r) < num_cols:
+                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
+                    elif len(r) > num_cols:
+                        cleaned_rows.append(r[:num_cols])
+                    else:
+                        cleaned_rows.append(r)
+                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
+
+        headers = list(sku_df.columns) if sku_df is not None and not sku_df.empty else list(validated_row.keys())
+        
+        row_values = []
+        for h in headers:
+            h_clean = h.strip().lower()
+            val = ""
+            for k, v in validated_row.items():
+                if k.lower() == h_clean:
+                    val = v
+                    break
+            row_values.append(str(val).strip())
+
+        ws_name = cfg.SHEETS_CONFIG.get("hub_sku_master", {}).get("worksheets", {}).get("hub_sku_master", "Hub Sku Master")
+        ws = gsm._get_worksheet_quiet("hub_sku_master", ws_name)
+        if ws is None:
+            raise HTTPException(status_code=500, detail=f"Could not open Hub SKU Master worksheet '{ws_name}'.")
+
+        ws.append_row(row_values, value_input_option="USER_ENTERED")
+
+        try:
+            cache_path = _sheets_cache.cache_path_for_category("hub_sku_master", "hub_sku_master", "A:O")
+            if cache_path.exists():
+                cache_path.unlink()
+        except Exception:
+            pass
+
+        username = current_user.get("email") or current_user.get("username") or current_user.get("full_name") or "system"
+        try:
+            with Session(gsm.db.engine) as session:
+                audit_entry = AuditLog(
+                    id=str(uuid.uuid4()),
+                    sync_run_id=None,
+                    action="append_hub_sku_master",
+                    user_id=username,
+                    sheet_name="Hub Sku Master",
+                    rows_affected=1,
+                    status="success",
+                    ts=datetime.now(timezone.utc)
+                )
+                session.add(audit_entry)
+                session.commit()
+        except Exception as db_exc:
+            logger.warning("[HubSkuMaster] Failed to write audit log to DB: %s", db_exc)
+
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.info("[HubSkuMaster] Appended new SKU row hub=%s sku=%s by %s in %dms", validated_row["hub_name"], validated_row["sku_class_prod"], username, elapsed)
+        return {
+            "ok": True,
+            "hub_name": validated_row["hub_name"],
+            "sku_class_prod": validated_row["sku_class_prod"],
+            "headers": headers,
+            "added_by": username,
+            "elapsed_ms": elapsed,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.exception("[HubSkuMaster] append failed in %dms: %s", elapsed, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 class AppendFFInputRowBody(BaseModel):
     row: dict  # {header: value} pairs matching FF Input sheet columns
 

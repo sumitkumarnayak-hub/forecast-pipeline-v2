@@ -34,6 +34,16 @@ _state: dict[str, Any] = {
     "poll_interval_seconds": 45,
 }
 
+_sku_state: dict[str, Any] = {
+    "last_known_hash": None,
+    "last_known_rows": [],
+    "change_detected": False,
+    "last_checked_at": None,
+    "watcher_started": False,
+    "change_history": [],
+    "poll_interval_seconds": 45,
+}
+
 _MAX_HISTORY = 20
 _KEY_COLS = ("hub_name", "source_hub", "Hub_name", "Source_Hub")  # case-insensitive fallback
 
@@ -46,6 +56,18 @@ def _row_key(row: dict, headers: list[str]) -> str:
     hub_val = str(row.get(hub_col or "", "") or "").strip()
     src_val = str(row.get(src_col or "", "") or "").strip()
     return f"{hub_val.lower()}|{src_val.lower()}"
+
+
+def _sku_row_key(row: dict, headers: list[str]) -> str:
+    """Build a composite key for Hub Sku Master (hub_name + sku_class_prod + channel)."""
+    hub_col = next((h for h in headers if h.strip().lower() in ("hub_name", "hub name")), None)
+    sku_col = next((h for h in headers if h.strip().lower() in ("sku class prod", "sku_class_prod", "sku")), None)
+    chan_col = next((h for h in headers if h.strip().lower() in ("channel")), None)
+    
+    hub_val = str(row.get(hub_col or "", "") or "").strip()
+    sku_val = str(row.get(sku_col or "", "") or "").strip()
+    chan_val = str(row.get(chan_col or "", "") or "").strip()
+    return f"{hub_val.lower()}|{sku_val.lower()}|{chan_val.lower()}"
 
 
 def _rows_hash(rows: list[dict]) -> str:
@@ -62,16 +84,14 @@ def compute_diff(
     old_rows: list[dict],
     new_rows: list[dict],
     headers: list[str] | None = None,
+    row_key_fn=None,
 ) -> dict:
     """
-    Returns a structured diff between two row snapshots, supporting duplicate rows correctly:
-      {
-        added:    [row_dict, ...],
-        removed:  [row_dict, ...],
-        modified: [{ key, before: {col: val}, after: {col: val}, changed_cells: [col] }, ...],
-        unchanged_count: int,
-      }
+    Returns a structured diff between two row snapshots, supporting duplicate rows correctly.
     """
+    if row_key_fn is None:
+        row_key_fn = _row_key
+
     if not headers:
         headers = list({k for r in old_rows + new_rows for k in r.keys()})
 
@@ -100,14 +120,14 @@ def compute_diff(
     # Group remaining old rows by their composite key
     old_by_key: dict[str, list[dict]] = {}
     for r in unmatched_old:
-        key = _row_key(r, headers)
+        key = row_key_fn(r, headers)
         old_by_key.setdefault(key, []).append(r)
 
     still_unmatched_new = []
     modified = []
 
     for new_row in unmatched_new:
-        key = _row_key(new_row, headers)
+        key = row_key_fn(new_row, headers)
         if key in old_by_key and old_by_key[key]:
             # Pop the first old row with this key to pair it up as modified
             old_row = old_by_key[key].pop(0)
@@ -332,5 +352,179 @@ def start_ff_input_watcher(interval_seconds: int = 45) -> None:
         args=(interval_seconds,),
         daemon=True,
         name="ff-input-watcher",
+    )
+    t.start()
+
+
+def get_hub_sku_master_change_status() -> dict:
+    """Return current Hub SKU Master watcher state — called by API endpoint."""
+    from core.database.engine import get_shared_database
+
+    db = get_shared_database()
+    
+    db_status = db.get_latest_hub_sku_master_status()
+    db_history = db.get_hub_sku_master_versions(limit=_MAX_HISTORY)
+    
+    return {
+        "change_detected": db_status.get("change_detected", False),
+        "change_history":  db_history,
+        "last_checked_at": _sku_state["last_checked_at"],
+        "watcher_started": _sku_state["watcher_started"],
+        "poll_interval_seconds": _sku_state["poll_interval_seconds"],
+    }
+
+
+def dismiss_hub_sku_master_changes() -> None:
+    """Clear the change_detected flag (history persists)."""
+    from core.database.engine import get_shared_database
+
+    db = get_shared_database()
+    db.dismiss_hub_sku_master_alerts()
+    _sku_state["change_detected"] = False
+
+
+def _poll_sku_once() -> None:
+    """Single poll: fetch Hub SKU Master, compare hash, emit diff + email on change."""
+    t0 = time.perf_counter()
+    try:
+        from core.shared.sheets_session import get_sheets_manager
+        from app import config as cfg
+
+        gsm = get_sheets_manager()
+        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=False)
+
+        if sku_df is None or sku_df.empty:
+            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
+            data = raw.get("Hub Sku Master") or []
+            if len(data) >= 2:
+                import pandas as pd
+                from core.utils.dataframe import clean_sheet_df
+                headers = data[0]
+                num_cols = len(headers)
+                cleaned_rows = []
+                for r in data[1:]:
+                    if len(r) < num_cols:
+                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
+                    elif len(r) > num_cols:
+                        cleaned_rows.append(r[:num_cols])
+                    else:
+                        cleaned_rows.append(r)
+                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
+
+        if sku_df is None or sku_df.empty:
+            logger.debug("[SKUWatcher] Hub SKU Master sheet is empty or unreadable — skipping diff")
+            return
+
+        sku_df = sku_df.dropna(how="all")
+        headers = list(sku_df.columns)
+        new_rows: list[dict] = sku_df.where(sku_df.notna(), "").to_dict(orient="records")
+        new_hash = _rows_hash(new_rows)
+
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        _sku_state["last_checked_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if _sku_state["last_known_hash"] is None:
+            _sku_state["last_known_hash"] = new_hash
+            _sku_state["last_known_rows"] = new_rows
+            logger.info("[SKUWatcher] Baseline snapshot stored — %d rows (%dms)", len(new_rows), elapsed)
+            return
+
+        if new_hash == _sku_state["last_known_hash"]:
+            logger.debug("[SKUWatcher] No change detected (%dms)", elapsed)
+            return
+
+        diff = compute_diff(_sku_state["last_known_rows"], new_rows, headers, row_key_fn=_sku_row_key)
+        summary = _diff_summary(diff)
+        detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        version_id = f"v{int(time.time())}"
+
+        version_entry = {
+            "version_id": version_id,
+            "detected_at": detected_at,
+            "summary": summary,
+            "diff": diff,
+            "row_count_before": len(_sku_state["last_known_rows"]),
+            "row_count_after": len(new_rows),
+            "headers": headers,
+        }
+
+        try:
+            from core.database.engine import get_shared_database
+
+            db = get_shared_database()
+            db.save_hub_sku_master_version(
+                version_id=version_id,
+                detected_at=detected_at,
+                summary=summary,
+                diff=diff,
+                row_count_before=len(_sku_state["last_known_rows"]),
+                row_count_after=len(new_rows),
+                headers=headers
+            )
+        except Exception as e:
+            logger.warning("[SKUWatcher] Failed to persist change version in DB: %s", e)
+
+        _sku_state["change_history"] = ([version_entry] + _sku_state["change_history"])[:_MAX_HISTORY]
+        _sku_state["change_detected"] = True
+        _sku_state["last_known_hash"] = new_hash
+        _sku_state["last_known_rows"] = new_rows
+
+        logger.info(
+            "[SKUWatcher] Change detected in Hub SKU Master: %s — firing email (%dms)",
+            summary, elapsed,
+        )
+
+        threading.Thread(
+            target=_send_sku_change_email,
+            args=(version_entry,),
+            daemon=True,
+            name="sku-watcher-email",
+        ).start()
+
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        logger.warning("[SKUWatcher] Poll failed in %dms: %s", elapsed, exc)
+
+
+def _send_sku_change_email(version_entry: dict) -> None:
+    """Fire email notification for a detected Hub SKU Master change."""
+    try:
+        from core.shared.workflow_notifications import notify_hub_sku_master_changed
+
+        notify_hub_sku_master_changed(version_entry)
+    except Exception as exc:
+        logger.error("[SKUWatcher] Email send failed: %s", exc)
+
+
+def _poll_sku_loop(interval_seconds: int) -> None:
+    """Infinite daemon loop — polls Hub SKU Master."""
+    logger.info("[SKUWatcher] Started — polling every %ds", interval_seconds)
+    _sku_state["watcher_started"] = True
+    _sku_state["poll_interval_seconds"] = interval_seconds
+
+    time.sleep(15)
+    _poll_sku_once()
+
+    while True:
+        time.sleep(interval_seconds)
+        _poll_sku_once()
+
+
+def start_hub_sku_master_watcher(interval_seconds: int = 45) -> None:
+    """Start the background Hub SKU Master watcher daemon thread."""
+    import os
+    if os.getenv("DISABLE_FF_WATCHER", "").strip().lower() in {"1", "true", "yes"}:
+        logger.info("[SKUWatcher] Disabled via DISABLE_FF_WATCHER env var")
+        return
+
+    if _sku_state["watcher_started"]:
+        logger.warning("[SKUWatcher] Already running — skipping duplicate start")
+        return
+
+    t = threading.Thread(
+        target=_poll_sku_loop,
+        args=(interval_seconds,),
+        daemon=True,
+        name="hub-sku-master-watcher",
     )
     t.start()

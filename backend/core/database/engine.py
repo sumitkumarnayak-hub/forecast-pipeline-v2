@@ -142,7 +142,8 @@ class Database:
                 self._migrate_users_is_active,
                 self._migrate_users_remove_username,
                 self._migrate_npl_submissions_table,
-                self._migrate_hub_launch_version_history
+                self._migrate_hub_launch_version_history,
+                self._migrate_hub_sku_master_version_history
             ]
             for mig in migrations:
                 try:
@@ -2081,6 +2082,151 @@ class Database:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Failed to dismiss hub launch alerts in DB")
+
+    def _migrate_hub_sku_master_version_history(self, conn) -> None:
+        """Create the hub_sku_master_version_history table if missing."""
+        if self.backend == "postgresql":
+            conn.execute(
+                text("""
+                    CREATE TABLE IF NOT EXISTS hub_sku_master_version_history (
+                        version_id TEXT PRIMARY KEY,
+                        detected_at TIMESTAMPTZ NOT NULL,
+                        summary TEXT,
+                        diff_json TEXT,
+                        row_count_before INTEGER,
+                        row_count_after INTEGER,
+                        headers_json TEXT,
+                        is_dismissed INTEGER DEFAULT 0
+                    )
+                """)
+            )
+            return
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS hub_sku_master_version_history (
+                    version_id TEXT PRIMARY KEY,
+                    detected_at TIMESTAMP NOT NULL,
+                    summary TEXT,
+                    diff_json TEXT,
+                    row_count_before INTEGER,
+                    row_count_after INTEGER,
+                    headers_json TEXT,
+                    is_dismissed INTEGER DEFAULT 0
+                )
+            """)
+        )
+
+    def save_hub_sku_master_version(
+        self,
+        *,
+        version_id: str,
+        detected_at: str,
+        summary: str,
+        diff: dict,
+        row_count_before: int,
+        row_count_after: int,
+        headers: list[str],
+    ) -> None:
+        """Persist a new Hub SKU Master change version snapshot to DB."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO hub_sku_master_version_history
+                            (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed)
+                        VALUES
+                            (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0)
+                        ON CONFLICT (version_id) DO NOTHING
+                    """),
+                    {
+                        "version_id": version_id,
+                        "detected_at": detected_at,
+                        "summary": summary,
+                        "diff_json": json.dumps(diff),
+                        "row_count_before": row_count_before,
+                        "row_count_after": row_count_after,
+                        "headers_json": json.dumps(headers),
+                    }
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to save hub sku master version %s to DB", version_id)
+
+    def get_hub_sku_master_versions(self, limit: int = 20) -> list[dict]:
+        """Fetch history timeline entries of Hub SKU Master configuration changes."""
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(
+                    text("""
+                        SELECT version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed
+                        FROM hub_sku_master_version_history
+                        ORDER BY detected_at DESC
+                        LIMIT :limit
+                    """),
+                    {"limit": limit}
+                ).fetchall()
+                
+                results = []
+                for r in rows:
+                    dt = r[1]
+                    ts_str = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+                    if ts_str.endswith("+00:00"):
+                        ts_str = ts_str[:-6] + "Z"
+                        
+                    results.append({
+                        "version_id": r[0],
+                        "detected_at": ts_str,
+                        "summary": r[2],
+                        "diff": json.loads(r[3]) if r[3] else {},
+                        "row_count_before": r[4],
+                        "row_count_after": r[5],
+                        "headers": json.loads(r[6]) if r[6] else [],
+                        "is_dismissed": bool(r[7]),
+                    })
+                return results
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to fetch hub sku master versions from DB")
+            return []
+
+    def get_latest_hub_sku_master_status(self) -> dict:
+        """Check if any change alert is active (undismissed) in the database."""
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(
+                    text("""
+                        SELECT version_id, is_dismissed
+                        FROM hub_sku_master_version_history
+                        ORDER BY detected_at DESC
+                        LIMIT 1
+                    """)
+                ).fetchone()
+                
+                if not row:
+                    return {"change_detected": False}
+                return {
+                    "change_detected": not bool(row[1])
+                }
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to query latest hub sku master alert status")
+            return {"change_detected": False}
+
+    def dismiss_hub_sku_master_alerts(self) -> None:
+        """Mark the latest undismissed alerts as dismissed in the database."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        UPDATE hub_sku_master_version_history
+                        SET is_dismissed = 1
+                        WHERE is_dismissed = 0
+                    """)
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to dismiss hub sku master alerts in DB")
 
 _SQLITE_SCHEMA = [
     """
