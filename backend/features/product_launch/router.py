@@ -976,11 +976,12 @@ def npl_append_hub_sku_master_row(
             logger.warning("[HubSkuMaster] Failed to write audit log to DB: %s", db_exc)
 
         elapsed = round((time.perf_counter() - t0) * 1000)
-        logger.info("[HubSkuMaster] Appended new SKU row hub=%s sku=%s by %s in %dms", validated_row["hub_name"], validated_row["sku_class_prod"], username, elapsed)
+        sku_val = validated_row.get("sku class prod") or validated_row.get("sku_class_prod", "")
+        logger.info("[HubSkuMaster] Appended new SKU row hub=%s sku=%s by %s in %dms", validated_row.get("hub_name", ""), sku_val, username, elapsed)
         return {
             "ok": True,
-            "hub_name": validated_row["hub_name"],
-            "sku_class_prod": validated_row["sku_class_prod"],
+            "hub_name": validated_row.get("hub_name", ""),
+            "sku_class_prod": sku_val,
             "headers": headers,
             "added_by": username,
             "elapsed_ms": elapsed,
