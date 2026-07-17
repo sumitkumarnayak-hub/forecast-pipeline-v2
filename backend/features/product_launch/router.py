@@ -608,62 +608,31 @@ def npl_hub_sku_master_data(
     """
     Returns raw Hub SKU Master sheet data rows for display,
     along with a content hash for client-side change detection.
+    Loads directly from watcher in-memory cache for instant performance.
     """
     import hashlib, json
     t0 = time.perf_counter()
     try:
-        from core.shared.sheets_session import get_sheets_manager
-        from core.shared import sheets_cache as sheets_cache
+        from features.product_launch.watcher import get_latest_sku_rows, _sku_state
+        from features.product_launch.watcher import _poll_sku_once
         from app import config as cfg
 
-        gsm = get_sheets_manager()
-        use_cache = not bypass_cache
+        if bypass_cache:
+            _poll_sku_once()
 
-        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=use_cache)
+        all_rows = get_latest_sku_rows()
+        headers = list(all_rows[0].keys()) if all_rows else []
+        total_row_count = len(all_rows)
+        rows = all_rows[-100:]
 
-        if sku_df is None or sku_df.empty:
-            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
-            data = raw.get("Hub Sku Master") or []
-            if len(data) >= 2:
-                import pandas as pd
-                from core.utils.dataframe import clean_sheet_df
-                headers = data[0]
-                num_cols = len(headers)
-                cleaned_rows = []
-                for r in data[1:]:
-                    if len(r) < num_cols:
-                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
-                    elif len(r) > num_cols:
-                        cleaned_rows.append(r[:num_cols])
-                    else:
-                        cleaned_rows.append(r)
-                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
-
-        rows = []
-        headers = []
         content_hash = ""
-        cache_last_updated = None
-        total_row_count = 0
-
-        if sku_df is not None and not sku_df.empty:
-            sku_df = sku_df.dropna(how="all")
-            headers = list(sku_df.columns)
-            all_rows = sku_df.where(sku_df.notna(), "").to_dict(orient="records")
-            total_row_count = len(all_rows)
-            rows = all_rows[-100:]
+        if rows:
             serialized = json.dumps(rows, sort_keys=True, default=str)
             content_hash = hashlib.sha256(serialized.encode()).hexdigest()
 
-        cache_path = sheets_cache.cache_path_for_category("hub_sku_master", "hub_sku_master", "A:O")
-        if cache_path.exists():
-            try:
-                mtime = cache_path.stat().st_mtime
-                cache_last_updated = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(mtime))
-            except Exception:
-                pass
-
+        cache_last_updated = _sku_state.get("last_checked_at")
         elapsed = round((time.perf_counter() - t0) * 1000)
-        logger.info("[HubSync] hub-sku-master fetched %d rows in %dms", len(rows), elapsed)
+        logger.info("[HubSync] hub-sku-master preview served %d rows in %dms", len(rows), elapsed)
 
         return {
             "rows": rows,
@@ -811,25 +780,28 @@ def npl_append_hub_sku_master_row(
                 if not matched:
                     normalized[key] = val
             
-            from pydantic import BaseModel, Field, field_validator
+            from pydantic import BaseModel, Field, field_validator, AliasChoices
             import re
             
             class HubSkuMasterPydanticRow(BaseModel):
-                Channel: str = Field(..., min_length=1)
-                city_name: str = Field(..., min_length=1)
-                hub_name: str = Field(..., min_length=1)
-                sub_category: str = Field(..., alias="sub category", min_length=1)
-                sku_class_prod: str = Field(..., alias="sku class prod", min_length=1)
-                HTT: str = Field(..., min_length=1)
-                Hub_active: str = Field(..., alias="Hub active", min_length=1)
-                Plan_Flag: str = Field(..., alias="Plan Flag", min_length=1)
-                Active_Flag_Mon: str = Field(..., alias="Active_Flag_Mon", min_length=1)
-                Active_Flag_Tue: str = Field(..., alias="Active_Flag_Tue", min_length=1)
-                Active_Flag_Wed: str = Field(..., alias="Active_Flag_Wed", min_length=1)
-                Active_Flag_Thu: str = Field(..., alias="Active_Flag_Thu", min_length=1)
-                Active_Flag_Fri: str = Field(..., alias="Active_Flag_Fri", min_length=1)
-                Active_Flag_Sat: str = Field(..., alias="Active_Flag_Sat", min_length=1)
-                Active_Flag_Sun: str = Field(..., alias="Active_Flag_Sun", min_length=1)
+                model_config = {
+                    "populate_by_name": True
+                }
+                Channel: str = Field(..., validation_alias=AliasChoices("Channel", "channel"))
+                city_name: str = Field(..., validation_alias=AliasChoices("city_name", "city name", "city", "city_name"))
+                hub_name: str = Field(..., validation_alias=AliasChoices("hub_name", "hub name", "hub", "hub_name"))
+                sub_category: str = Field(..., validation_alias=AliasChoices("sub category", "sub_category", "subcategory", "category"))
+                sku_class_prod: str = Field(..., validation_alias=AliasChoices("sku class prod", "sku_class_prod", "skuclassprod", "sku"))
+                HTT: str = Field(..., validation_alias=AliasChoices("HTT", "htt"))
+                Hub_active: str = Field(..., validation_alias=AliasChoices("Hub active", "hub_active", "Hub_active"))
+                Plan_Flag: str = Field(..., validation_alias=AliasChoices("Plan Flag", "plan_flag", "Plan_Flag"))
+                Active_Flag_Mon: str = Field(..., validation_alias=AliasChoices("Active_Flag_Mon", "active_flag_mon"))
+                Active_Flag_Tue: str = Field(..., validation_alias=AliasChoices("Active_Flag_Tue", "active_flag_tue"))
+                Active_Flag_Wed: str = Field(..., validation_alias=AliasChoices("Active_Flag_Wed", "active_flag_wed"))
+                Active_Flag_Thu: str = Field(..., validation_alias=AliasChoices("Active_Flag_Thu", "active_flag_thu"))
+                Active_Flag_Fri: str = Field(..., validation_alias=AliasChoices("Active_Flag_Fri", "active_flag_fri"))
+                Active_Flag_Sat: str = Field(..., validation_alias=AliasChoices("Active_Flag_Sat", "active_flag_sat"))
+                Active_Flag_Sun: str = Field(..., validation_alias=AliasChoices("Active_Flag_Sun", "active_flag_sun"))
                 
                 @field_validator("Hub_active", "Active_Flag_Mon", "Active_Flag_Tue", "Active_Flag_Wed", "Active_Flag_Thu", "Active_Flag_Fri", "Active_Flag_Sat", "Active_Flag_Sun")
                 @classmethod
@@ -916,33 +888,22 @@ def npl_append_hub_sku_master_row(
 
         gsm = get_sheets_manager()
 
-        sku_df = gsm.read_worksheet_uncached("hub_sku_master", "hub_sku_master", "A:O", use_cache=False)
-        if sku_df is None or sku_df.empty:
-            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A:O")])
+        # Fetch headers from watcher cache or retrieve only row A1:O1 to avoid downloading the entire 40k sheet
+        from features.product_launch.watcher import get_latest_sku_rows, _sku_state, _rows_hash
+        latest_rows = get_latest_sku_rows()
+        if latest_rows:
+            headers = list(latest_rows[0].keys())
+        else:
+            raw = gsm.batch_read_worksheets(cfg.HUB_SKU_MASTER_SHEET_KEY, [("Hub Sku Master", "A1:O1")])
             data = raw.get("Hub Sku Master") or []
-            if len(data) >= 2:
-                import pandas as pd
-                from core.utils.dataframe import clean_sheet_df
-                headers = data[0]
-                num_cols = len(headers)
-                cleaned_rows = []
-                for r in data[1:]:
-                    if len(r) < num_cols:
-                        cleaned_rows.append(r + [""] * (num_cols - len(r)))
-                    elif len(r) > num_cols:
-                        cleaned_rows.append(r[:num_cols])
-                    else:
-                        cleaned_rows.append(r)
-                sku_df = clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
+            headers = data[0] if data else list(validated_row.keys())
 
-        headers = list(sku_df.columns) if sku_df is not None and not sku_df.empty else list(validated_row.keys())
-        
         row_values = []
         for h in headers:
             h_clean = h.strip().lower()
             val = ""
             for k, v in validated_row.items():
-                if k.lower() == h_clean:
+                if k.lower() == h_clean or k.lower().replace("_", " ") == h_clean.replace("_", " "):
                     val = v
                     break
             row_values.append(str(val).strip())
@@ -953,6 +914,17 @@ def npl_append_hub_sku_master_row(
             raise HTTPException(status_code=500, detail=f"Could not open Hub SKU Master worksheet '{ws_name}'.")
 
         ws.append_row(row_values, value_input_option="USER_ENTERED")
+
+        # Immediately append the new row to watcher memory cache so preview updates instantly
+        try:
+            new_row_dict = {}
+            for idx, h in enumerate(headers):
+                new_row_dict[h] = row_values[idx] if idx < len(row_values) else ""
+            
+            _sku_state["last_known_rows"].append(new_row_dict)
+            _sku_state["last_known_hash"] = _rows_hash(_sku_state["last_known_rows"])
+        except Exception as cache_err:
+            logger.warning("[HubSkuMaster] Failed to update memory cache: %s", cache_err)
 
         try:
             cache_path = _sheets_cache.cache_path_for_category("hub_sku_master", "hub_sku_master", "A:O")
