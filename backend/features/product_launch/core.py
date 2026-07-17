@@ -306,48 +306,30 @@ def load_salience_source() -> pd.DataFrame:
 
 
 def load_hub_sku_master() -> pd.DataFrame:
-    """Load Hub Sku Master equivalent (Hub_Mapping) for active hub and expansion eligibility lookups."""
-    from features.product_launch.sheet_reads import read_sheet_values_cached
+    """Load Hub Sku Master from background watcher cache for active hub and city validation lookups."""
+    try:
+        from features.product_launch.watcher import get_latest_sku_rows
+        latest_rows = get_latest_sku_rows()
+        if latest_rows:
+            df = pd.DataFrame(latest_rows)
+            df = _normalize_columns(df)
 
-    def _fetch():
-        from core.shared.sheets_throttle import sheets_slot
+            # Map the active flag to Plan Flag to maintain compatibility
+            # hub_active == 1 is active, 0 is inactive
+            for act_col in ("hub_active", "hub active", "plan_flag", "Plan Flag"):
+                if act_col in df.columns:
+                    df["Plan Flag"] = df[act_col].apply(lambda x: "A" if str(x).strip() in ("1", "A", "a") else "I")
+                    break
+            else:
+                df["Plan Flag"] = "A" # fallback
 
-        with sheets_slot():
-            sheet = _open_sheet(MASTER_FILE_ID, "Hub_Mapping")
-            return sheet.get_all_values()
-
-    data = read_sheet_values_cached(
-        MASTER_FILE_ID,
-        "Hub_Mapping",
-        "A:Z",
-        sheet_category="demand_planning_masters",
-        fetcher=_fetch,
-    )
-    if not data or len(data) < 2:
-        return pd.DataFrame()
-    headers = data[0]
-    num_cols = len(headers)
-    cleaned_rows = []
-    for r in data[1:]:
-        if len(r) < num_cols:
-            cleaned_rows.append(r + [""] * (num_cols - len(r)))
-        elif len(r) > num_cols:
-            cleaned_rows.append(r[:num_cols])
-        else:
-            cleaned_rows.append(r)
-    df = pd.DataFrame(cleaned_rows, columns=headers)
-    df = _normalize_columns(df)
-    
-    # Map the status column to Plan Flag to maintain compatibility
-    if "status" in df.columns:
-        df["Plan Flag"] = df["status"].astype(str).str.strip().str.upper()
-    else:
-        df["Plan Flag"] = "A" # fallback
-        
-    for col in ["city_name", "hub_name", "Plan Flag"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-    return df
+            for col in ["city_name", "hub_name", "Plan Flag"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.strip()
+            return df
+    except Exception as e:
+        logger.warning("Failed to load hub sku master from cache: %s", e)
+    return pd.DataFrame()
 
 
 def get_active_hubs_for_city(hub_sku_df: pd.DataFrame, city: str, category: str | None = None) -> list[str]:
