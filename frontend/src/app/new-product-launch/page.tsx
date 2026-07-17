@@ -12,8 +12,8 @@ import api from "@/lib/api";
 import { ExternalLink, Clock } from "lucide-react";
 
 interface NplInfo {
-  npl_sheet_url: string | null;
-  ph_master_sheet_url: string | null;
+  new_product_launch_sheet_url: string | null;
+  ff_automation_sheet_url: string | null;
   last_synced: string | null;
 }
 
@@ -62,10 +62,10 @@ function NplHeaderActions() {
         </span>
       </div>
 
-      {/* NPL Sheet button */}
-      {info?.npl_sheet_url && (
+      {/* New Product Launch Sheet button */}
+      {info?.new_product_launch_sheet_url && (
         <a
-          href={info.npl_sheet_url}
+          href={info.new_product_launch_sheet_url}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -87,14 +87,14 @@ function NplHeaderActions() {
           onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
         >
           <ExternalLink size={11} />
-          Licious NPL Master V2
+          New Product Launch
         </a>
       )}
 
-      {/* P-H Master Sheet button */}
-      {info?.ph_master_sheet_url && (
+      {/* FF Automation Sheet button */}
+      {info?.ff_automation_sheet_url && (
         <a
-          href={info.ph_master_sheet_url}
+          href={info.ff_automation_sheet_url}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -116,7 +116,7 @@ function NplHeaderActions() {
           onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
         >
           <ExternalLink size={11} />
-          P-H Master Sheet
+          FF Automation
         </a>
       )}
     </div>

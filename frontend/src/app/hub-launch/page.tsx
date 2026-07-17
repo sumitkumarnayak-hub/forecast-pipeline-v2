@@ -7,8 +7,8 @@ import api from "@/lib/api";
 import { ExternalLink, Clock } from "lucide-react";
 
 interface NplInfo {
-  new_hub_sheet_url: string | null;
-  ph_master_sheet_url: string | null;
+  ff_input_sheet_url: string | null;
+  hub_sku_sheet_url: string | null;
   last_synced: string | null;
 }
 
@@ -57,10 +57,39 @@ function HubLaunchHeaderActions() {
         </span>
       </div>
 
-      {/* Hub Launch Configuration Sheet button */}
-      {info?.new_hub_sheet_url && (
+      {/* FF Input Sheet button */}
+      {info?.ff_input_sheet_url && (
         <a
-          href={info.new_hub_sheet_url}
+          href={info.ff_input_sheet_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.35rem",
+            padding: "0.28rem 0.65rem",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "6px",
+            fontSize: "0.71rem",
+            color: "var(--text-secondary)",
+            fontWeight: 500,
+            textDecoration: "none",
+            cursor: "pointer",
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
+        >
+          <ExternalLink size={11} />
+          FF Input
+        </a>
+      )}
+
+      {/* Hub SKU Master Sheet button */}
+      {info?.hub_sku_sheet_url && (
+        <a
+          href={info.hub_sku_sheet_url}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -83,35 +112,6 @@ function HubLaunchHeaderActions() {
         >
           <ExternalLink size={11} />
           Hub SKU Master
-        </a>
-      )}
-
-      {/* P-H Master Sheet button */}
-      {info?.ph_master_sheet_url && (
-        <a
-          href={info.ph_master_sheet_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.35rem",
-            padding: "0.28rem 0.65rem",
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border)",
-            borderRadius: "6px",
-            fontSize: "0.71rem",
-            color: "var(--text-secondary)",
-            fontWeight: 500,
-            textDecoration: "none",
-            cursor: "pointer",
-            transition: "background 0.15s, border-color 0.15s",
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-hover)")}
-          onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
-        >
-          <ExternalLink size={11} />
-          P-H Master
         </a>
       )}
     </div>

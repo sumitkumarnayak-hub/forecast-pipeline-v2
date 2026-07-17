@@ -11,7 +11,7 @@ import {
 
 interface FFRow { [key: string]: string | number; }
 interface FFInputData {
-  rows: FFRow[]; headers: string[]; row_count: number;
+  rows: FFRow[]; headers: string[]; row_count: number; total_row_count?: number;
   content_hash: string; cache_last_updated: string | null; _elapsed_ms?: number;
 }
 interface DiffEntry {
@@ -1179,7 +1179,13 @@ export default function HubLaunchTab() {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Database size={14} style={{ color: "#a855f7" }} />
               <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "var(--text-primary)" }}>Hub SKU Master Sheet</span>
-              {skuData && <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.12)", color: "#a855f7", fontWeight: 600 }}>{skuData.row_count} rows</span>}
+              {skuData && (
+                <span style={{ fontSize: "0.62rem", padding: "1px 6px", borderRadius: "4px", background: "rgba(168,85,247,0.12)", color: "#a855f7", fontWeight: 600 }}>
+                  {skuData.total_row_count
+                    ? `Showing ${skuData.row_count} rows out of ${skuData.total_row_count} rows`
+                    : `${skuData.row_count} rows`}
+                </span>
+              )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {canWrite && (
