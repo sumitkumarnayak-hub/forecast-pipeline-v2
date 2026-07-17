@@ -532,7 +532,10 @@ def start_hub_sku_master_watcher(interval_seconds: int = 45) -> None:
 
 def get_latest_sku_rows() -> list[dict]:
     """Return the cached in-memory rows from the watcher, fetching synchronously if empty."""
-    if not _sku_state["last_known_rows"]:
+    if not _sku_state.get("last_known_rows"):
         logger.info("[SKUWatcher] Cache empty on request — executing synchronous poll once")
-        _poll_sku_once()
-    return _sku_state["last_known_rows"]
+        try:
+            _poll_sku_once()
+        except Exception as exc:
+            logger.warning("[SKUWatcher] Synchronous poll failed: %s", exc)
+    return list(_sku_state.get("last_known_rows") or [])

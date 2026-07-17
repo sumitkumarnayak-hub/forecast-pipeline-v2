@@ -616,15 +616,26 @@ def npl_hub_sku_master_data(
     try:
         from features.product_launch.watcher import get_latest_sku_rows, _sku_state
         from features.product_launch.watcher import _poll_sku_once
-        from app import config as cfg
 
         if bypass_cache:
-            _poll_sku_once()
+            try:
+                _poll_sku_once()
+            except Exception as poll_exc:
+                logger.warning("[HubSync] hub-sku-master poll skipped: %s", poll_exc)
 
-        all_rows = get_latest_sku_rows()
-        headers = list(all_rows[0].keys()) if all_rows else []
+        all_rows = get_latest_sku_rows() or []
+        if not all_rows and not bypass_cache:
+            try:
+                _poll_sku_once()
+                all_rows = get_latest_sku_rows() or []
+            except Exception as poll_exc:
+                logger.warning("[HubSync] hub-sku-master bootstrap poll failed: %s", poll_exc)
+
+        headers: list[str] = []
+        if all_rows and isinstance(all_rows[0], dict):
+            headers = list(all_rows[0].keys())
         total_row_count = len(all_rows)
-        rows = all_rows[-100:]
+        rows = all_rows[-100:] if all_rows else []
 
         content_hash = ""
         if rows:
@@ -1686,6 +1697,8 @@ def wizard_submit(
             username=username,
             user_id=user_id,
             send_email=False,
+            status="Approved",
+            rejection_reason="Directly Synced via Wizard",
         )
         sub_id = result.get("submission_id", "")
         product_name = result.get("product_name", "")
@@ -1836,8 +1849,7 @@ def wizard_submit(
             )
             logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), target_worksheet)
 
-        # 1.5 Mark submission status as Approved (or Synced) immediately
-        update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")
+        # 1.5 Submission already written as Approved — no full-sheet status rewrite needed
 
         steps_status["sheets"] = {
             "status": "success",
@@ -2361,17 +2373,31 @@ def _npl_city_plan_key(row_vals: list, headers: list[str]) -> tuple[str, str, st
 
 
 def _format_date_npl(date_val) -> str:
-    if not date_val:
+    import pandas as pd
+
+    if date_val is None:
         return ""
+    if isinstance(date_val, pd.Series):
+        date_val = date_val.iloc[0] if len(date_val) else ""
+    elif isinstance(date_val, (list, tuple)):
+        date_val = date_val[0] if date_val else ""
+    try:
+        if pd.isna(date_val):
+            return ""
+    except (TypeError, ValueError):
+        pass
     if hasattr(date_val, "strftime"):
         return date_val.strftime("%m/%d/%Y")
+    text = str(date_val).strip()
+    if not text or text.lower() in {"nat", "nan", "none"}:
+        return ""
     from datetime import datetime
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(str(date_val).strip(), fmt).strftime("%m/%d/%Y")
+            return datetime.strptime(text, fmt).strftime("%m/%d/%Y")
         except ValueError:
             continue
-    return str(date_val)
+    return text
 
 
 def _get_product_master_details_map() -> dict[str, dict]:

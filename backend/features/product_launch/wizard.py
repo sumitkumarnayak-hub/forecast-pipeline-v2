@@ -182,11 +182,19 @@ def submit_hub_rows(
     username: str,
     user_id: int | None = None,
     send_email: bool = True,
+    status: str = "Pending",
+    rejection_reason: str = "",
 ) -> dict[str, Any]:
     hub_df = pd.DataFrame(hub_rows)
     if "Launch Date" not in hub_df.columns:
         hub_df = pd.DataFrame(apply_launch_dates(hub_rows))
-    sub_id = _submit_hub_df(hub_df, sub_type, username=username)
+    sub_id = _submit_hub_df(
+        hub_df,
+        sub_type,
+        username=username,
+        status=status,
+        rejection_reason=rejection_reason,
+    )
 
     payload: dict[str, Any] = {
         "submission_id": sub_id,

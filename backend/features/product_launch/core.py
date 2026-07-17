@@ -173,6 +173,15 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep first occurrence when headers are duplicated (common in sheet uploads)."""
+    if df is None or df.empty:
+        return df
+    if not df.columns.duplicated().any():
+        return df
+    return df.loc[:, ~df.columns.duplicated(keep="first")].copy()
+
+
 def _resolve_col(df: pd.DataFrame, *candidates: str) -> str | None:
     for c in candidates:
         if c in df.columns:
@@ -742,6 +751,8 @@ def parse_city_upload(file) -> tuple:
     # Normalize naming mapping to standard internal fields
     if "City" in df.columns and "city_name" not in df.columns:
         df["city_name"] = df["City"]
+    elif "city_name" in df.columns and "City" in df.columns:
+        df = df.drop(columns=["City"])
     if "PRODUCT_ID" in df.columns and "product_id" not in df.columns:
         df["product_id"] = df["PRODUCT_ID"]
     elif "Product ID" in df.columns and "product_id" not in df.columns:
@@ -845,6 +856,7 @@ def parse_city_upload(file) -> tuple:
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
+    df = _dedupe_columns(df)
     return df[CITY_COLS + ALL_POSSIBLE_OPTIONAL_COLS], errors
 
 
@@ -859,6 +871,8 @@ def parse_hub_upload(file) -> tuple:
     # Normalize naming mapping to standard internal fields
     if "City" in df.columns and "city_name" not in df.columns:
         df["city_name"] = df["City"]
+    elif "city_name" in df.columns and "City" in df.columns:
+        df = df.drop(columns=["City"])
     if "Hub Name" in df.columns and "hub_name" not in df.columns:
         df["hub_name"] = df["Hub Name"]
     if "PRODUCT_ID" in df.columns and "product_id" not in df.columns:
@@ -962,6 +976,7 @@ def parse_hub_upload(file) -> tuple:
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
         errors.append("No valid data rows found.")
+    df = _dedupe_columns(df)
     return df[HUB_COLS + ALL_POSSIBLE_OPTIONAL_COLS], errors
 
 
@@ -1015,9 +1030,12 @@ def load_log() -> pd.DataFrame:
 
 
 def _sanitize(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy().replace([np.nan, np.inf, -np.inf], "")
+    df = _dedupe_columns(df.copy().replace([np.nan, np.inf, -np.inf], ""))
     for c in df.columns:
-        df[c] = df[c].apply(lambda x: "" if pd.isna(x) else x)
+        series = df[c]
+        if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+        df[c] = series.map(lambda x: "" if pd.isna(x) else x)
     return df
 
 
@@ -1096,9 +1114,24 @@ def save_to_log(rows_df: pd.DataFrame):
         pass
 
 
-def update_submission_status(sub_id: str, status: str, reason: str = ""):
+def update_submission_status(sub_id: str, status: str, reason: str = "", *, tail_rows: int = 600):
+    """Update Status/Rejection_Reason for a submission (bounded tail read for speed)."""
     sheet = _open_sheet(SPREADSHEET_ID, LOG_SHEET_NAME)
-    data = sheet.get_all_values()
+    row_offset = 0
+    try:
+        header = sheet.row_values(1)
+        if not header:
+            return
+        col_count = max(len(header), 52)
+        end_col = _col_letter(col_count)
+        row_count = sheet.row_count
+        start_row = max(2, row_count - tail_rows + 1)
+        body = sheet.get_values(f"A{start_row}:{end_col}{row_count}") or []
+        data = [header] + body
+        row_offset = start_row - 2
+    except Exception:
+        data = sheet.get_all_values()
+        row_offset = 0
     if len(data) <= 1:
         return
     headers = data[0]
@@ -1108,7 +1141,7 @@ def update_submission_status(sub_id: str, status: str, reason: str = ""):
     if not sid_idx:
         return
     batch_updates = []
-    for i, row in enumerate(data[1:], start=2):
+    for i, row in enumerate(data[1:], start=2 + row_offset):
         if len(row) >= sid_idx and row[sid_idx - 1] == sub_id:
             if stat_idx:
                 batch_updates.append({
@@ -1405,7 +1438,12 @@ def check_duplicates_city(df_log: pd.DataFrame, sub_type: str,
     """Check city + product_id duplicates (after city-level upload)."""
     if df_log.empty:
         return pd.DataFrame()
-    active = df_log[~df_log.get("Status", pd.Series()).isin(["Withdrawn", "Voided", "Expired"])]
+    status_col = "Status" if "Status" in df_log.columns else None
+    active = (
+        df_log[~df_log[status_col].isin(["Withdrawn", "Voided", "Expired"])]
+        if status_col
+        else df_log
+    )
     mask = (
         (active["Submission_Type"] == sub_type) &
         (active["Product ID"].astype(str) == str(product_id)) &
@@ -1419,7 +1457,12 @@ def check_duplicates_hub(df_log: pd.DataFrame, sub_type: str,
     """Check city + hub + product_id duplicates (after hub-level upload) using vectorized inner merge."""
     if df_log.empty or hub_df.empty:
         return pd.DataFrame()
-    active = df_log[~df_log.get("Status", pd.Series()).isin(["Withdrawn", "Voided", "Expired"])].copy()
+    status_col = "Status" if "Status" in df_log.columns else None
+    active = (
+        df_log[~df_log[status_col].isin(["Withdrawn", "Voided", "Expired"])].copy()
+        if status_col
+        else df_log.copy()
+    )
     if active.empty:
         return pd.DataFrame()
 
@@ -1475,7 +1518,14 @@ def wide_to_long(df: pd.DataFrame) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────
 # SHARED:  SUBMIT  HUB-LEVEL  DATA  TO  SHEETS
 # ──────────────────────────────────────────────────────────────────
-def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> str:
+def _submit_hub_df(
+    hub_df: pd.DataFrame,
+    sub_type: str,
+    username: str = "",
+    *,
+    status: str = "Pending",
+    rejection_reason: str = "",
+) -> str:
     """
     Normalise, attach metadata, write to Submission_Log + Launch_Output.
     Launch Date is read per-row from the 'Launch Date' column in hub_df.
@@ -1483,8 +1533,23 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     """
     if hub_df is None or hub_df.empty:
         raise ValueError("Cannot submit an empty hub plan.")
-        
-    df = hub_df.copy()
+
+    df = _dedupe_columns(hub_df.copy())
+
+    # Drop alias columns before rename to avoid duplicate headers (City + city_name, etc.)
+    alias_drop = []
+    if "city_name" in df.columns and "City" in df.columns:
+        alias_drop.append("City")
+    if "hub_name" in df.columns and "Hub" in df.columns:
+        alias_drop.append("Hub")
+    if "product_id" in df.columns and "Product ID" in df.columns:
+        alias_drop.append("Product ID")
+    if "product_name" in df.columns and "Product Name" in df.columns:
+        alias_drop.append("Product Name")
+    if "category" in df.columns and "Category" in df.columns:
+        alias_drop.append("Category")
+    if alias_drop:
+        df = df.drop(columns=alias_drop, errors="ignore")
 
     # If Start Date is already present (e.g. from optional template columns),
     # prioritize it and drop Launch Date to avoid duplicate column name errors.
@@ -1503,6 +1568,7 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
         "old_product_name": "Old Product Name",
         "replacement_percentage": "Replacement Percentage",
     })
+    df = _dedupe_columns(df)
 
     if "Hub" not in df.columns:
         df["Hub"] = ""
@@ -1525,8 +1591,8 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     df["Timestamp"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df["Submission_ID"]    = sub_id
     df["Submission_Type"]  = sub_type
-    df["Status"]           = "Pending"
-    df["Rejection_Reason"] = ""
+    df["Status"]           = status
+    df["Rejection_Reason"] = rejection_reason
     df["Submitted_By"]     = submitted_by
 
     # Launch_Output: append long format (creates tab if missing)
