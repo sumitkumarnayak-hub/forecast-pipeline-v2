@@ -12,6 +12,8 @@ from core.database.engine import Database
 
 from core.shared.email import (
     build_email_html,
+    build_master_links_card,
+    build_sheet_change_email,
     get_recipient_emails,
     send_email,
     send_launch_notifications,
@@ -36,6 +38,13 @@ class NotifyResult:
 
 def _esc(value: Any) -> str:
     return html.escape(str(value)) if value is not None else ""
+
+
+def _mono(value: Any) -> str:
+    return (
+        f"<span style='font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        f"font-size:13px;color:#1D1D1F;'>{_esc(value)}</span>"
+    )
 
 
 
@@ -142,13 +151,15 @@ def notify_autopilot_run_finished(
     if status == "completed":
         html_body = build_email_html(
             headline="Pipeline completed",
-            intro="The automated 6-step pipeline finished successfully.",
+            intro="The automated 6-step pipeline finished successfully. You can review the run log when ready.",
             fields={
-                "Run": f"<code>{_esc(run_id)}</code>",
+                "Run": _mono(run_id),
                 "Name": _esc(run_name),
                 "Status": "Completed",
             },
-            action="Open Planning Suite → <strong>Baseline</strong> (Auto-Pilot tab) to review the run log.",
+            variant="success",
+            badge="Pipeline",
+            action="Open <strong>Planning Suite → Baseline → Auto-Pilot</strong> to review the run log.",
         )
         return _safe_operational_send(
             event="autopilot_completed",
@@ -167,15 +178,17 @@ def notify_autopilot_run_finished(
     )
     html_body = build_email_html(
         headline="Pipeline failed",
-        intro=f"The automated pipeline stopped at <strong>{step_label}</strong>.",
+        intro=f"The automated pipeline stopped at {step_label}. Review the error below and retry when fixed.",
         fields={
-            "Run": f"<code>{_esc(run_id)}</code>",
+            "Run": _mono(run_id),
             "Name": _esc(run_name),
             "Status": "Failed",
             "Failed step": step_label,
         },
         error_block=error_detail,
-        action="Open Planning Suite → <strong>Baseline</strong> and click <strong>Try again</strong>.",
+        variant="error",
+        badge="Pipeline",
+        action="Open <strong>Planning Suite → Baseline</strong> and click <strong>Try again</strong>.",
     )
     return _safe_operational_send(
         event="autopilot_failed",
@@ -206,12 +219,13 @@ def notify_baseline_run_finished(
             headline="Baseline ready for approval",
             intro="A baseline run finished successfully and needs admin approval before Final Plan.",
             fields={
-                "Run": f"<code>{_esc(run_id)}</code>",
+                "Run": _mono(run_id),
                 "Name": _esc(run_name),
                 "Status": "Completed — awaiting approval",
             },
-            action="Open Planning Suite → <strong>Baseline</strong> → Manual workflow → "
-            "<strong>Approve</strong>.",
+            variant="warning",
+            badge="Approval",
+            action="Open <strong>Planning Suite → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
         )
         return _safe_operational_send(
             event="baseline_completed",
@@ -225,14 +239,16 @@ def notify_baseline_run_finished(
 
     html_body = build_email_html(
         headline="Baseline run failed",
-        intro="The baseline generation script did not complete successfully.",
+        intro="The baseline generation script did not complete successfully. Review the error below and re-run when fixed.",
         fields={
-            "Run": f"<code>{_esc(run_id)}</code>",
+            "Run": _mono(run_id),
             "Name": _esc(run_name),
             "Status": "Failed",
         },
         error_block=error_detail,
-        action="Open Planning Suite → <strong>Baseline</strong> to review logs and re-run.",
+        variant="error",
+        badge="Baseline",
+        action="Open <strong>Planning Suite → Baseline</strong> to review logs and re-run.",
     )
     return _safe_operational_send(
         event="baseline_failed",
@@ -258,11 +274,13 @@ def notify_baseline_approved(
         headline="Baseline approved",
         intro="Baseline has been approved. Final Plan generation is now unlocked.",
         fields={
-            "Run": f"<code>{_esc(run_id)}</code>",
+            "Run": _mono(run_id),
             "Name": _esc(run_name),
             "Approved by": _esc(approver_name or approver_id or "—"),
         },
-        action="Open Planning Suite → <strong>Final Plan</strong> to sync inputs and run.",
+        variant="success",
+        badge="Approved",
+        action="Open <strong>Planning Suite → Final Plan</strong> to sync inputs and run.",
     )
     return _safe_operational_send(
         event="baseline_approved",
@@ -294,10 +312,12 @@ def notify_final_plan_run_finished(
             headline="Final Plan completed",
             intro="The final plan / hub distribution run finished successfully.",
             fields={
-                "Run": f"<code>{_esc(run_id)}</code>",
+                "Run": _mono(run_id),
                 "Name": _esc(run_name),
                 "Output": _esc(output_file or "—"),
             },
+            variant="success",
+            badge="Final Plan",
         )
         return _safe_operational_send(
             event="final_plan_completed",
@@ -311,14 +331,16 @@ def notify_final_plan_run_finished(
 
     html_body = build_email_html(
         headline="Final Plan run failed",
-        intro="The final plan script did not complete successfully.",
+        intro="The final plan script did not complete successfully. Review the error below and re-run when fixed.",
         fields={
-            "Run": f"<code>{_esc(run_id)}</code>",
+            "Run": _mono(run_id),
             "Name": _esc(run_name),
             "Status": "Failed",
         },
         error_block=error_detail,
-        action="Open Planning Suite → <strong>Final Plan</strong> to review inputs and re-run.",
+        variant="error",
+        badge="Final Plan",
+        action="Open <strong>Planning Suite → Final Plan</strong> to review inputs and re-run.",
     )
     return _safe_operational_send(
         event="final_plan_failed",
@@ -355,7 +377,7 @@ def notify_pipeline_audit_finished(
     )
 
     fields = {
-        "Run": f"<code>{_esc(run_id)}</code>",
+        "Run": _mono(run_id),
         "Result": _esc(status.upper()),
         "Passed": f"{passed}/{total}",
         "Failed steps": _esc(", ".join(failed_steps) if failed_steps else "—"),
@@ -365,18 +387,24 @@ def notify_pipeline_audit_finished(
     if status == "failed":
         headline = "Pipeline audit — blockers found"
         intro = "One or more pipeline checks failed. The weekly flow cannot proceed until fixed."
-        action = "Open Planning Suite → <strong>Baseline</strong> for details."
+        action = "Open <strong>Planning Suite → Baseline</strong> for details."
+        variant = "error"
+        badge = "Audit"
     else:
         headline = "Pipeline audit — manual action required"
         intro = "Pipeline checks passed partially. Some steps need human action (e.g. approval)."
-        action = "Open Planning Suite → <strong>Baseline</strong> and complete manual steps."
+        action = "Open <strong>Planning Suite → Baseline</strong> and complete manual steps."
         if needs_approval:
             action += " Baseline may need <strong>admin approval</strong>."
+        variant = "warning"
+        badge = "Action needed"
 
     html_body = build_email_html(
         headline=headline,
         intro=intro,
         fields=fields,
+        variant=variant,
+        badge=badge,
         action=action,
     )
 
@@ -394,8 +422,10 @@ def notify_pipeline_audit_finished(
         approval_html = build_email_html(
             headline="Baseline approval may be required",
             intro="The pipeline audit flagged baseline approval as a manual step.",
-            fields={"Pipeline run": f"<code>{_esc(run_id)}</code>"},
-            action="Open <strong>Baseline</strong> → Manual workflow → Approve.",
+            fields={"Pipeline run": _mono(run_id)},
+            variant="warning",
+            badge="Approval",
+            action="Open <strong>Planning Suite → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
         )
         approval_result = _safe_operational_send(
             event="pipeline_approval_hint",
@@ -502,25 +532,34 @@ def notify_validation_result(
         headline = "Validation passed"
         intro = "A data validation check completed with no blocking errors."
         subject = f"[Planning Suite] Validation PASSED — {validation_type}"
-        error_block = issues_text if issues_text else ""
-        if error_block:
-            intro += " Warnings were recorded — see details below."
+        variant = "success"
+        badge = "Validation"
+        error_block = ""
+        info_block = issues_text if issues_text else ""
+        if info_block:
+            intro += " Some warnings were recorded — see notes below."
     else:
         headline = "Validation failed"
         intro = "A data validation check found errors that need review."
         subject = f"[Planning Suite] Validation FAILED — {validation_type}"
+        variant = "error"
+        badge = "Validation"
         error_block = issues_text or "Validation failed (no detail recorded)."
+        info_block = ""
 
     html_body = build_email_html(
         headline=headline,
         intro=intro,
         fields={
-            "Run / ref": f"<code>{_esc(run_id)}</code>",
+            "Run / ref": _mono(run_id),
             "Type": _esc(validation_type.replace("_", " ").title()),
             "Result": "Pass" if passed else "Fail",
         },
-        error_block=error_block if not passed or issues_text else "",
-        action="Open Planning Suite → <strong>Validation</strong> to review and re-run checks.",
+        error_block=error_block,
+        info_block=info_block,
+        variant=variant,
+        badge=badge,
+        action="Open <strong>Planning Suite → Validation</strong> to review and re-run checks.",
     )
     return _safe_operational_send(
         event="validation_pass" if passed else "validation_fail",
@@ -588,25 +627,32 @@ def notify_master_sync_result(
         "records_synced": records_synced,
     }
 
+    label = master_type.replace("_", " ").title()
     if passed:
-        headline = f"Master Data Sync Success — {master_type.replace('_', ' ').title()}"
-        intro = f"The master data sync for {master_type} completed successfully."
+        headline = f"Master sync completed — {label}"
+        intro = f"The {label} master data sync finished successfully."
         subject = f"[Planning Suite] Master Sync SUCCESS — {master_type}"
+        variant = "success"
+        badge = "Master sync"
     else:
-        headline = f"Master Data Sync Failure — {master_type.replace('_', ' ').title()}"
-        intro = f"The master data sync for {master_type} failed."
+        headline = f"Master sync failed — {label}"
+        intro = f"The {label} master data sync could not complete. Review the error below."
         subject = f"[Planning Suite] Master Sync FAILED — {master_type}"
+        variant = "error"
+        badge = "Master sync"
 
     html_body = build_email_html(
         headline=headline,
         intro=intro,
         fields={
-            "Master Type": _esc(master_type.replace("_", " ").title()),
-            "Records Synced": str(records_synced),
-            "Status": "Success" if passed else "Fail",
+            "Master type": _esc(label),
+            "Records synced": str(records_synced),
+            "Status": "Success" if passed else "Failed",
         },
         error_block=error_message if not passed else "",
-        action="Open Planning Suite → <strong>Master Data Management</strong> to view sync history.",
+        variant=variant,
+        badge=badge,
+        action="Open <strong>Planning Suite → Master Data Management</strong> to view sync history.",
     )
     return _safe_operational_send(
         event="master_sync_success" if passed else "master_sync_fail",
@@ -632,10 +678,10 @@ def notify_npl_step_failed(
     db = db or Database()
     meta = {"step_name": step_name, "sub_type": sub_type, "error": error[:500]}
     html_body = build_email_html(
-        headline=f"NPL step failed — {step_name}",
+        headline=f"Wizard step failed — {step_name}",
         intro=(
-            f"A <strong>{_esc(sub_type)}</strong> launch wizard step failed "
-            "and could not complete. A planner may need to retry."
+            f"The {sub_type} launch wizard could not complete this step. "
+            "Retry from Product Launch, or contact the planning team if it keeps failing."
         ),
         fields={
             "Step": _esc(step_name),
@@ -643,10 +689,9 @@ def notify_npl_step_failed(
             "Product": _esc(product_name) if product_name else "—",
         },
         error_block=error[:2000],
-        action=(
-            "Open Planning Suite → <strong>Product Launch</strong> and retry "
-            "the failed step. If the error persists, check the backend logs."
-        ),
+        variant="error",
+        badge="Product Launch",
+        action="Open <strong>Planning Suite → Product Launch</strong> and retry the failed step.",
     )
     return _safe_operational_send(
         event="npl_step_failed",
@@ -700,7 +745,7 @@ def notify_npl_submitted(
         cities_label += f", … (+{len(city_list) - 8} more)"
 
     fields = {
-        "Submission ID": f"<code>{_esc(sub_id)}</code>",
+        "Submission ID": _mono(sub_id),
         "Launch Type": _esc(sub_type),
         "Product": _esc(product_name),
         "Product ID": _esc(product_id) if product_id else "—",
@@ -710,75 +755,41 @@ def notify_npl_submitted(
         "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
 
-    # Build minimalistic form update note based on sub_type
-    n_type = str(sub_type).strip().lower()
-    p_master_url = "https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4"
-    p_l_master_url = "https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4"
-    pricing_url = "https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI"
-    hub_sku_url = "https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo"
-    pan_india_url = "https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256"
-
-    note_html = ""
-    if "launch" in n_type or "replacement" in n_type or "new product" in n_type:
-        note_html = f"""
-        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
-          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
-          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
-            <li><strong>P Master:</strong> <a href='{p_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>P-L Master:</strong> <a href='{p_l_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pricing:</strong> <a href='{pricing_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Hub SKU Master:</strong> <a href='{hub_sku_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pan India Sheet:</strong> <a href='{pan_india_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-          </ul>
-        </div>
-        """
-    elif "expansion" in n_type:
-        note_html = f"""
-        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
-          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
-          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
-            <li><strong>P Master:</strong> <a href='{p_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>P-L Master:</strong> <a href='{p_l_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Hub SKU Master:</strong> <a href='{hub_sku_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pan India Sheet:</strong> <a href='{pan_india_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-          </ul>
-        </div>
-        """
-
-    success_intro = f"A {sub_type} plan was successfully synced to the Google Sheet. Please update the master lists worksheets to reflect the new configs."
-    if note_html:
-        success_intro += "<br/>" + note_html
+    # Build master update card once
+    master_card = build_master_links_card()
 
     success_html = build_email_html(
-        headline="New launch plan synced to Masters",
-        intro=success_intro,
+        headline="Launch plan synced",
+        intro="Your plan was written to the target Google Sheet. Update the master worksheets so the launch is reflected everywhere.",
         fields=fields,
-        action=f"Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
+        variant="success",
+        badge="Synced",
+        extra_html=master_card,
+        action="Open <strong>Planning Suite → Product Launch → Submission History</strong> to track status.",
     )
     success_result = _safe_operational_send(
         event="npl_submitted",
         category="launch_planner",
-        subject=f"[Planning Suite] Sync Completed: Update Masters — {product_name} ({sub_type})",
+        subject=f"[Planning Suite] Launch synced — update masters for {product_name} ({sub_type})",
         html_body=success_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
         db=db,
     )
 
-    approval_intro = f"A new {sub_type} plan has been synced to target master sheets. Action Required: Please update the master worksheets to complete the launch setup."
-    if note_html:
-        approval_intro += "<br/>" + note_html
-
     approval_html = build_email_html(
-        headline="Launch plan synced to Masters - Update required",
-        intro=approval_intro,
+        headline="Master updates needed",
+        intro="A launch plan was synced successfully. Please complete the master worksheet updates to finish setup.",
         fields=fields,
-        action="Please update the master worksheets (P-H Master / Hub Mapping) as required.",
+        variant="warning",
+        badge="Action needed",
+        extra_html=master_card,
+        action="Review the linked master sheets and update P Master, P-L Master, and Hub Mapping as required.",
     )
     approval_result = _safe_operational_send(
         event="npl_approval_needed",
         category="launch_admin",
-        subject=f"[Planning Suite] Sync Completed: Update Masters — {product_name} ({sub_type})",
+        subject=f"[Planning Suite] Action needed — update masters for {product_name} ({sub_type})",
         html_body=approval_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
@@ -802,34 +813,23 @@ def notify_npl_submitted(
 # Hub Launch: FF Input Sheet Change Notification
 # ─────────────────────────────────────────────────────────────────────────────
 
-def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
-    """
-    Send an immediate email when the FF Input sheet changes are detected.
-    version_entry = { detected_at, summary, diff: {added, removed, modified}, headers, ... }
-    Uses a rich HTML email styled like Google Sheets version history.
-    """
-    import html as _html
-
-    diff    = version_entry.get("diff", {})
-    summary = version_entry.get("summary", "changes detected")
-    det_at  = version_entry.get("detected_at", "")
-    headers = version_entry.get("headers", [])
-    before  = version_entry.get("row_count_before", 0)
-    after   = version_entry.get("row_count_after", 0)
-
-    # Format IST timestamp
+def _format_ist_timestamp(det_at: str) -> str:
     try:
         from datetime import datetime, timezone, timedelta
-        IST = timezone(timedelta(hours=5, minutes=30))
-        dt  = datetime.fromisoformat(det_at.replace("Z", "+00:00")).astimezone(IST)
-        ts_str = dt.strftime("%d %b %Y, %I:%M:%S %p IST")
+        ist = timezone(timedelta(hours=5, minutes=30))
+        dt = datetime.fromisoformat(det_at.replace("Z", "+00:00")).astimezone(ist)
+        return dt.strftime("%d %b %Y, %I:%M %p IST")
     except Exception:
-        ts_str = det_at
+        return det_at
+
+
+def _build_sheet_diff_table_html(diff: dict, headers: list[str]) -> str:
+    import html as _html
 
     def _th(cols: list[str]) -> str:
         ths = "".join(
-            f"<th style='padding:6px 10px;background:#F1F5F9;border:1px solid #E2E8F0;"
-            f"font-size:11px;text-transform:uppercase;color:#64748B;white-space:nowrap;'>"
+            f"<th style='padding:8px 10px;background:#F5F5F7;border-bottom:1px solid #E8E8ED;"
+            f"font-size:11px;text-transform:uppercase;color:#86868B;white-space:nowrap;font-weight:600;'>"
             f"{_html.escape(c)}</th>"
             for c in cols
         )
@@ -844,111 +844,75 @@ def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
             if changed_cells and c in changed_cells and before_vals:
                 old = _html.escape(str(before_vals.get(c, "")).strip())
                 cell_html = (
-                    f"<span style='background:#FEF08A;border-radius:2px;padding:1px 3px;'>"
-                    f"<del style='color:#EF4444;'>{old}</del>"
-                    f" → <strong>{val}</strong></span>"
+                    f"<span style='background:#FFF8E1;border-radius:6px;padding:2px 4px;'>"
+                    f"<span style='color:#AEAEB2;text-decoration:line-through;'>{old}</span>"
+                    f" <span style='color:#1D1D1F;font-weight:600;'>{val}</span></span>"
                 )
             else:
                 cell_html = val
             cells.append(
-                f"<td style='padding:5px 10px;border:1px solid #E2E8F0;"
+                f"<td style='padding:8px 10px;border-bottom:1px solid #F2F2F7;"
                 f"background:{bg};color:{text};font-size:12px;'>{cell_html}</td>"
             )
         return "<tr>" + "".join(cells) + "</tr>"
 
-    def _table_section(title: str, rows_html: str, cols: list[str], accent: str) -> str:
+    def _table_section(title: str, rows_html: str, cols: list[str]) -> str:
         if not rows_html:
             return ""
         return f"""
-        <div style='margin-bottom:16px;'>
-          <p style='margin:0 0 6px 0;font-weight:700;font-size:13px;color:{accent};'>{title}</p>
-          <div style='overflow-x:auto;'>
-            <table style='border-collapse:collapse;width:100%;font-family:Inter,monospace;'>
-              {_th(cols)}
-              {rows_html}
-            </table>
-          </div>
+        <div style='margin-bottom:14px;'>
+          <p style='margin:0 0 8px 0;font-weight:600;font-size:13px;color:#1D1D1F;'>{title}</p>
+          <table style='border-collapse:collapse;width:100%;'>
+            {_th(cols)}
+            {rows_html}
+          </table>
         </div>"""
 
-    # Build row HTML for each change type
-    added_html   = "".join(_row_html(r, headers, "#F0FDF4", "#166534")          for r in diff.get("added", []))
-    removed_html = "".join(_row_html(r, headers, "#FEF2F2", "#991B1B")          for r in diff.get("removed", []))
+    added_html = "".join(_row_html(r, headers, "#F3FBF5", "#1D1D1F") for r in diff.get("added", []))
+    removed_html = "".join(_row_html(r, headers, "#FFF5F5", "#1D1D1F") for r in diff.get("removed", []))
     modified_html = "".join(
-        _row_html(m["row"], headers, "#FFFBEB", "#92400E",
-                  changed_cells=m["changed_cells"],
-                  before_vals=m["before"])
+        _row_html(
+            m["row"], headers, "#FFFCF2", "#1D1D1F",
+            changed_cells=m["changed_cells"],
+            before_vals=m["before"],
+        )
         for m in diff.get("modified", [])
     )
-
-    table_html = (
-        _table_section(f"+ Added ({len(diff.get('added', []))}) rows",   added_html,    headers, "#16A34A")
-        + _table_section(f"✕ Removed ({len(diff.get('removed', []))}) rows", removed_html,  headers, "#DC2626")
-        + _table_section(f"~ Modified ({len(diff.get('modified', []))}) rows", modified_html, headers, "#D97706")
+    return (
+        _table_section(f"Added ({len(diff.get('added', []))})", added_html, headers)
+        + _table_section(f"Removed ({len(diff.get('removed', []))})", removed_html, headers)
+        + _table_section(f"Modified ({len(diff.get('modified', []))})", modified_html, headers)
     )
 
-    if not table_html.strip():
-        table_html = "<p style='color:#64748B;'>No row-level diff available.</p>"
 
-    html_body = f"""
-    <div style='font-family:Inter,Segoe UI,sans-serif;max-width:680px;color:#0F172A;'>
-      <div style='background:#1E293B;padding:16px 20px;border-radius:8px 8px 0 0;'>
-        <h2 style='margin:0;font-size:1.1rem;color:#F8FAFC;'>
-          📋 FF Input Sheet — Changes Detected
-        </h2>
-        <p style='margin:4px 0 0 0;font-size:0.8rem;color:#94A3B8;'>{ts_str}</p>
-      </div>
-      <div style='padding:16px 20px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 8px 8px;'>
-        <p style='margin:0 0 12px 0;'>
-          The <strong>FF Input</strong> tab of the New Hub Launch sheet has been updated.
-          <strong>Please update the Master sheets accordingly.</strong>
-        </p>
-        <table style='border-collapse:collapse;margin:0 0 16px 0;'>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Summary</td>
-            <td style='padding:4px 0;font-size:12px;font-weight:700;color:#0F172A;'>{_html.escape(summary)}</td>
-          </tr>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Row count</td>
-            <td style='padding:4px 0;font-size:12px;color:#475569;'>{before} → {after}</td>
-          </tr>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Detected at</td>
-            <td style='padding:4px 0;font-size:12px;color:#475569;'>{ts_str}</td>
-          </tr>
-        </table>
-        <div style='margin-bottom:8px;'>
-          <strong style='font-size:13px;'>Change Details:</strong>
-          <p style='margin:4px 0 0 0;font-size:11px;color:#64748B;'>
-            🟢 Green = added &nbsp;|&nbsp; 🔴 Red = removed &nbsp;|&nbsp; 🟡 Yellow = modified cell (old → new)
-          </p>
-        </div>
-        {table_html}
-        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
-          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
-          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
-            <li><strong>P Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>P-L Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pricing:</strong> <a href='https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Hub SKU Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pan India Sheet:</strong> <a href='https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-          </ul>
-        </div>
-        <p style='margin-top:16px;padding:12px;background:#EFF6FF;border-radius:8px;
-                  border-left:4px solid #2563EB;font-size:12px;'>
-          <strong>Action required:</strong> Open Planning Suite → <strong>Hub Launch</strong>
-          and click <strong>Fetch &amp; Preview Sync Mappings</strong> to review the updated
-          configuration before syncing to P-H Master.
-        </p>
-        <p style='margin-top:16px;font-size:11px;color:#94A3B8;'>
-          Planning Suite · FF Input Change Watcher · {ts_str}
-        </p>
-      </div>
-    </div>"""
+def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
+    """
+    Send an immediate email when the FF Input sheet changes are detected.
+    """
+    diff = version_entry.get("diff", {})
+    summary = version_entry.get("summary", "changes detected")
+    det_at = version_entry.get("detected_at", "")
+    headers = version_entry.get("headers", [])
+    before = version_entry.get("row_count_before", 0)
+    after = version_entry.get("row_count_after", 0)
+    ts_str = _format_ist_timestamp(det_at)
+
+    html_body = build_sheet_change_email(
+        headline="FF Input sheet updated",
+        intro="The FF Input tab on the New Hub Launch sheet changed. Review the diff below and update master sheets before syncing.",
+        summary=summary,
+        detected_at=ts_str,
+        row_count_before=before,
+        row_count_after=after,
+        diff_table_html=_build_sheet_diff_table_html(diff, headers),
+        badge="Hub Launch",
+        action="Open <strong>Planning Suite → Hub Launch</strong> and run <strong>Fetch & Preview Sync Mappings</strong> before syncing to P-H Master.",
+    )
 
     return _safe_operational_send(
         event="ff_input_changed",
         category="general",
-        subject=f"[Hub Launch] FF Input sheet updated — {summary} ({ts_str})",
+        subject=f"[Hub Launch] FF Input updated — {summary}",
         html_body=html_body,
         triggered_by_user_id=None,
         metadata={
@@ -962,150 +926,31 @@ def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
 
 
 def notify_hub_sku_master_changed(version_entry: dict) -> NotifyResult:
-    """
-    Send an immediate email when the Hub SKU Master sheet changes are detected.
-    version_entry = { detected_at, summary, diff: {added, removed, modified}, headers, ... }
-    Uses a rich HTML email styled like Google Sheets version history.
-    """
-    import html as _html
-
-    diff    = version_entry.get("diff", {})
+    """Send an immediate email when the Hub SKU Master sheet changes are detected."""
+    diff = version_entry.get("diff", {})
     summary = version_entry.get("summary", "changes detected")
-    det_at  = version_entry.get("detected_at", "")
+    det_at = version_entry.get("detected_at", "")
     headers = version_entry.get("headers", [])
-    before  = version_entry.get("row_count_before", 0)
-    after   = version_entry.get("row_count_after", 0)
+    before = version_entry.get("row_count_before", 0)
+    after = version_entry.get("row_count_after", 0)
+    ts_str = _format_ist_timestamp(det_at)
 
-    # Format IST timestamp
-    try:
-        from datetime import datetime, timezone, timedelta
-        IST = timezone(timedelta(hours=5, minutes=30))
-        dt  = datetime.fromisoformat(det_at.replace("Z", "+00:00")).astimezone(IST)
-        ts_str = dt.strftime("%d %b %Y, %I:%M:%S %p IST")
-    except Exception:
-        ts_str = det_at
-
-    def _th(cols: list[str]) -> str:
-        ths = "".join(
-            f"<th style='padding:6px 10px;background:#F1F5F9;border:1px solid #E2E8F0;"
-            f"font-size:11px;text-transform:uppercase;color:#64748B;white-space:nowrap;'>"
-            f"{_html.escape(c)}</th>"
-            for c in cols
-        )
-        return f"<tr>{ths}</tr>"
-
-    def _row_html(row: dict, cols: list[str], bg: str, text: str,
-                  changed_cells: list[str] | None = None,
-                  before_vals: dict | None = None) -> str:
-        cells = []
-        for c in cols:
-            val = _html.escape(str(row.get(c, "")).strip())
-            if changed_cells and c in changed_cells and before_vals:
-                old = _html.escape(str(before_vals.get(c, "")).strip())
-                cell_html = (
-                    f"<span style='background:#FEF08A;border-radius:2px;padding:1px 3px;'>"
-                    f"<del style='color:#EF4444;'>{old}</del>"
-                    f" → <strong>{val}</strong></span>"
-                )
-            else:
-                cell_html = val
-            cells.append(
-                f"<td style='padding:5px 10px;border:1px solid #E2E8F0;"
-                f"background:{bg};color:{text};font-size:12px;'>{cell_html}</td>"
-            )
-        return "<tr>" + "".join(cells) + "</tr>"
-
-    def _table_section(title: str, rows_html: str, cols: list[str], accent: str) -> str:
-        if not rows_html:
-            return ""
-        return f"""
-        <div style='margin-bottom:16px;'>
-          <p style='margin:0 0 6px 0;font-weight:700;font-size:13px;color:{accent};'>{title}</p>
-          <div style='overflow-x:auto;'>
-            <table style='border-collapse:collapse;width:100%;font-family:Inter,monospace;'>
-              {_th(cols)}
-              {rows_html}
-            </table>
-          </div>
-        </div>"""
-
-    # Build row HTML for each change type
-    added_html   = "".join(_row_html(r, headers, "#F0FDF4", "#166534")          for r in diff.get("added", []))
-    removed_html = "".join(_row_html(r, headers, "#FEF2F2", "#991B1B")          for r in diff.get("removed", []))
-    modified_html = "".join(
-        _row_html(m["row"], headers, "#FFFBEB", "#92400E",
-                  changed_cells=m["changed_cells"],
-                  before_vals=m["before"])
-        for m in diff.get("modified", [])
+    html_body = build_sheet_change_email(
+        headline="Hub SKU Master updated",
+        intro="The Hub SKU Master sheet changed. Review the diff below and confirm downstream planning sheets are still correct.",
+        summary=summary,
+        detected_at=ts_str,
+        row_count_before=before,
+        row_count_after=after,
+        diff_table_html=_build_sheet_diff_table_html(diff, headers),
+        badge="Hub SKU",
+        action="Open <strong>Planning Suite → Hub Launch</strong> to review the updated Hub SKU Master configuration.",
     )
-
-    table_html = (
-        _table_section(f"+ Added ({len(diff.get('added', []))}) rows",   added_html,    headers, "#16A34A")
-        + _table_section(f"✕ Removed ({len(diff.get('removed', []))}) rows", removed_html,  headers, "#DC2626")
-        + _table_section(f"~ Modified ({len(diff.get('modified', []))}) rows", modified_html, headers, "#D97706")
-    )
-
-    if not table_html.strip():
-        table_html = "<p style='color:#64748B;'>No row-level diff available.</p>"
-
-    html_body = f"""
-    <div style='font-family:Inter,Segoe UI,sans-serif;max-width:680px;color:#0F172A;'>
-      <div style='background:#1E293B;padding:16px 20px;border-radius:8px 8px 0 0;'>
-        <h2 style='margin:0;font-size:1.1rem;color:#F8FAFC;'>
-          📋 Hub SKU Master — Changes Detected
-        </h2>
-        <p style='margin:4px 0 0 0;font-size:0.8rem;color:#94A3B8;'>{ts_str}</p>
-      </div>
-      <div style='padding:16px 20px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 8px 8px;'>
-        <p style='margin:0 0 12px 0;'>
-          The <strong>Hub SKU Master</strong> sheet has been updated.
-        </p>
-        <table style='border-collapse:collapse;margin:0 0 16px 0;'>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Summary</td>
-            <td style='padding:4px 0;font-size:12px;font-weight:700;color:#0F172A;'>{_html.escape(summary)}</td>
-          </tr>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Row count</td>
-            <td style='padding:4px 0;font-size:12px;color:#475569;'>{before} → {after}</td>
-          </tr>
-          <tr>
-            <td style='padding:4px 10px 4px 0;color:#64748B;font-size:12px;font-weight:600;'>Detected at</td>
-            <td style='padding:4px 0;font-size:12px;color:#475569;'>{ts_str}</td>
-          </tr>
-        </table>
-        <div style='margin-bottom:8px;'>
-          <strong style='font-size:13px;'>Change Details:</strong>
-          <p style='margin:4px 0 0 0;font-size:11px;color:#64748B;'>
-            🟢 Green = added &nbsp;|&nbsp; 🔴 Red = removed &nbsp;|&nbsp; 🟡 Yellow = modified cell (old → new)
-          </p>
-        </div>
-        {table_html}
-        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
-          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
-          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
-            <li><strong>P Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>P-L Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pricing:</strong> <a href='https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Hub SKU Master:</strong> <a href='https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-            <li><strong>Pan India Sheet:</strong> <a href='https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
-          </ul>
-        </div>
-        <p style='margin-top:16px;padding:12px;background:#EFF6FF;border-radius:8px;
-                  border-left:4px solid #2563EB;font-size:12px;'>
-          <strong>Action required:</strong> Open Planning Suite → <strong>Hub Launch</strong>
-          to review the updated Hub SKU Master configuration.
-        </p>
-        <p style='margin-top:16px;font-size:11px;color:#94A3B8;'>
-          Planning Suite · Hub SKU Master Change Watcher · {ts_str}
-        </p>
-      </div>
-    </div>"""
 
     return _safe_operational_send(
         event="hub_sku_master_changed",
         category="general",
-        subject=f"[Hub Launch] Hub SKU Master updated — {summary} ({ts_str})",
+        subject=f"[Hub Launch] Hub SKU Master updated — {summary}",
         html_body=html_body,
         triggered_by_user_id=None,
         metadata={
