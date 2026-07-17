@@ -23,7 +23,7 @@ def _env_path(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         import logging
-        logging.getLogger("planning_suite.config").warning(
+        logging.getLogger("planning_suite.config").debug(
             "Configuration environment variable '%s' is not set. Google Sheets features for this worksheet will fail.",
             name
         )
