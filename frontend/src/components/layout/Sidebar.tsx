@@ -82,7 +82,9 @@ export default function Sidebar({
     return pathname === item.href || pathname.startsWith(`${item.href}/`);
   };
 
-  const visibleEntries = SIDEBAR_NAV.filter(entry => entry.roles.includes(effectiveRole));
+  const visibleEntries = hydrated
+    ? SIDEBAR_NAV.filter(entry => entry.roles.includes(effectiveRole))
+    : [];
 
   const renderEntry = (entry: NavEntry) => {
     if (entry.type === "link") {
