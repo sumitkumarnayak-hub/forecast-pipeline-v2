@@ -712,8 +712,8 @@ def notify_npl_submitted(
 
     # Build minimalistic form update note based on sub_type
     n_type = str(sub_type).strip().lower()
-    p_master_url = "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA"
-    p_l_master_url = "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA"
+    p_master_url = "https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4"
+    p_l_master_url = "https://docs.google.com/spreadsheets/d/1xZsTWxc4aMdyS00ezij3LkDQkUQZZ2o_OPFAFRCLn-4"
     pricing_url = "https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI"
     hub_sku_url = "https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo"
     pan_india_url = "https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256"
