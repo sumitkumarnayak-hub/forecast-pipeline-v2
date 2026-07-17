@@ -991,7 +991,10 @@ export default function HubLaunchTab() {
     setRunning(true); setMsg({ text: "", type: "" });
     const t0 = performance.now();
     try {
-      const { data } = await api.post("/api/new-product-launch/sync-new-hub/confirm", { rows_to_add: preview.rows_to_add, ph_headers: preview.ph_headers });
+      const { data } = await api.post("/api/new-product-launch/sync-new-hub/confirm", {
+        rows_to_add: preview?.rows_to_add ?? [],
+        ph_headers: preview?.ph_headers ?? []
+      });
       const el = Math.round(performance.now()-t0);
       setSyncedCount(data.rows_inserted); setSyncSuccess(true);
       setMsg({ text: `${data.detail || "Synced."} - ${el}ms`, type: "success" });
@@ -1274,31 +1277,31 @@ export default function HubLaunchTab() {
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchPreview(true)} disabled={running} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.7rem" }}>
                 <RefreshCw size={10} /> Bypass Cache
               </button>
-              <button type="button" className="btn btn-primary btn-sm" onClick={handleConfirm} disabled={running || !preview || preview.rows_to_add.length === 0 || !canWrite} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <button type="button" className="btn btn-primary btn-sm" onClick={handleConfirm} disabled={running || !preview || (preview?.rows_to_add?.length ?? 0) === 0 || !canWrite} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 {running && preview ? <RefreshCw size={11} className="animate-spin" /> : <><Landmark size={11} /><ChevronRight size={11} /></>} {running && preview ? "Syncing..." : "Sync to P-H Master"}
               </button>
             </div>
           </div>
           {showPreview && preview && (
             <div>
-              {preview.validation_errors.length > 0 && (
+              {(preview?.validation_errors?.length ?? 0) > 0 && (
                 <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "8px", padding: "0.75rem", marginBottom: "0.75rem" }}>
                   <h4 style={{ fontSize: "0.76rem", fontWeight: 600, color: "var(--text-primary)", margin: "0 0 5px", display: "flex", alignItems: "center", gap: 4 }}><XCircle size={12} style={{ color: "#ef4444" }} /> Validation Failures</h4>
-                  <ul style={{ listStyle: "disc", paddingLeft: "1.25rem", fontSize: "0.71rem", color: "var(--text-secondary)", lineHeight: 1.7, margin: 0 }}>{preview.validation_errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                  <ul style={{ listStyle: "disc", paddingLeft: "1.25rem", fontSize: "0.71rem", color: "var(--text-secondary)", lineHeight: 1.7, margin: 0 }}>{preview?.validation_errors?.map((e, i) => <li key={i}>{e}</li>)}</ul>
                 </div>
               )}
               <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: "8px" }}>
                 <div style={{ padding: "0.5rem 0.75rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255,255,255,0.02)" }}>
                   <span style={{ fontSize: "0.76rem", fontWeight: 600, color: "var(--text-primary)" }}>Sync Mappings</span>
                   <div style={{ display: "flex", gap: 10, fontSize: "0.68rem", color: "var(--text-secondary)" }}>
-                    <span><strong style={{ color: "var(--text-primary)" }}>{preview.total_to_insert}</strong> to sync</span>
-                    <span>-</span><span><strong style={{ color: "var(--text-muted)" }}>{preview.duplicates_skipped}</strong> skipped</span>
-                    {preview._elapsed_ms && <><span>-</span><span style={{ color: "var(--text-muted)" }}>{preview._elapsed_ms}ms</span></>}
+                    <span><strong style={{ color: "var(--text-primary)" }}>{preview?.total_to_insert}</strong> to sync</span>
+                    <span>-</span><span><strong style={{ color: "var(--text-muted)" }}>{preview?.duplicates_skipped}</strong> skipped</span>
+                    {preview?._elapsed_ms && <><span>-</span><span style={{ color: "var(--text-muted)" }}>{preview?._elapsed_ms}ms</span></>}
                   </div>
                 </div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.71rem" }}>
                   <thead><tr style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid var(--border)" }}>{["New Hub","Source Hub","Status","Rows Added","Skipped"].map(h => <th key={h} style={{ padding: "0.38rem 0.75rem", textAlign: (h==="Rows Added"||h==="Skipped") ? "right" : "left", fontWeight: 600, color: "var(--text-secondary)", whiteSpace: "nowrap", fontSize: "0.63rem", textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
-                  <tbody>{preview.mapping_report.map((rep, idx) => <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}><td style={{ padding: "0.33rem 0.75rem", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{rep.new_hub}</td><td style={{ padding: "0.33rem 0.75rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{rep.source_hub}</td><td style={{ padding: "0.33rem 0.75rem" }}><span style={{ display: "inline-flex", padding: "1px 5px", borderRadius: "3px", fontSize: "0.6rem", fontWeight: 600, background: rep.status==="ok" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", color: rep.status==="ok" ? "#10b981" : "#ef4444" }}>{rep.status==="ok" ? "Valid" : "Missing"}</span></td><td style={{ padding: "0.33rem 0.75rem", textAlign: "right", fontWeight: 600 }}>{rep.rows_inserted??0}</td><td style={{ padding: "0.33rem 0.75rem", textAlign: "right", color: "var(--text-muted)" }}>{rep.duplicates_skipped??0}</td></tr>)}</tbody>
+                  <tbody>{preview?.mapping_report?.map((rep, idx) => <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}><td style={{ padding: "0.33rem 0.75rem", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{rep.new_hub}</td><td style={{ padding: "0.33rem 0.75rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{rep.source_hub}</td><td style={{ padding: "0.33rem 0.75rem" }}><span style={{ display: "inline-flex", padding: "1px 5px", borderRadius: "3px", fontSize: "0.6rem", fontWeight: 600, background: rep.status==="ok" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", color: rep.status==="ok" ? "#10b981" : "#ef4444" }}>{rep.status==="ok" ? "Valid" : "Missing"}</span></td><td style={{ padding: "0.33rem 0.75rem", textAlign: "right", fontWeight: 600 }}>{rep.rows_inserted??0}</td><td style={{ padding: "0.33rem 0.75rem", textAlign: "right", color: "var(--text-muted)" }}>{rep.duplicates_skipped??0}</td></tr>)}</tbody>
                 </table>
               </div>
             </div>

@@ -96,10 +96,9 @@ def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
 @router.get("/info")
 def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
     """Return sheet URL and last sync timestamp for the NPL page header."""
-    from app.config import NEW_PRODUCT_LAUNCH_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL, NEW_HUB_LAUNCH_SHEET_URL
+    from app.config import NPL_SOURCE_SHEET_URL, DEMAND_PLANNING_MASTERS_SHEET_URL, HUB_SKU_MASTER_SHEET_URL
     import time
     from core.shared import sheets_cache as sheets_cache
-
 
     # Resolve local cache modified time for Hub Launch
     cache_path = sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
@@ -129,8 +128,8 @@ def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depe
         pass
 
     return {
-        "npl_sheet_url": NEW_PRODUCT_LAUNCH_SHEET_URL or None,
-        "new_hub_sheet_url": NEW_HUB_LAUNCH_SHEET_URL or None,
+        "npl_sheet_url": NPL_SOURCE_SHEET_URL or None,
+        "new_hub_sheet_url": HUB_SKU_MASTER_SHEET_URL or None,
         "ph_master_sheet_url": DEMAND_PLANNING_MASTERS_SHEET_URL or None,
         "last_synced": last_sync,
         "cache_last_updated": cache_last_updated,

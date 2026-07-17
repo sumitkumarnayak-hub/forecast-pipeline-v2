@@ -82,7 +82,7 @@ function HubLaunchHeaderActions() {
           onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
         >
           <ExternalLink size={11} />
-          Hub Launch Sheet
+          Hub SKU Master
         </a>
       )}
 

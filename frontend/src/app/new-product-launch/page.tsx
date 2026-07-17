@@ -87,7 +87,7 @@ function NplHeaderActions() {
           onMouseLeave={e => (e.currentTarget.style.background = "var(--bg-elevated)")}
         >
           <ExternalLink size={11} />
-          Launch Output
+          Licious NPL Master V2
         </a>
       )}
 

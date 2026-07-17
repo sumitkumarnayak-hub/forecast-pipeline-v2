@@ -710,10 +710,48 @@ def notify_npl_submitted(
         "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
 
-    # Pass pre-compiled HTML to build_email_html since build_email_html escapes intro
+    # Build minimalistic form update note based on sub_type
+    n_type = str(sub_type).strip().lower()
+    p_master_url = "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA"
+    p_l_master_url = "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA"
+    pricing_url = "https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI"
+    hub_sku_url = "https://docs.google.com/spreadsheets/d/1CE_bXpWySYb6jSRmPuJmIpOLBZyLlwRYFtk2SZigVmo"
+    pan_india_url = "https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit?gid=1076874256#gid=1076874256"
+
+    note_html = ""
+    if "launch" in n_type or "replacement" in n_type or "new product" in n_type:
+        note_html = f"""
+        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
+          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
+          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
+            <li><strong>P Master:</strong> <a href='{p_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>P-L Master:</strong> <a href='{p_l_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pricing:</strong> <a href='{pricing_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Hub SKU Master:</strong> <a href='{hub_sku_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pan India Sheet:</strong> <a href='{pan_india_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+          </ul>
+        </div>
+        """
+    elif "expansion" in n_type:
+        note_html = f"""
+        <div style='margin-top: 16px; padding: 12px; background: #FFFBEB; border-left: 4px solid #D97706; border-radius: 4px;'>
+          <p style='margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #B45309;'>Action Required - Update Masters (Minimalistic Form):</p>
+          <ul style='margin: 0; padding-left: 18px; font-size: 11px; color: #4B5563; line-height: 1.6; list-style-type: disc;'>
+            <li><strong>P Master:</strong> <a href='{p_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>P-L Master:</strong> <a href='{p_l_master_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Hub SKU Master:</strong> <a href='{hub_sku_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+            <li><strong>Pan India Sheet:</strong> <a href='{pan_india_url}' target='_blank' style='color: #2563EB;'>Open Sheet</a></li>
+          </ul>
+        </div>
+        """
+
+    success_intro = f"A {sub_type} plan was successfully synced to the Google Sheet. Please update the master lists worksheets to reflect the new configs."
+    if note_html:
+        success_intro += "<br/>" + note_html
+
     success_html = build_email_html(
         headline="New launch plan synced to Masters",
-        intro=f"A {sub_type} plan was successfully synced to the Google Sheet. Please update the master lists worksheets to reflect the new configs.",
+        intro=success_intro,
         fields=fields,
         action=f"Open Planning Suite → <strong>Product Launch → Submission History</strong> to track status.",
     )
@@ -727,9 +765,13 @@ def notify_npl_submitted(
         db=db,
     )
 
+    approval_intro = f"A new {sub_type} plan has been synced to target master sheets. Action Required: Please update the master worksheets to complete the launch setup."
+    if note_html:
+        approval_intro += "<br/>" + note_html
+
     approval_html = build_email_html(
         headline="Launch plan synced to Masters - Update required",
-        intro=f"A new {sub_type} plan has been synced to target master sheets. Action Required: Please update the master worksheets to complete the launch setup.",
+        intro=approval_intro,
         fields=fields,
         action="Please update the master worksheets (P-H Master / Hub Mapping) as required.",
     )
