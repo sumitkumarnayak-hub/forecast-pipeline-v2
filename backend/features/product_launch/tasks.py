@@ -111,10 +111,12 @@ def handle_delete_submission_rows(payload: dict):
             logger.error(f"[WORKER] Failed to mark {sub_id} as Deleted: {e}")
 
 def handle_ph_sync(payload: dict):
-    from app.config import DPM_SHEET_KEY
+    from app.config import FF_AUTOMATION_SHEET_KEY
     from core.shared.sheets_session import get_sheets_manager
     from core.database.engine import get_shared_database
     from core.shared.workflow_notifications import notify_master_sync_result
+    from features.product_launch.sheet_reads import invalidate_npl_sheet_cache
+    from features.product_launch.ff_masters import PH_MASTER_TAB, PH_MASTER_RANGE
 
     rows_to_add = payload["rows_to_add"]
     ph_headers = payload["ph_headers"]
@@ -127,21 +129,20 @@ def handle_ph_sync(payload: dict):
     
     try:
         gsm = get_sheets_manager()
-        ss = gsm.gc.open_by_key(DPM_SHEET_KEY)
+        ss = gsm.gc.open_by_key(FF_AUTOMATION_SHEET_KEY)
         ph_ws = ss.worksheet("P-H Master")
         values = [[r.get(h, "") for h in ph_headers] for r in rows_to_add]
         
         if values:
             gsm.append_rows_to_worksheet(
-                "demand_planning_masters",
+                "ff_automation",
                 "product_hub_master",
                 values,
                 worksheet=ph_ws,
                 value_input_option="RAW",
             )
-            # Warmup cache
             try:
-                gsm.read_worksheet_uncached("demand_planning_masters", "product_hub_master", use_cache=False)
+                invalidate_npl_sheet_cache(FF_AUTOMATION_SHEET_KEY, PH_MASTER_TAB, PH_MASTER_RANGE)
             except Exception as e:
                 logger.warning(f"[WORKER] Cache warmup failed: {e}")
                 

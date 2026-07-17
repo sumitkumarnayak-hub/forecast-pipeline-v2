@@ -10,43 +10,59 @@ logger = logging.getLogger(__name__)
 
 
 def start_cache_warmup() -> None:
-    """Pre-load NPL and Hub Launch sheet caches in a daemon thread so first user request is fast."""
+    """Pre-load FF Automation master caches in a daemon thread so first user request is fast."""
     if os.getenv("DISABLE_CACHE_WARMUP", "").strip().lower() in {"1", "true", "yes"}:
         logger.info("Cache warm-up disabled (DISABLE_CACHE_WARMUP)")
         return
 
-    # Use a small startup delay (e.g. 5 seconds) in production to warm up caches immediately
-    delay = max(0, int(os.getenv("CACHE_WARMUP_DELAY_SECONDS", "5")))
+    delay = max(0, int(os.getenv("CACHE_WARMUP_DELAY_SECONDS", "2")))
 
     def _warm() -> None:
         try:
             if delay:
                 logger.info("Cache warm-up scheduled in %ss (API requests get priority)", delay)
                 time.sleep(delay)
-            logger.info("Starting background NPL & Hub Launch sheet cache warm-up")
-            
-            # 1. Warm up NPL worksheets
+            logger.info("Starting background FF Automation sheet cache warm-up")
+
             from features.product_launch.core import (
                 load_log,
                 load_product_master,
                 load_salience_source,
+                get_categories,
+                get_cities_from_salience,
+                get_earliest_monday,
             )
+            from features.product_launch.ff_masters import (
+                load_hub_mapping_df,
+                load_ph_master_df,
+                SPREADSHEET_KEY,
+                HUB_MAPPING_TAB,
+                HUB_MAPPING_RANGE,
+                PH_MASTER_TAB,
+                PH_MASTER_RANGE,
+            )
+            from core.shared.google_sheets import GoogleSheetsManager
+
             master = load_product_master()
             load_log()
             sal = load_salience_source()
-            
-            # Pre-warm API Cache for NPL bootstrap to ensure production-grade fast startup
+            load_hub_mapping_df()
+            try:
+                load_ph_master_df()
+            except Exception as ph_exc:
+                logger.debug("P-H Master warm-up skipped: %s", ph_exc)
+
             try:
                 from core.shared.api_cache import CacheNS, cache_set
-                from features.product_launch.core import get_categories, get_cities_from_salience, get_earliest_monday
-                
+                from core.utils.dataframe import sanitize_for_json
+
                 categories = get_categories(master)
                 cities = get_cities_from_salience(sal)
-                
+
                 pid_col = next((c for c in ["Product id", "Product ID", "product_id"] if c in master.columns), None)
                 name_col = next((c for c in ["Product Name", "product_name", "Anchor Name"] if c in master.columns), None)
                 cat_col = next((c for c in ["sub_category", "Sub-category", "Sub category", "category"] if c in master.columns), None)
-                
+
                 products = []
                 if pid_col:
                     for _, row in master.iterrows():
@@ -59,35 +75,24 @@ def start_cache_warmup() -> None:
                             "category": str(row.get(cat_col, "")).strip() if cat_col else "",
                         })
                     products = sorted(products, key=lambda r: r["product_id"])
-                    
+
                 payload = {
                     "categories": categories,
                     "cities": cities,
                     "earliest_launch_date": str(get_earliest_monday()),
-                    "products": products
+                    "products": products,
                 }
-                from core.utils.dataframe import sanitize_for_json
-                cache_set(CacheNS.NPL_WIZARD, "combined_bootstrap_v2", sanitize_for_json(payload), ttl=1800.0)
-                logger.info("Background cache warm-up populated combined_bootstrap_v2 API cache successfully")
+                cache_set(
+                    CacheNS.NPL_WIZARD,
+                    "combined_bootstrap_v3",
+                    sanitize_for_json(payload),
+                    ttl=1800.0,
+                )
+                logger.info("Background cache warm-up populated combined_bootstrap_v3 API cache successfully")
             except Exception as ex:
-                logger.warning("Background cache warm-up failed to pre-warm combined_bootstrap_v2 API cache: %s", ex)
-            
-            # 2. Warm up Hub Launch worksheets
-            from core.shared.google_sheets import GoogleSheetsManager
+                logger.warning("Background cache warm-up failed to pre-warm combined_bootstrap_v3 API cache: %s", ex)
 
-            from features.final_plan.hub_sync import HUB_MASTER_READ_RANGE, PH_MASTER_READ_RANGE
-
-            sheets = GoogleSheetsManager()
-            
-            # Pre-warm hub mapping sheets cache
-            from app.config import NPL_SOURCE_SHEET_KEY
-            sheets.batch_read_worksheets(NPL_SOURCE_SHEET_KEY, [("Hub_Mapping", HUB_MASTER_READ_RANGE)], use_cache=True)
-            # Pre-warm heavy P-H master sheets cache
-            sheets.read_worksheet_uncached("demand_planning_masters", "product_hub_master", PH_MASTER_READ_RANGE, use_cache=True)
-            # Pre-warm FF input configurations cache
-            sheets.read_worksheet_uncached("new_hub_launch", "ff_input", "A:H", use_cache=True)
-
-            logger.info("NPL & Hub Launch sheet cache warm-up complete")
+            logger.info("FF Automation Product Launch sheet cache warm-up complete")
         except Exception as exc:
             logger.warning("Sheet cache warm-up failed: %s", exc)
 

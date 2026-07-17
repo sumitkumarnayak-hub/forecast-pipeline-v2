@@ -19,11 +19,11 @@ const KEYS = {
   validation: "validation:bootstrap",
   insights: "insights:bootstrap",
   finalPlan: "final-plan:bootstrap",
-  nplContext: "npl:combined-bootstrap-v2",
+  nplContext: "npl:combined-bootstrap-v3",
   nplLogSummary: "npl:submission-log:summary:|",
 } as const;
 
-const PRIORITY_HREFS = ["/dashboard", "/autopilot", "/settings"];
+const PRIORITY_HREFS = ["/dashboard", "/autopilot", "/settings", "/new-product-launch"];
 
 async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
   while (activePrefetches >= MAX_CONCURRENT) {
@@ -179,14 +179,15 @@ export function prefetchAllRoutes(role: string): void {
   };
 
   const run = () => {
-    schedule(priority, 500);
-    schedule(secondary, 2800);
+    prefetchNpl();
+    schedule(priority, 300);
+    schedule(secondary, 2200);
   };
 
   if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(() => run(), { timeout: 6000 });
+    window.requestIdleCallback(() => run(), { timeout: 2500 });
   } else {
-    window.setTimeout(run, 1200);
+    window.setTimeout(run, 400);
   }
 }
 

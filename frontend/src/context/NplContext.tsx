@@ -10,10 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import {
-  loadNplContext,
-  loadNplProductIds,
   loadNplProductsByCategory,
-  peekNplContext,
+  peekNplBootstrap,
   loadNplBootstrap,
   type NplContextData,
   type NplProductRow,
@@ -31,9 +29,10 @@ type NplContextValue = {
 const NplContext = createContext<NplContextValue | null>(null);
 
 export function NplProvider({ children }: { children: ReactNode }) {
-  const [context, setContext] = useState<NplContextData | null>(() => peekNplContext());
+  // Keep SSR and first client paint identical — never read sessionStorage in useState initializers.
+  const [context, setContext] = useState<NplContextData | null>(null);
   const [products, setProducts] = useState<NplProductRow[]>([]);
-  const [loading, setLoading] = useState(() => !peekNplContext());
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -56,7 +55,17 @@ export function NplProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const hadCache = Boolean(peekNplContext());
+    const cached = peekNplBootstrap();
+    if (cached) {
+      setContext({
+        categories: cached.categories,
+        cities: cached.cities,
+        earliest_launch_date: cached.earliest_launch_date,
+      });
+      setProducts(cached.products || []);
+      setLoading(false);
+    }
+
     (async () => {
       try {
         const data = await loadNplBootstrap();
@@ -70,7 +79,7 @@ export function NplProvider({ children }: { children: ReactNode }) {
           setError(null);
         }
       } catch {
-        if (!cancelled && !hadCache) {
+        if (!cancelled && !cached) {
           setError("Could not load launch master data. Check your connection and try again.");
         }
       } finally {

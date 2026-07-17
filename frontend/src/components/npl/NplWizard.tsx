@@ -40,9 +40,16 @@ function logError(scope: string, error: unknown, context?: Record<string, unknow
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
-  const error = err as { response?: { data?: { detail?: string | string[] } }; message?: string };
+  const error = err as {
+    response?: { data?: { detail?: string | string[] | { message?: string; steps?: unknown } } };
+    message?: string;
+  };
   const detail = error?.response?.data?.detail;
   if (Array.isArray(detail)) return detail.join("; ");
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    const msg = String((detail as { message?: string }).message || "").trim();
+    if (msg) return msg;
+  }
   if (typeof detail === "string" && detail) return detail;
   if (error?.message) return error.message;
   return fallback;

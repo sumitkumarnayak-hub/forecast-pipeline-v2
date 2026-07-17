@@ -272,7 +272,7 @@ def preview_hub_rows(
 
 
 def list_all_product_ids() -> list[dict[str, str]]:
-    """All P Master rows for Expansion product picker."""
+    """All P-L Master rows from FF Automation for Expansion product picker."""
     master = load_product_master()
     pid_col = next((c for c in ["Product id", "Product ID", "product_id"] if c in master.columns), None)
     name_col = next(

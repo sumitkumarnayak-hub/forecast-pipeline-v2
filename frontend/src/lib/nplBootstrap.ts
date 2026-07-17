@@ -4,7 +4,7 @@
 import api from "@/lib/api";
 import { readSessionBootstrap, writeSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 
-const KEY_BOOTSTRAP = "npl:combined-bootstrap-v2";
+const KEY_BOOTSTRAP = "npl:combined-bootstrap-v3";
 
 export type NplContextData = {
   categories: string[];
@@ -36,6 +36,10 @@ export function peekNplContext(): NplContextData | null {
     cities: cached.cities,
     earliest_launch_date: cached.earliest_launch_date,
   };
+}
+
+export function peekNplBootstrap(): NplBootstrapData | null {
+  return readSessionBootstrap<NplBootstrapData>(KEY_BOOTSTRAP, 1_800_000);
 }
 
 export async function loadNplBootstrap(options?: { force?: boolean }): Promise<NplBootstrapData> {

@@ -214,45 +214,21 @@ def build_new_product_ph_preview(
 
 
 def load_masters_for_product_sync(sheets: GoogleSheetsManager) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    from app.config import DEMAND_PLANNING_SHEET_ID, NPL_SOURCE_SHEET_KEY
     from core.utils.dataframe import clean_sheet_df
-
-    raw_npl = sheets.batch_read_worksheets(
-        NPL_SOURCE_SHEET_KEY,
-        [
-            ("P Master", P_MASTER_READ_RANGE),
-            ("Hub_Mapping", HUB_MASTER_READ_RANGE),
-        ],
-    )
-    
-    raw_dp = sheets.batch_read_worksheets(
-        DEMAND_PLANNING_SHEET_ID,
-        [
-            ("P-H Master", PH_MASTER_READ_RANGE),
-        ],
+    from features.product_launch.ff_masters import (
+        load_hub_mapping_df,
+        load_ph_master_df,
+        load_p_master_df,
+        load_product_master_df,
     )
 
-    def _to_df(raw_dict: dict, name: str) -> pd.DataFrame:
-        data = raw_dict.get(name) or []
-        if not data or len(data) < 2:
-            return pd.DataFrame()
-        headers = data[0]
-        num_cols = len(headers)
-        cleaned_rows = []
-        for r in data[1:]:
-            if len(r) < num_cols:
-                cleaned_rows.append(r + [""] * (num_cols - len(r)))
-            elif len(r) > num_cols:
-                cleaned_rows.append(r[:num_cols])
-            else:
-                cleaned_rows.append(r)
-        return clean_sheet_df(pd.DataFrame(cleaned_rows, columns=headers))
-
-    p_df = _to_df(raw_npl, "P Master")
-    hub_df = _to_df(raw_npl, "Hub_Mapping")
-    ph_df = _to_df(raw_dp, "P-H Master")
+    p_df = clean_sheet_df(load_p_master_df())
+    if p_df.empty:
+        p_df = clean_sheet_df(load_product_master_df())
+    hub_df = clean_sheet_df(load_hub_mapping_df())
+    ph_df = clean_sheet_df(load_ph_master_df())
     if p_df is None or hub_df is None or ph_df is None:
-        raise RuntimeError("Could not load P Master, Hub_Mapping, or P-H Master from Google Sheets.")
+        raise RuntimeError("Could not load P Master, Hub Mapping, or P-H Master from FF Automation worksheet.")
     return p_df, hub_df, ph_df
 
 
@@ -261,7 +237,7 @@ def write_ph_rows(sheets: GoogleSheetsManager, rows: list[dict], ph_headers: lis
         return
     values = [[r.get(h, "") for h in ph_headers] for r in rows]
     sheets.append_rows_to_worksheet(
-        "demand_planning_masters",
+        "ff_automation",
         "product_hub_master",
         values,
     )

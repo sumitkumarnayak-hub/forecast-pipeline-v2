@@ -43,6 +43,7 @@ DEFAULT_TTL_SECONDS: dict[str, int] = {
 }
 
 WORKSHEET_TTL_BY_CATEGORY: dict[str, int] = {
+    "ff_automation": _ttl("masters", 1800),
     "demand_planning_masters": _ttl("masters", 1800),
     "pipeline_params": _ttl("pipeline_params", 300),
     "hub_level_planning": _ttl("dp_logics", 1800),

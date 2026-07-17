@@ -21,6 +21,7 @@ import numpy as np
 import gspread
 import io
 import os
+import logging
 from datetime import datetime, date, timedelta
 from google.oauth2.service_account import Credentials
 import uuid
@@ -30,8 +31,10 @@ from app.config import (
     GOOGLE_CREDENTIALS_PATH,
     HUB_LEVEL_PLANNING_SHEET_KEY,
     OUTPUT_PATH,
-    NPL_SOURCE_SHEET_KEY,
+    FF_AUTOMATION_SHEET_KEY,
 )
+
+logger = logging.getLogger(__name__)
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -120,7 +123,7 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
 
 SERVICE_ACCOUNT_FILE = GOOGLE_CREDENTIALS_PATH
 SPREADSHEET_ID = HUB_LEVEL_PLANNING_SHEET_KEY
-MASTER_FILE_ID = NPL_SOURCE_SHEET_KEY
+MASTER_FILE_ID = FF_AUTOMATION_SHEET_KEY
 MASTER_SHEET_NAME    = "P-L Master"
 OUTPUT_SHEET_NAME    = "Launch_Output"
 LOG_SHEET_NAME       = "Submission_Log"
@@ -137,6 +140,10 @@ LOG_HEADERS = [
     "Status", "Rejection_Reason", "Submitted_By",
     "Old Product ID", "Old Product Name", "Replacement Percentage",
 ] + WEEKDAYS
+
+LAUNCH_OUTPUT_HEADERS = [
+    "Product ID", "Product Name", "Category", "City", "Hub", "Start Date", "Day", "Plan",
+]
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -215,46 +222,9 @@ def _open_sheet(spreadsheet_id: str, sheet_name: str):
 # ──────────────────────────────────────────────────────────────────
 
 def load_product_master() -> pd.DataFrame:
-    from features.product_launch.sheet_reads import read_sheet_values_cached
+    from features.product_launch.ff_masters import load_product_master_df
 
-
-    def _fetch():
-        from core.shared.sheets_throttle import sheets_slot
-
-
-        with sheets_slot():
-            sheet = _open_sheet(MASTER_FILE_ID, MASTER_SHEET_NAME)
-            return sheet.get_values("A:Z")
-
-    data = read_sheet_values_cached(
-        MASTER_FILE_ID,
-        MASTER_SHEET_NAME,
-        "A:Z",
-        sheet_category="demand_planning_masters",
-        fetcher=_fetch,
-    )
-    if len(data) < 2:
-        return pd.DataFrame()
-    headers = data[0]
-    num_cols = len(headers)
-    cleaned_rows = []
-    for r in data[1:]:
-        if len(r) < num_cols:
-            cleaned_rows.append(r + [""] * (num_cols - len(r)))
-        elif len(r) > num_cols:
-            cleaned_rows.append(r[:num_cols])
-        else:
-            cleaned_rows.append(r)
-    df = pd.DataFrame(cleaned_rows, columns=headers)
-    df = _normalize_columns(df)
-    for c in df.columns:
-        if "order" in c.lower() and "type" in c.lower():
-            df = df[df[c] == "E"]
-            break
-    pid_col = next((c for c in ["Product id", "Product ID"] if c in df.columns), None)
-    if pid_col:
-        df = df.drop_duplicates(subset=[pid_col])
-    return df
+    return load_product_master_df()
 
 
 def _subcat_col_master(df: pd.DataFrame) -> str:
@@ -306,30 +276,10 @@ def load_salience_source() -> pd.DataFrame:
 
 
 def load_hub_sku_master() -> pd.DataFrame:
-    """Load Hub Sku Master from background watcher cache for active hub and city validation lookups."""
-    try:
-        from features.product_launch.watcher import get_latest_sku_rows
-        latest_rows = get_latest_sku_rows()
-        if latest_rows:
-            df = pd.DataFrame(latest_rows)
-            df = _normalize_columns(df)
+    """City/hub catalog from FF Automation Hub Mapping (cached parquet)."""
+    from features.product_launch.ff_masters import hub_mapping_as_catalog
 
-            # Map the active flag to Plan Flag to maintain compatibility
-            # hub_active == 1 is active, 0 is inactive
-            for act_col in ("hub_active", "hub active", "plan_flag", "Plan Flag"):
-                if act_col in df.columns:
-                    df["Plan Flag"] = df[act_col].apply(lambda x: "A" if str(x).strip() in ("1", "A", "a") else "I")
-                    break
-            else:
-                df["Plan Flag"] = "A" # fallback
-
-            for col in ["city_name", "hub_name", "Plan Flag"]:
-                if col in df.columns:
-                    df[col] = df[col].astype(str).str.strip()
-            return df
-    except Exception as e:
-        logger.warning("Failed to load hub sku master from cache: %s", e)
-    return pd.DataFrame()
+    return hub_mapping_as_catalog()
 
 
 def get_active_hubs_for_city(hub_sku_df: pd.DataFrame, city: str, category: str | None = None) -> list[str]:
@@ -420,27 +370,22 @@ def compute_salience_category(df: pd.DataFrame) -> pd.DataFrame:
 def load_hub_salience() -> pd.DataFrame:
     """
     Returns city_name, hub_name, sub_category, salience.
-    Generated dynamically from Hub_Mapping active hubs (status == 'A') with equal salience split.
+    Built from FF Automation Hub Mapping active hubs with equal salience split.
     """
-    hub_sku_df = load_hub_sku_master()
-    if hub_sku_df.empty:
+    hub_df = load_hub_sku_master()
+    if hub_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-    
-    # Filter only active hubs
-    active_df = hub_sku_df[hub_sku_df["Plan Flag"].astype(str).str.strip().str.upper() == "A"].copy()
+
+    active_df = hub_df[hub_df["Plan Flag"].astype(str).str.strip().str.upper() == "A"].copy()
     if active_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
-    
-    # Get active hub count per city
+
     city_counts = active_df.groupby("city_name")["hub_name"].count().to_dict()
-    
-    # Load categories from product master
     master_df = load_product_master()
     categories = get_categories(master_df)
     if not categories:
         categories = ["default"]
-        
-    # Build dynamic equal-weighted salience rows
+
     rows = []
     for _, row in active_df.iterrows():
         city = str(row["city_name"]).strip()
@@ -452,9 +397,9 @@ def load_hub_salience() -> pd.DataFrame:
                 "city_name": city,
                 "hub_name": hub,
                 "sub_category": cat,
-                "salience": salience
+                "salience": salience,
             })
-            
+
     return pd.DataFrame(rows)
 
 
@@ -1100,20 +1045,51 @@ def _overwrite_rows(sheet_id: str, sheet_name: str,
     ws.update("A1", [headers] + final_df.values.tolist(), value_input_option="USER_ENTERED")
 
 
-def save_to_log(rows_df: pd.DataFrame):
-    """Append or overwrite rows in Submission_Log."""
-    _overwrite_rows(
-        SPREADSHEET_ID, LOG_SHEET_NAME,
-        _sanitize(rows_df),
-        key_cols=["Submission_Type", "Product ID", "City", "Hub"],
-    )
-    from features.product_launch.sheet_reads import invalidate_npl_sheet_cache
+def _ensure_sheet_headers(sheet_id: str, sheet_name: str, headers: list[str]):
+    """Open worksheet (create if missing) and ensure row 1 contains headers."""
+    sheet = _open_sheet(sheet_id, sheet_name)
+    existing = sheet.row_values(1)
+    if not any(str(cell).strip() for cell in existing):
+        sheet.update("A1", [headers], value_input_option="USER_ENTERED")
+    return sheet
 
+
+def _append_sheet_rows(
+    sheet_id: str,
+    sheet_name: str,
+    df: pd.DataFrame,
+    *,
+    headers: list[str],
+    chunk_size: int = 500,
+) -> int:
+    """Append rows without rewriting the whole worksheet (production-safe)."""
+    if df is None or df.empty:
+        return 0
+    sheet = _ensure_sheet_headers(sheet_id, sheet_name, headers)
+    cols = [c for c in headers if c in df.columns]
+    if not cols:
+        cols = df.columns.tolist()
+    values = _sanitize(df[cols]).values.tolist()
+    written = 0
+    for start in range(0, len(values), chunk_size):
+        chunk = values[start : start + chunk_size]
+        sheet.append_rows(chunk, value_input_option="USER_ENTERED")
+        written += len(chunk)
+    return written
+
+
+def save_to_log(rows_df: pd.DataFrame):
+    """Append submission rows to Submission_Log (no full-sheet rewrite)."""
+    df = _sanitize(rows_df)
+    log_cols = [c for c in LOG_HEADERS if c in df.columns]
+    if not log_cols:
+        log_cols = df.columns.tolist()
+    _append_sheet_rows(SPREADSHEET_ID, LOG_SHEET_NAME, df, headers=LOG_HEADERS)
+    from features.product_launch.sheet_reads import invalidate_npl_sheet_cache
 
     invalidate_npl_sheet_cache(SPREADSHEET_ID, LOG_SHEET_NAME, "all")
     try:
         from core.shared.api_cache import CacheNS, cache_invalidate
-
 
         cache_invalidate(CacheNS.NPL_WIZARD)
     except Exception:
@@ -1553,15 +1529,19 @@ def _submit_hub_df(hub_df: pd.DataFrame, sub_type: str, username: str = "") -> s
     df["Rejection_Reason"] = ""
     df["Submitted_By"]     = submitted_by
 
-    # Launch_Output: long format (Primary write)
+    # Launch_Output: append long format (creates tab if missing)
     out_wide = df[["Product ID", "Product Name", "Category",
                    "City", "Hub", "Start Date"] + WEEKDAYS]
     out_long = wide_to_long(out_wide)
-    _overwrite_rows(SPREADSHEET_ID, "Launch_Output",
-                    _sanitize(out_long),
-                    key_cols=["Product ID", "City", "Hub", "Day"])
+    out_long = _sanitize(out_long)
+    _append_sheet_rows(
+        SPREADSHEET_ID,
+        OUTPUT_SHEET_NAME,
+        out_long,
+        headers=LAUNCH_OUTPUT_HEADERS,
+    )
 
-    # Submission_Log: logging write (Saves submission history only if primary write succeeds)
+    # Submission_Log: append only (no full-sheet rewrite)
     log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
                 "Product ID", "Product Name", "Category",
                 "City", "Hub", "MRP", "Start Date",

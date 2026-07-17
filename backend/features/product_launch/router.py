@@ -32,10 +32,10 @@ def get_npl_cache_status(current_user: dict = Depends(get_current_user)):
     
     # Files of interest
     cached_sheets = [
-        {"worksheet": "P Master", "category": "demand_planning_masters"},
-        {"worksheet": "P-L Master", "category": "demand_planning_masters"},
-        {"worksheet": "P-H Master", "category": "demand_planning_masters"},
-        {"worksheet": "Hub Mapping", "category": "demand_planning_masters"},
+        {"worksheet": "P-L Master", "category": "ff_automation"},
+        {"worksheet": "P Master", "category": "ff_automation"},
+        {"worksheet": "P-H Master", "category": "ff_automation"},
+        {"worksheet": "Hub Mapping", "category": "ff_automation"},
         {"worksheet": "Hub_Changes", "category": "pipeline_params"},
         {"worksheet": "Variables", "category": "pipeline_params"},
         {"worksheet": "Submission_Log", "category": "npl_log"},
@@ -135,6 +135,7 @@ def npl_info(current_user: dict = Depends(get_current_user), db: Database = Depe
     return {
         "new_product_launch_sheet_url": NEW_PRODUCT_LAUNCH_SHEET_URL or None,
         "ff_automation_sheet_url": FF_AUTOMATION_SHEET_URL or None,
+        "masters_source_sheet_url": FF_AUTOMATION_SHEET_URL or None,
         "ff_input_sheet_url": NEW_HUB_LAUNCH_SHEET_URL or None,
         "hub_sku_sheet_url": HUB_SKU_MASTER_SHEET_URL or None,
         "last_synced": last_sync,
@@ -1338,7 +1339,7 @@ def npl_bootstrap(current_user: dict = Depends(get_current_user)):
         from core.utils.dataframe import sanitize_for_json
         return sanitize_for_json(payload)
         
-    return cached(CacheNS.NPL_WIZARD, "combined_bootstrap_v2", _load_all, ttl=_NPL_CACHE_TTL)
+    return cached(CacheNS.NPL_WIZARD, "combined_bootstrap_v3", _load_all, ttl=_NPL_CACHE_TTL)
 
 
 @router.get("/wizard/hubs")
@@ -1746,23 +1747,26 @@ def wizard_submit(
                 header_row_idx = idx
                 break
         sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
-        # Filter out trailing empty columns
         while sheet_headers and not sheet_headers[-1]:
             sheet_headers.pop()
-        
-        all_rows = plan_sheet.get_all_values()
+
+        # Dedup keys — bounded read (avoid full-sheet get_all_values on large tabs)
         existing_keys = set()
-        for row in all_rows[header_row_idx:]:
-            if len(row) < len(sheet_headers):
-                row = row + [""] * (len(sheet_headers) - len(row))
-            if target_worksheet == "product_replacement":
-                key = _npl_replacement_key_dynamic(row, sheet_headers)
-            elif target_worksheet == "Hub_Plan":
-                key = _npl_hub_plan_key_dynamic(row, sheet_headers)
-            else:
-                key = _npl_city_plan_key(row, sheet_headers)
-            if key:
-                existing_keys.add(key)
+        try:
+            tail_rows = plan_sheet.get_values(f"A{header_row_idx}:AZ{header_row_idx + 800}")
+            for row in tail_rows[1:]:
+                if len(row) < len(sheet_headers):
+                    row = row + [""] * (len(sheet_headers) - len(row))
+                if target_worksheet == "product_replacement":
+                    key = _npl_replacement_key_dynamic(row, sheet_headers)
+                elif target_worksheet == "Hub_Plan":
+                    key = _npl_hub_plan_key_dynamic(row, sheet_headers)
+                else:
+                    key = _npl_city_plan_key(row, sheet_headers)
+                if key:
+                    existing_keys.add(key)
+        except Exception as dedupe_exc:
+            logger.warning("[NPL] submit dedupe scan skipped: %s", dedupe_exc)
 
         # 1.4 Fetch Product Master details map ONCE outside the loop
         pm_details_map = _get_product_master_details_map()
@@ -1819,7 +1823,18 @@ def wizard_submit(
             values_to_append.append(row_vals)
 
         if values_to_append:
-            plan_sheet.append_rows(values_to_append, value_input_option="USER_ENTERED", table_range=f"A{header_row_idx}")
+            import pandas as pd
+            from features.product_launch.core import _append_sheet_rows as _core_append
+
+            append_df = pd.DataFrame(values_to_append, columns=sheet_headers)
+            _core_append(
+                cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
+                target_worksheet,
+                append_df,
+                headers=sheet_headers,
+                chunk_size=200,
+            )
+            logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), target_worksheet)
 
         # 1.5 Mark submission status as Approved (or Synced) immediately
         update_submission_status(sub_id, "Approved", "Directly Synced via Wizard")
@@ -1829,6 +1844,7 @@ def wizard_submit(
             "duration_ms": round((time.perf_counter() - t_sheets) * 1000)
         }
     except Exception as exc:
+        logger.exception("[NPL] wizard/submit sheets step failed")
         steps_status["sheets"] = {
             "status": "error",
             "duration_ms": round((time.perf_counter() - t_sheets) * 1000),
@@ -2359,31 +2375,19 @@ def _format_date_npl(date_val) -> str:
 
 
 def _get_product_master_details_map() -> dict[str, dict]:
-    from app import config as cfg
-
-    from features.product_launch.core import _open_sheet
+    from features.product_launch.ff_masters import load_product_master_df
 
     import pandas as pd
     
     details_map = {}
     try:
-        from features.product_launch.sheet_reads import read_sheet_values_cached
-
-        def _fetch_pm():
-            sheet = _open_sheet(cfg.NPL_SOURCE_SHEET_KEY, "P Master")
-            return sheet.get_all_values()
-        
-        pm_data = read_sheet_values_cached(
-            cfg.NPL_SOURCE_SHEET_KEY,
-            "P Master",
-            "all",
-            sheet_category="demand_planning_masters",
-            fetcher=_fetch_pm,
-        )
-        if len(pm_data) > 1:
-            pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
+        pm_df = load_product_master_df()
+        if not pm_df.empty:
             for _, row in pm_df.iterrows():
-                pid = str(row.get("Product id", "")).strip()
+                pid_col = next((c for c in ["Product id", "Product ID"] if c in pm_df.columns), None)
+                if not pid_col:
+                    break
+                pid = str(row.get(pid_col, "")).strip()
                 if pid:
                     details_map[pid] = {
                         "RM": str(row.get("RM", "")).strip() if "RM" in row else "",
@@ -2412,26 +2416,12 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             "RM": "", "UOM": "", "Yield": "", "Total Shelf Life": "", "Hub Shelf Life": "", "PLU_CODE": ""
         }
         try:
-            from app import config as cfg
+            from features.product_launch.ff_masters import load_product_master_df
 
-            from features.product_launch.core import _open_sheet
-
-            import pandas as pd
-            from features.product_launch.sheet_reads import read_sheet_values_cached
-
-            def _fetch_pm():
-                sheet = _open_sheet(cfg.NPL_SOURCE_SHEET_KEY, "P Master")
-                return sheet.get_all_values()
-            pm_data = read_sheet_values_cached(
-                cfg.NPL_SOURCE_SHEET_KEY,
-                "P Master",
-                "all",
-                sheet_category="demand_planning_masters",
-                fetcher=_fetch_pm,
-            )
-            if len(pm_data) > 1:
-                pm_df = pd.DataFrame(pm_data[1:], columns=pm_data[0])
-                pm_row = pm_df[pm_df["Product id"].astype(str).str.strip() == pid]
+            pm_df = load_product_master_df()
+            pid_col = next((c for c in ["Product id", "Product ID"] if c in pm_df.columns), None)
+            if pid_col and not pm_df.empty:
+                pm_row = pm_df[pm_df[pid_col].astype(str).str.strip() == pid]
                 if not pm_row.empty and "RM" in pm_row.columns:
                     pm_details["RM"] = str(pm_row["RM"].iloc[0]).strip()
         except Exception:

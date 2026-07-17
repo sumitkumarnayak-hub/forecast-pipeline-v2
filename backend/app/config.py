@@ -59,9 +59,15 @@ EA_TRACKER_SHEET_URL = _env_path("EA_TRACKER_SHEET_URL")
 INVENTORY_BUFFER_SHEET_URL = _env_path("INVENTORY_BUFFER_SHEET_URL")
 NEW_PRODUCT_LAUNCH_SHEET_URL = os.getenv("NEW_PRODUCT_LAUNCH_SHEET_URL", "").strip()
 PIPELINE_PARAMS_SHEET_URL = os.getenv("PIPELINE_PARAMS_SHEET_URL", "").strip()
-NPL_SOURCE_SHEET_URL = os.getenv("NPL_SOURCE_SHEET_URL", "").strip()
+_DEFAULT_FF_AUTOMATION_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"
+)
+FF_AUTOMATION_SHEET_URL = (
+    os.getenv("FF_AUTOMATION_SHEET_URL", "").strip() or _DEFAULT_FF_AUTOMATION_SHEET_URL
+)
+# Product Launch masters (P / P-L / Hub Mapping / P-H) read only from FF Automation.
+NPL_SOURCE_SHEET_URL = os.getenv("NPL_SOURCE_SHEET_URL", "").strip() or FF_AUTOMATION_SHEET_URL
 HUB_SKU_MASTER_SHEET_URL = os.getenv("HUB_SKU_MASTER_SHEET_URL", "").strip()
-FF_AUTOMATION_SHEET_URL = os.getenv("FF_AUTOMATION_SHEET_URL", "").strip()
 PIPELINE_PARAMS_VARIABLES_TAB = os.getenv("PIPELINE_PARAMS_VARIABLES_TAB", "Variables").strip() or "Variables"
 PIPELINE_PARAMS_HUB_CHANGES_TAB = os.getenv("PIPELINE_PARAMS_HUB_CHANGES_TAB", "Hub_Changes").strip() or "Hub_Changes"
 
@@ -119,6 +125,15 @@ SHEETS_CONFIG = {
         "url": HUB_SKU_MASTER_SHEET_URL,
         "worksheets": {
             "hub_sku_master": "Hub Sku Master"
+        }
+    },
+    "ff_automation": {
+        "url": FF_AUTOMATION_SHEET_URL,
+        "worksheets": {
+            "product_master": "P Master",
+            "product_location_master": "P-L Master",
+            "product_hub_master": "P-H Master",
+            "hub_mapping": "Hub_Mapping",
         }
     },
     "demand_planning_masters": {
