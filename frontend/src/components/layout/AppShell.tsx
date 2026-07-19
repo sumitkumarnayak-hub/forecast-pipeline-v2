@@ -1,10 +1,9 @@
 "use client";
 import { useEffect, useState, ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import Sidebar from "./Sidebar";
 import { prefetchAllRoutes } from "@/lib/pagePrefetch";
-import { fetchBaselineStatus, BASELINE_APPROVED_KEY } from "@/lib/baselineStatus";
-import { cacheGet } from "@/lib/queryCache";
 import { rolesForPath, homePathForRole } from "@/lib/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/lib/theme";
@@ -34,6 +33,7 @@ function ShellFrame({
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
 }) {
+  const { role } = useAuth();
   const [cacheOpen, setCacheOpen] = useState(false);
   const [cacheData, setCacheData] = useState<Array<{
     name: string;
@@ -120,22 +120,24 @@ function ShellFrame({
             {actions}
             
             {/* Cache Status Toggle Button */}
-            <button
-              type="button"
-              onClick={() => setCacheOpen(!cacheOpen)}
-              className={`btn btn-ghost btn-icon ${cacheOpen ? "active" : ""}`}
-              style={{ color: cacheOpen ? "var(--blue)" : "inherit" }}
-              title="Cache Statuses (TTL)"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-timer">
-                <line x1="10" x2="14" y1="2" y2="2"/>
-                <line x1="12" x2="12" y1="14" y2="11"/>
-                <circle cx="12" cy="14" r="8"/>
-              </svg>
-            </button>
+            {role === "admin" && (
+              <button
+                type="button"
+                onClick={() => setCacheOpen(!cacheOpen)}
+                className={`btn btn-ghost btn-icon ${cacheOpen ? "active" : ""}`}
+                style={{ color: cacheOpen ? "var(--blue)" : "inherit" }}
+                title="Cache Statuses (TTL)"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-timer">
+                  <line x1="10" x2="14" y1="2" y2="2"/>
+                  <line x1="12" x2="12" y1="14" y2="11"/>
+                  <circle cx="12" cy="14" r="8"/>
+                </svg>
+              </button>
+            )}
 
             {/* Cache Status Dropdown Panel */}
-            {cacheOpen && (
+            {role === "admin" && cacheOpen && (
               <div 
                 className="card shadow-lg" 
                 style={{
@@ -229,11 +231,44 @@ function ShellFrame({
   );
 }
 
+
+
+
+function ComingSoonPage({ pageName }: { pageName: string }) {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center bg-gradient-to-br from-[#FAF7F1] via-[#F3F1E9] to-[#EAF6F0] p-8">
+      <div className="flex w-full max-w-[420px] flex-col items-center gap-6 rounded-[20px] border border-white/60 bg-white/50 p-12 text-center shadow-[0_20px_45px_rgba(120,90,40,0.12),0_1px_0_rgba(255,255,255,0.6)_inset] backdrop-blur-xl">
+        <h2 className="m-0 text-2xl font-semibold tracking-tight text-stone-900">
+          {pageName} — coming soon
+        </h2>
+
+        <Link
+          href="/new-product-launch"
+          className="inline-flex items-center justify-center rounded-xl bg-stone-900 px-6 py-3.5 text-sm font-semibold text-[#FAF7F1] no-underline shadow-[0_4px_14px_rgba(28,25,23,0.25)] transition-transform duration-150 ease-out hover:-translate-y-px hover:shadow-[0_6px_18px_rgba(180,83,9,0.28)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-amber-700"
+        >
+          Go to Product Launch
+        </Link>
+      </div>
+    </div>
+  );
+}
+const getPageName = (path: string): string => {
+  if (path.startsWith("/dashboard")) return "Dashboard";
+  if (path.startsWith("/autopilot")) return "Auto-Pilot";
+  if (path.startsWith("/baseline")) return "Manual Baseline";
+  if (path.startsWith("/master-data")) return "Master Data";
+  if (path.startsWith("/final-plan")) return "Final Plan";
+  if (path.startsWith("/about")) return "About & Guide";
+  if (path.startsWith("/validation")) return "Validation";
+  if (path.startsWith("/analytics")) return "Analytics";
+  return "Requested Module";
+};
+
 export default function AppShell({ children, title, subtitle, actions }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, role, hydrated } = useAuth();
-  const [baselineApproved, setBaselineApproved] = useState(false);
+  const baselineApproved = true;
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { theme, setTheme } = useTheme();
 
@@ -247,17 +282,6 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
       router.replace("/login");
       return;
     }
-
-    const cached = cacheGet<boolean>(BASELINE_APPROVED_KEY);
-    if (cached !== null) {
-      setBaselineApproved(cached);
-      void fetchBaselineStatus().then(setBaselineApproved).catch(() => {});
-      return;
-    }
-
-    void fetchBaselineStatus()
-      .then(setBaselineApproved)
-      .catch(() => {});
   }, [hydrated, user, router]);
 
   useEffect(() => {
@@ -273,18 +297,24 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
     prefetchAllRoutes(role);
   }, [hydrated, role, user]);
 
+  const isAllowedPath =
+    pathname === "/" ||
+    pathname.startsWith("/new-product-launch") ||
+    pathname.startsWith("/hub-launch") ||
+    pathname.startsWith("/settings");
+
   return (
     <ShellFrame
-      title={title}
-      subtitle={subtitle}
-      actions={actions}
+      title={isAllowedPath ? title : "Coming Soon"}
+      subtitle={isAllowedPath ? subtitle : `The ${getPageName(pathname)} module is under development`}
+      actions={isAllowedPath ? actions : null}
       baselineApproved={baselineApproved}
       theme={theme}
       setTheme={setTheme}
       mobileNavOpen={mobileNavOpen}
       setMobileNavOpen={setMobileNavOpen}
     >
-      {children}
+      {isAllowedPath ? children : <ComingSoonPage pageName={getPageName(pathname)} />}
     </ShellFrame>
   );
 }

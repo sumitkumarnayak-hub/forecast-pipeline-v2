@@ -260,6 +260,12 @@ def preview_hub_rows(
             df[day] = 0
     df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
 
+    from features.product_launch.core import _parse_percent_to_decimal
+    pct_cols = ["Yield", "Meat Ratio", "Meat Ratio (for VA)", "Replacement Percentage", "replacement_percentage"]
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(_parse_percent_to_decimal)
+
     submitted_by = username or ""
     sub_id = gen_sub_id(sub_type)
     df["Timestamp"]        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -272,7 +278,9 @@ def preview_hub_rows(
     log_cols = ["Timestamp", "Submission_ID", "Submission_Type",
                 "Product ID", "Product Name", "Category",
                 "City", "Hub", "MRP", "Start Date",
-                "Status", "Rejection_Reason", "Submitted_By"] + WEEKDAYS
+                "Status", "Rejection_Reason", "Submitted_By",
+                "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS + [
+                "PLU Code", "PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
     
     log_df = df[[c for c in log_cols if c in df.columns]]
     return df_to_records(_sanitize(log_df))

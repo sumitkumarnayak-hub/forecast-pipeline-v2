@@ -125,19 +125,13 @@ async function prefetchMasterDataLight(): Promise<void> {
 }
 
 function matchPrefetch(href: string): (() => Promise<void>) | null {
-  if (href.startsWith("/dashboard")) return prefetchDashboard;
-  if (href.startsWith("/autopilot")) return prefetchAutopilot;
   if (href.startsWith("/settings")) return prefetchSettings;
-  if (href.startsWith("/validation")) return prefetchValidation;
-  if (href.startsWith("/analytics")) return prefetchInsights;
-  if (href.startsWith("/final-plan")) return prefetchFinalPlan;
   if (href.startsWith("/new-product-launch")) {
     return async () => {
       await prefetchNpl();
       await prefetchSubmissionLogSummary();
     };
   }
-  if (href.startsWith("/master-data")) return prefetchMasterDataLight;
   return null;
 }
 

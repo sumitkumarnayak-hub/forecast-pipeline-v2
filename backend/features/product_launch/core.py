@@ -61,20 +61,20 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "MRP\n(Before KVi Discount)": pa.Column(float, coerce=True, nullable=True, required=False),
     # Optional columns
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Yield": pa.Column(str, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Meat Ratio": pa.Column(str, coerce=True, nullable=True, required=False),
     "Meat Ratio (for VA)": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
-    "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Total Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Hub Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Replacement Percentage": pa.Column(float, coerce=True, nullable=True, required=False),
-    "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Replacement Percentage": pa.Column(str, coerce=True, nullable=True, required=False),
+    "replacement_percentage": pa.Column(str, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True, required=False) for day in WEEKDAYS}
 }, strict=False)
 
@@ -104,20 +104,20 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "MRP\n(Before KVi Discount)": pa.Column(float, coerce=True, nullable=True, required=False),
     # Optional columns
     "UOM": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Yield": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Yield": pa.Column(str, coerce=True, nullable=True, required=False),
     "RM": pa.Column(str, coerce=True, nullable=True, required=False),
     "Meat Ratio": pa.Column(str, coerce=True, nullable=True, required=False),
     "Meat Ratio (for VA)": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Total Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
-    "Hub Shelf Life": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Total Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Hub Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_name": pa.Column(str, coerce=True, nullable=True, required=False),
-    "Replacement Percentage": pa.Column(float, coerce=True, nullable=True, required=False),
-    "replacement_percentage": pa.Column(float, coerce=True, nullable=True, required=False),
+    "Replacement Percentage": pa.Column(str, coerce=True, nullable=True, required=False),
+    "replacement_percentage": pa.Column(str, coerce=True, nullable=True, required=False),
     **{day: pa.Column(int, coerce=True, nullable=True, required=False) for day in WEEKDAYS}
 }, strict=False)
 
@@ -139,7 +139,9 @@ LOG_HEADERS = [
     "City", "Hub", "MRP", "Start Date",
     "Status", "Rejection_Reason", "Submitted_By",
     "Old Product ID", "Old Product Name", "Replacement Percentage",
-] + WEEKDAYS
+] + WEEKDAYS + [
+    "PLU Code", "PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"
+]
 
 LAUNCH_OUTPUT_HEADERS = [
     "Product ID", "Product Name", "Category", "City", "Hub", "Start Date", "Day", "Plan",
@@ -609,7 +611,7 @@ def get_template_columns(plan_level: str, sub_type: str) -> tuple[list[str], lis
             mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
         optional = ["PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
 
-    return mandatory, optional
+    return mandatory + optional, []
 
 
 def _style_ws(ws, mandatory_cols):
@@ -740,6 +742,23 @@ def _safe_int(val) -> int:
         return 0
 
 
+def _parse_percent_to_decimal(val) -> float | None:
+    if pd.isna(val):
+        return None
+    val_str = str(val).strip()
+    if not val_str or val_str.lower() in ("na", "none", "null", ""):
+        return None
+    try:
+        if val_str.endswith("%"):
+            return float(val_str.rstrip("%")) / 100.0
+        num = float(val_str)
+        if num > 1.0:
+            return num / 100.0
+        return num
+    except ValueError:
+        return None
+
+
 def parse_city_upload(file) -> tuple:
     """Returns (df, errors).  df columns = CITY_COLS."""
     try:
@@ -784,11 +803,18 @@ def parse_city_upload(file) -> tuple:
     
     errors = []
     
-    # 1. Clean nulls & check for empty columns
+    # 1. Clean nulls & check for empty columns on core fields only
     for col in ["city_name", "product_id", "product_name", "category"]:
         if col in df.columns:
             if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
                 errors.append(f"Row values in column '{col}' cannot be empty.")
+            
+    # Add dtype validation
+    numeric_cols = ["MRP", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+    for col in df.columns:
+        if col in numeric_cols:
+            if not pd.to_numeric(df[col], errors="coerce").notna().all():
+                errors.append(f"Column '{col}' must contain only numeric values.")
     
     # 2. Validate MRP is not empty, numeric and > 0
     if "MRP" in df.columns:
@@ -843,15 +869,12 @@ def parse_city_upload(file) -> tuple:
     df["category"]     = df.get("category", "").astype(str).str.strip()
     df["MRP"]          = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
-    # Clean and standardize optional columns
+    # Clean and standardize optional columns (Accept all as strings)
     for col in ALL_POSSIBLE_OPTIONAL_COLS:
         if col not in df.columns:
             df[col] = None
         else:
-            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life", "replacement_percentage"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            else:
-                df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
+            df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
 
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
@@ -906,11 +929,18 @@ def parse_hub_upload(file) -> tuple:
     
     errors = []
     
-    # 1. Clean nulls & check for empty columns
+    # 1. Clean nulls & check for empty columns on core fields only
     for col in ["city_name", "hub_name", "product_id", "product_name", "category"]:
         if col in df.columns:
             if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
                 errors.append(f"Row values in column '{col}' cannot be empty.")
+            
+    # Add dtype validation
+    numeric_cols = ["MRP", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+    for col in df.columns:
+        if col in numeric_cols:
+            if not pd.to_numeric(df[col], errors="coerce").notna().all():
+                errors.append(f"Column '{col}' must contain only numeric values.")
     
     # 2. Validate MRP is not empty, numeric and > 0
     if "MRP" in df.columns:
@@ -963,15 +993,12 @@ def parse_hub_upload(file) -> tuple:
         df[col] = df.get(col, "").astype(str).str.strip()
     df["MRP"] = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
-    # Clean and standardize optional columns
+    # Clean and standardize optional columns (Accept all as strings)
     for col in ALL_POSSIBLE_OPTIONAL_COLS:
         if col not in df.columns:
             df[col] = None
         else:
-            if col in ["Yield", "Total Shelf Life", "Hub Shelf Life", "replacement_percentage"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            else:
-                df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
+            df[col] = df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
 
     df = df[df["city_name"].str.lower() != "nan"]
     if df.empty:
@@ -989,7 +1016,8 @@ def _ensure_log():
     try:
         ws = sh.worksheet(LOG_SHEET_NAME)
         existing = ws.row_values(1)
-        for col in ["Status", "Rejection_Reason", "Submitted_By", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"]:
+        new_cols = ["PLU Code", "PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
+        for col in ["Status", "Rejection_Reason", "Submitted_By", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + new_cols:
             if col not in existing:
                 ws.update_cell(1, len(existing) + 1, col)
                 existing.append(col)
@@ -1098,6 +1126,7 @@ def _append_sheet_rows(
 
 def save_to_log(rows_df: pd.DataFrame):
     """Append submission rows to Submission_Log (no full-sheet rewrite)."""
+    _ensure_log()
     df = _sanitize(rows_df)
     log_cols = [c for c in LOG_HEADERS if c in df.columns]
     if not log_cols:
@@ -1585,6 +1614,12 @@ def _submit_hub_df(
         if day not in df.columns:
             df[day] = 0
     df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
+    
+    # Format percentage fields to decimal floats
+    pct_cols = ["Yield", "Meat Ratio", "Meat Ratio (for VA)", "Replacement Percentage", "replacement_percentage"]
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(_parse_percent_to_decimal)
 
     submitted_by = username or ""
     sub_id = gen_sub_id(sub_type)

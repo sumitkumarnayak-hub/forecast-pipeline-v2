@@ -122,29 +122,29 @@ FastAPI maps endpoints under self-contained directories in `backend/features/`:
   * **Returns**: `{ "success": true, "rows_deleted": 2 }`
   * **Purpose**: Deletes target rows from Google Sheets, invalidates cache, and updates action audits.
 
-#### 3. Autopilot Feature (`features/autopilot/`)
+#### 3. Autopilot Feature (`features/autopilot/`) - [DISABLED / COMING SOON]
 * **`POST /api/autopilot/run`**:
   * **Parameters**: Query: `from_step` (Integer, defaults to 0).
   * **Returns**: `{ "task_id": "UUID-STRING", "detail": "Auto-Pilot pipeline started" }`
-  * **Purpose**: Triggers a background thread running the 6-step weekly forecasting pipeline.
+  * **Purpose**: Triggers a background thread running the 6-step weekly forecasting pipeline. (Inactive in current scoped release).
 * **`GET /api/autopilot/status/{task_id}`**:
   * **Parameters**: Path parameter `task_id`.
   * **Returns**: `{ "task_id": "...", "status": "running", "current_step": "run_engine", "steps": [...] }`
-  * **Purpose**: Check the current execution logs state of the autopilot task.
+  * **Purpose**: Check the current execution logs state of the autopilot task. (Inactive in current scoped release).
 * **`GET /api/autopilot/stream/{task_id}`**:
   * **Parameters**: Path parameter `task_id`.
   * **Returns**: Server-Sent Events (SSE) data stream (`text/event-stream`).
-  * **Purpose**: Streams real-time pipeline console logs and progress updates.
+  * **Purpose**: Streams real-time pipeline console logs and progress updates. (Inactive in current scoped release).
 
-#### 4. Baseline Feature (`features/baseline/`)
+#### 4. Baseline Feature (`features/baseline/`) - [DISABLED / COMING SOON]
 * **`GET /api/baseline/status`**:
   * **Parameters**: None.
   * **Returns**: `{ "approved": true, "latest_run": BaselineRun, "active_dataset": DatasetStatus }`
-  * **Purpose**: Retrieves baseline approval states.
+  * **Purpose**: Retrieves baseline approval states. (Inactive in current scoped release).
 * **`POST /api/baseline/approve`**:
   * **Parameters**: None (Admin authorization required).
   * **Returns**: `{ "detail": "Baseline approved — Final Plan unlocked." }`
-  * **Purpose**: Locks baseline overrides on sheets and enables final plan adjustments.
+  * **Purpose**: Locks baseline overrides on sheets and enables final plan adjustments. (Inactive in current scoped release).
 
 ---
 

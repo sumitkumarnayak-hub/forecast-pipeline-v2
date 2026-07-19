@@ -54,17 +54,17 @@ User permissions are verified on routes using dependency injection helpers decla
 
 ---
 
-## 4. Asynchronous Pipeline & SSE
+## 4. Asynchronous Pipeline & SSE - [DISABLED / COMING SOON]
 
 ### The Multi-Threaded Auto-Pilot Pipeline
-When a user launches the Auto-Pilot weekly process (`POST /api/autopilot/run`), the execution occurs asynchronously to prevent HTTP timeouts:
+When a user launches the Auto-Pilot weekly process (`POST /api/autopilot/run`), the execution occurs asynchronously to prevent HTTP timeouts. (This pipeline worker system is inactive in this scoped release):
 
 1. **Thread Spawning**: The router spawns a background thread running `run_optimized_autopilot()` inside `features/autopilot/optimized.py`.
 2. **State Store**: The thread records the execution parameters in a global dictionary store (`features/autopilot/state.py`) indexed by a task UUID.
 3. **Step Log Tracking**: As each of the 6 steps executes, the step status (`running`, `success`, `failed`), progress logs, and execution errors are written to the database in the `pipeline_step_logs` table.
 
 ### Server-Sent Events (SSE) Interface
-The frontend client subscribes to progress events in real-time by opening a persistent HTTP connection to:
+The frontend client subscribes to progress events in real-time by opening a persistent HTTP connection. (This SSE streaming system is inactive in this scoped release):
 ```http
 GET /api/autopilot/stream/{task_id}
 Accept: text/event-stream

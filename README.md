@@ -8,11 +8,11 @@ app_port: 7860
 pinned: false
 ---
 
-# Demand Planning & Forecasting Suite (Monorepo)
+# Demand Planning & Forecasting Suite (Monorepo - Scoped Deployment)
 
-A production-grade web application for forecasting pipelines, manual baseline operations, auto-pilot synchronization, and new product/hub launches. 
+A production-grade web application scoped specifically for **New Product Launch**, **Hub Launch**, and **Settings** management. Other pipeline forecasting modules (Dashboard, Auto-Pilot, Baseline, Final Plan, Validation, Analytics) are temporarily disabled and display a "Coming Soon" placeholder UI in this release.
 
-Built using a **Next.js (React)** frontend with vanilla CSS/Tailwind styling and a modular **FastAPI (Python)** backend, this suite serves as a high-performance system integrating supabased databases and cached Google Sheets worksheets.
+Built using a **Next.js (React)** frontend with vanilla CSS/Tailwind styling and a modular **FastAPI (Python)** backend, this suite serves as a high-performance control panel integrating database tables and cached Google Sheets worksheets.
 
 ---
 

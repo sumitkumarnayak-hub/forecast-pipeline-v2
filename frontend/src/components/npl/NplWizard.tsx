@@ -14,6 +14,106 @@ type BaseStage = (typeof BASE_STAGES)[number];
 type ReplacementStage = (typeof REPLACEMENT_STAGES)[number];
 type WizardStage = BaseStage | ReplacementStage | "setup";
 
+const COLUMN_LABEL_MAP: Record<string, string> = {
+  city_name: "City",
+  Channel: "Channel",
+  Mon: "Mon",
+  Tue: "Tue",
+  Wed: "Wed",
+  Thu: "Thu",
+  Fri: "Fri",
+  Sat: "Sat",
+  Sun: "Sun",
+  UOM: "UOM",
+  Yield: "Yield",
+  RM: "RM",
+  "Total Shelf Life": "Total Shelf Life",
+  "Hub Shelf Life": "Hub Shelf Life",
+};
+
+const getColumnLabel = (col: string, subType: string, planLevel: string): string => {
+  if (COLUMN_LABEL_MAP[col]) return COLUMN_LABEL_MAP[col];
+
+  if (subType === "Replacement") {
+    switch (col) {
+      case "hub_name": return "Hub Name";
+      case "product_id": return "Product ID";
+      case "product_name": return "Product Name";
+      case "category": return "Sub Category";
+      case "MRP": return "MRP";
+      case "old_product_id": return "Old Product ID";
+      case "old_product_name": return "Old Product Name";
+      case "replacement_percentage": return "Replacement Percentage";
+      case "PLU Code":
+      case "PLU_CODE":
+        return "PLU Code";
+      case "Meat Ratio":
+      case "Meat Ratio (for VA)":
+        return "Meat Ratio";
+      default: return col;
+    }
+  } else {
+    switch (col) {
+      case "hub_name": return planLevel === "hub" ? "hub_name" : "Hub Name";
+      case "product_id": return "PRODUCT_ID";
+      case "product_name": return "PRODUCT_NAME";
+      case "category": return "SUB_CATEGORY";
+      case "MRP": return "MRP\n(Before KVi Discount)";
+      case "PLU Code":
+      case "PLU_CODE":
+        return "PLU_CODE";
+      case "Meat Ratio":
+      case "Meat Ratio (for VA)":
+        return "Meat Ratio (for VA)";
+      default: return col;
+    }
+  }
+};
+
+const getVisibleColumns = (subType: string, planLevel: string): string[] => {
+  const weekdaysList = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  if (subType === "Replacement") {
+    const cols = ["city_name"];
+    if (planLevel === "hub") cols.push("hub_name");
+    cols.push(
+      "product_id",
+      "product_name",
+      "category",
+      "MRP",
+      "old_product_id",
+      "old_product_name",
+      "replacement_percentage",
+      ...weekdaysList,
+      "PLU Code",
+      "UOM",
+      "Yield",
+      "RM",
+      "Meat Ratio",
+      "Total Shelf Life",
+      "Hub Shelf Life"
+    );
+    return cols;
+  } else {
+    const cols = ["city_name"];
+    if (planLevel === "hub") cols.push("hub_name");
+    cols.push(
+      "product_id",
+      "product_name",
+      "category",
+      "MRP",
+      ...weekdaysList,
+      "PLU_CODE",
+      "UOM",
+      "Yield",
+      "RM",
+      "Meat Ratio (for VA)",
+      "Total Shelf Life",
+      "Hub Shelf Life"
+    );
+    return cols;
+  }
+};
+
 interface NplWizardProps {
   subType: "New Launch" | "Expansion" | "Replacement";
   title: string;
@@ -475,10 +575,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
         return;
       }
       setHubRows(defaultRows);
-      setHubColumns(planLevel === "hub" 
-        ? ["city_name", "hub_name", "product_id", "product_name", "category", "MRP", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        : ["city_name", "product_id", "product_name", "category", "MRP", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-      );
+      const visibleKeys = getVisibleColumns(subType, planLevel);
+      setHubColumns(visibleKeys);
     }
     setStage("split");
   };
@@ -503,7 +601,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       );
 
       setHubRows(data.rows || []);
-      setHubColumns(data.columns || []);
+      const visibleKeys = getVisibleColumns(subType, planLevel);
+      const filtered = (data.columns || []).filter(c => visibleKeys.includes(c));
+      setHubColumns(filtered);
       setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
@@ -1453,7 +1553,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               <thead>
                 <tr>
                   {hubColumns.map(c => (
-                    <th key={c}>{c}</th>
+                    <th key={c}>{getColumnLabel(c, subType, planLevel)}</th>
                   ))}
                 </tr>
               </thead>

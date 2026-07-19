@@ -37,8 +37,8 @@ Audit log of active users and client environment fingerprints.
 - `created_at` (DateTime, server_default=func.now())
 - `system_details` (String) — Minified JSON string containing client metadata (OS, Browser, IP, location coordinates)
 
-#### 4. `baseline_runs` & `final_plan_runs`
-Main audit tables logging historical executions of baseline forecasting engines.
+#### 4. `baseline_runs` & `final_plan_runs` - [UNUSED / RESERVED]
+Main audit tables logging historical executions of baseline forecasting engines. (These structures are not active in this scoped release).
 - `id` (Integer, Primary Key, autoincrement=True)
 - `run_id` (String, unique=True, nullable=False)
 - `run_name` (String)
@@ -53,8 +53,8 @@ Main audit tables logging historical executions of baseline forecasting engines.
 - `approved_by` (Integer, references users.id)
 - `approved_at` (DateTime)
 
-#### 5. `pipeline_runs`, `pipeline_step_logs`, `pipeline_run_log_lines`
-Main tables tracking the Auto-Pilot step transitions and stdout stream logs.
+#### 5. `pipeline_runs`, `pipeline_step_logs`, `pipeline_run_log_lines` - [UNUSED / RESERVED]
+Main tables tracking the Auto-Pilot step transitions and stdout stream logs. (These structures are not active in this scoped release).
 - `pipeline_runs`: Holds the overarching execution state of the 6-step flow.
   - Fields: `id`, `run_id` (unique), `user_id`, `status`, `current_step`, `started_at`, `completed_at`, `summary_stats`, `session_id`
 - `pipeline_step_logs`: Step-specific metrics (e.g. `master_sync` or `run_engine` status, error_detail, logged_at).

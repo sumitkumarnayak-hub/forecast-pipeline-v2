@@ -6,7 +6,7 @@ import { isAuthenticated } from "@/lib/auth";
 export default function Home() {
   const router = useRouter();
   useEffect(() => {
-    router.replace(isAuthenticated() ? "/dashboard" : "/login");
+    router.replace(isAuthenticated() ? "/new-product-launch" : "/login");
   }, [router]);
   return null;
 }

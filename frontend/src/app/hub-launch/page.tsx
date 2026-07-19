@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import HubLaunchTab from "@/components/npl/HubLaunchTab";
 import api from "@/lib/api";
-import { ExternalLink, Clock } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
 interface NplInfo {
   ff_input_sheet_url: string | null;
@@ -22,42 +22,8 @@ function HubLaunchHeaderActions() {
       .catch(() => {});
   }, []);
 
-  const formatLastSynced = (iso: string | null) => {
-    if (!iso) return "Never synced";
-    try {
-      const d = new Date(iso);
-      return d.toLocaleString("en-IN", {
-        day: "2-digit", month: "short", year: "numeric",
-        hour: "2-digit", minute: "2-digit",
-      });
-    } catch {
-      return iso;
-    }
-  };
-
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-      {/* Last synced badge */}
-      <div style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.35rem",
-        padding: "0.28rem 0.65rem",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: "999px",
-        fontSize: "0.71rem",
-        color: "var(--text-muted)",
-        fontWeight: 500,
-        whiteSpace: "nowrap",
-      }}>
-        <Clock size={11} />
-        Last synced:&nbsp;
-        <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-          {info ? formatLastSynced(info.last_synced) : "—"}
-        </span>
-      </div>
-
       {/* FF Input Sheet button */}
       {info?.ff_input_sheet_url && (
         <a

@@ -285,6 +285,5 @@ export function rolesForPath(pathname: string): string[] | null {
 
 /** Default landing route after login (first page the role can access). */
 export function homePathForRole(role: string): string {
-  if (role === "product") return "/new-product-launch";
-  return "/dashboard";
+  return "/new-product-launch";
 }
