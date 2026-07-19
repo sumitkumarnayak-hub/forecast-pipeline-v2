@@ -602,7 +602,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
       setHubRows(data.rows || []);
       const visibleKeys = getVisibleColumns(subType, planLevel);
-      const filtered = (data.columns || []).filter(c => visibleKeys.includes(c));
+      const filtered = (data.columns || []).filter((c: string) => visibleKeys.includes(c));
       setHubColumns(filtered);
       setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
