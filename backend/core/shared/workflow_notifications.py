@@ -15,6 +15,7 @@ from core.shared.email import (
     build_email_html,
     build_master_links_card,
     build_sheet_change_email,
+    build_stat_highlights_card,
     get_recipient_emails,
     send_email,
     send_launch_notifications,
@@ -757,14 +758,18 @@ def notify_npl_submitted(
         "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
 
-    # Stats/summary block — weekly quantity, MRP, estimated revenue + per-city breakdown
+    # Stats/summary block — weekly quantity, MRP, estimated revenue + per-city breakdown.
+    # Rendered as its own highlight row (not buried in the plain fields list below)
+    # right under the intro, so it can't be missed.
     stats = stats or {}
+    highlights: list[tuple[str, str]] = []
     if stats.get("total_weekly_qty") is not None:
-        fields["Weekly volume"] = f"{int(stats.get('total_weekly_qty', 0)):,} units"
+        highlights.append(("Weekly volume", f"{int(stats.get('total_weekly_qty', 0)):,} units"))
     if stats.get("avg_mrp"):
-        fields["MRP"] = f"₹{stats.get('avg_mrp', 0):,.0f}"
+        highlights.append(("MRP", f"₹{stats.get('avg_mrp', 0):,.0f}"))
     if stats.get("total_weekly_revenue") is not None:
-        fields["Est. weekly revenue"] = f"₹{stats.get('total_weekly_revenue', 0):,.0f}"
+        highlights.append(("Est. weekly revenue", f"₹{stats.get('total_weekly_revenue', 0):,.0f}"))
+    highlights_card = build_stat_highlights_card(stats=highlights)
 
     city_breakdown = stats.get("city_breakdown") or []
     stats_table = build_data_table_card(
@@ -789,6 +794,7 @@ def notify_npl_submitted(
         fields=fields,
         variant="success",
         badge="Synced",
+        top_html=highlights_card,
         extra_html=stats_table + master_card,
         action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to track status.",
     )
@@ -808,6 +814,7 @@ def notify_npl_submitted(
         fields=fields,
         variant="warning",
         badge="Action needed",
+        top_html=highlights_card,
         extra_html=stats_table + master_card,
         action="Review the linked master sheets and update P Master, P-L Master, and Hub Mapping as required.",
     )

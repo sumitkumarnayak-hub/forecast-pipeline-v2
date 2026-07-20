@@ -102,6 +102,30 @@ def build_master_links_card(*, title: str = "Update these master sheets") -> str
     </table>"""
 
 
+def build_stat_highlights_card(*, stats: list[tuple[str, str]]) -> str:
+    """Row of 2–4 bold Apple-style stat boxes (e.g. weekly volume / MRP / revenue).
+
+    Rendered as its own prominent block (not buried in the plain details list)
+    so summary numbers are impossible to miss in the email body.
+    """
+    if not stats:
+        return ""
+    width_pct = 100 // len(stats)
+    cells = "".join(
+        f'<td style="width:{width_pct}%;padding:0 {6 if i else 0}px 0 {0 if i == len(stats) - 1 else 6}px;vertical-align:top;">'
+        f'<div style="background:#FAFAFC;border:1px solid #E8E8ED;border-radius:12px;padding:14px 14px;">'
+        f'<p style="margin:0 0 4px 0;font-size:11px;color:#86868B;font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:0.02em;">{_esc(label)}</p>'
+        f'<p style="margin:0;font-size:18px;color:#1D1D1F;font-weight:700;">{_esc(value)}</p>'
+        f"</div></td>"
+        for i, (label, value) in enumerate(stats)
+    )
+    return f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0 0;">
+      <tr>{cells}</tr>
+    </table>"""
+
+
 def build_data_table_card(
     *,
     title: str,
@@ -161,6 +185,7 @@ def build_email_html(
     variant: str = "default",
     badge: str = "",
     extra_html: str = "",
+    top_html: str = "",
 ) -> str:
     """Apple-inspired light HTML layout for operational emails."""
     from datetime import datetime
@@ -248,6 +273,7 @@ def build_email_html(
           </tr>
           <tr>
             <td style="padding:0 32px 28px 32px;">
+              {top_html}
               {details_table}
               {info_html}
               {error_html}
