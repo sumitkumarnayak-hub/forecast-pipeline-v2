@@ -241,10 +241,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [expansionSkuSearch, setExpansionSkuSearch] = useState("");
   const [showExpansionSkuDropdown, setShowExpansionSkuDropdown] = useState(false);
 
-  const [newLaunchPid, setNewLaunchPid] = useState("");
-  const [newLaunchName, setNewLaunchName] = useState("");
-  const [newLaunchMrp, setNewLaunchMrp] = useState("");
-
   const [oldCategory, setOldCategory] = useState("");
   const [newCategory, setNewCategory] = useState("");
 
@@ -449,8 +445,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCities, hubCategory, planLevel, fetchHubsForCity]);
 
-  const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : newLaunchPid;
-  const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : newLaunchName;
+  const templateProductId = isExpansion ? expansionPid : isReplacement ? newPid : "";
+  const templateProductName = isExpansion ? expansionName : isReplacement ? newProductName : "";
 
   const downloadTemplate = async () => {
     if (!selectedCities.length) {
@@ -460,16 +456,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     if (!planLevel) {
       setMsg({ text: "Select Plan Level before downloading the template", type: "warning" });
       return;
-    }
-    if (subType === "New Launch") {
-      if (!templateProductId.trim() || !templateProductName.trim()) {
-        setMsg({ text: "Enter Product ID and Product Name before downloading the template.", type: "warning" });
-        return;
-      }
-      if (!newLaunchMrp.trim() || Number(newLaunchMrp) <= 0) {
-        setMsg({ text: "Enter a valid MRP before downloading the template.", type: "warning" });
-        return;
-      }
     }
     if (isExpansion && (!expansionPid.trim() || !expansionName.trim())) {
       setMsg({ text: "Search and select an existing SKU before downloading the template.", type: "warning" });
@@ -495,7 +481,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : (isExpansion ? "" : newLaunchMrp),
+              mrp: isReplacement ? newMrp : "",
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -506,7 +492,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : (isExpansion ? "" : newLaunchMrp),
+              mrp: isReplacement ? newMrp : "",
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -1390,45 +1376,6 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                   Selected: <span className="font-semibold text-primary">{expansionName}</span> ({expansionPid}) · <span className="font-semibold text-indigo">{expansionCategory}</span>
                 </p>
               )}
-            </div>
-          )}
-          {!isReplacement && subType === "New Launch" && (
-            <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
-              <div className="form-group">
-                <label className="form-label">Product ID *</label>
-                <input
-                  type="text"
-                  className="form-input text-sm"
-                  value={newLaunchPid}
-                  onChange={e => setNewLaunchPid(e.target.value)}
-                  placeholder="Enter new product ID"
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Product Name *</label>
-                <input
-                  type="text"
-                  className="form-input text-sm"
-                  value={newLaunchName}
-                  onChange={e => setNewLaunchName(e.target.value)}
-                  placeholder="Enter new product name"
-                  disabled={readOnly}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">MRP (Before KVi Discount) *</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  className="form-input text-sm"
-                  value={newLaunchMrp}
-                  onChange={e => setNewLaunchMrp(e.target.value)}
-                  placeholder="Enter MRP"
-                  disabled={readOnly}
-                />
-              </div>
             </div>
           )}
           {!isReplacement && (
