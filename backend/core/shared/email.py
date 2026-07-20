@@ -102,6 +102,54 @@ def build_master_links_card(*, title: str = "Update these master sheets") -> str
     </table>"""
 
 
+def build_data_table_card(
+    *,
+    title: str,
+    headers: list[str],
+    rows: list[list[Any]],
+    max_rows: int = 10,
+) -> str:
+    """Apple-style card with a compact data table (e.g. per-city revenue breakdown)."""
+    if not rows:
+        return ""
+    shown, extra = rows[:max_rows], max(0, len(rows) - max_rows)
+
+    header_html = "".join(
+        f'<th style="text-align:left;padding:8px 10px;font-size:11px;color:#86868B;'
+        f'font-weight:600;text-transform:uppercase;letter-spacing:0.02em;'
+        f'border-bottom:1px solid #E8E8ED;">{_esc(h)}</th>'
+        for h in headers
+    )
+    body_html = "".join(
+        "<tr>"
+        + "".join(
+            f'<td style="padding:9px 10px;font-size:13px;color:#1D1D1F;'
+            f'border-bottom:1px solid #F2F2F7;">{_esc(cell)}</td>'
+            for cell in row
+        )
+        + "</tr>"
+        for row in shown
+    )
+    footer_html = (
+        f'<p style="margin:10px 0 0 0;font-size:12px;color:#86868B;">+ {extra} more</p>'
+        if extra
+        else ""
+    )
+    return f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0 0;">
+      <tr>
+        <td style="background:#FAFAFC;border:1px solid #E8E8ED;border-radius:14px;padding:18px 20px;">
+          <p style="margin:0 0 12px 0;font-size:13px;font-weight:600;color:#86868B;letter-spacing:0.02em;text-transform:uppercase;">{_esc(title)}</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>{header_html}</tr>
+            {body_html}
+          </table>
+          {footer_html}
+        </td>
+      </tr>
+    </table>"""
+
+
 def build_email_html(
     *,
     headline: str,

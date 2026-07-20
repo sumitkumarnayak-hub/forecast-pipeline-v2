@@ -1377,12 +1377,15 @@ def wizard_submit(
     t_db = time.perf_counter()
     try:
         import pandas as pd
+        from features.product_launch.core import compute_npl_launch_stats
+
         hub_df = pd.DataFrame(hub_rows)
         cities = sorted(hub_df["city_name"].dropna().astype(str).unique().tolist()) if "city_name" in hub_df.columns else []
         product_id = str(hub_df["product_id"].iloc[0]) if "product_id" in hub_df.columns and len(hub_df) else ""
         category = str(hub_df["category"].iloc[0]) if "category" in hub_df.columns and len(hub_df) else ""
         launch_dates = sorted(hub_df["Launch Date"].dropna().astype(str).unique().tolist()) if "Launch Date" in hub_df.columns else []
         start_date = launch_dates[0] if launch_dates else ""
+        launch_stats = compute_npl_launch_stats(hub_df)
 
         db.save_npl_submission(
             submission_id=sub_id,
@@ -1444,6 +1447,7 @@ def wizard_submit(
                     "hub_count": hub_count,
                     "submitted_by": username,
                     "user_id": user_id,
+                    "stats": launch_stats,
                 }
             )
             steps_status["email"] = {

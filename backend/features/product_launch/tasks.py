@@ -25,6 +25,7 @@ def handle_npl_email(payload: Dict[str, Any]):
         hub_count=payload.get("hub_count"),
         submitted_by=payload.get("submitted_by"),
         user_id=payload.get("user_id"),
+        stats=payload.get("stats"),
         db=db,
     )
 

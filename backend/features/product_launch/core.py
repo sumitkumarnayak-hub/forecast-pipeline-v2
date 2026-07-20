@@ -2091,6 +2091,47 @@ def get_earliest_monday(min_days: int = 4) -> date:
 # Streamlit UI code removed. This module now provides only backend helpers for FastAPI and Next.js.
 
 
+def compute_npl_launch_stats(hub_df: pd.DataFrame) -> dict:
+    """
+    Revenue/volume summary used in the launch confirmation email:
+    total weekly units, average MRP, estimated weekly revenue, and a
+    per-city breakdown (units + revenue) sorted by revenue descending.
+    """
+    if hub_df is None or hub_df.empty:
+        return {}
+
+    df = hub_df.copy()
+    day_cols = [d for d in WEEKDAYS if d in df.columns]
+    if day_cols:
+        qty = df[day_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+    else:
+        qty = pd.Series(0, index=df.index, dtype=float)
+
+    mrp = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
+    revenue = qty * mrp
+
+    total_weekly_qty = float(qty.sum())
+    total_weekly_revenue = float(revenue.sum())
+    avg_mrp = float(mrp[mrp > 0].mean()) if (mrp > 0).any() else 0.0
+
+    city_breakdown: list[dict] = []
+    city_col = "city_name" if "city_name" in df.columns else None
+    if city_col:
+        tmp = pd.DataFrame({"city": df[city_col].astype(str), "qty": qty, "revenue": revenue})
+        grouped = tmp.groupby("city", as_index=False).sum().sort_values("revenue", ascending=False)
+        city_breakdown = [
+            {"city": row["city"], "qty": float(row["qty"]), "revenue": float(row["revenue"])}
+            for _, row in grouped.iterrows()
+        ]
+
+    return {
+        "total_weekly_qty": total_weekly_qty,
+        "total_weekly_revenue": round(total_weekly_revenue, 2),
+        "avg_mrp": round(avg_mrp, 2),
+        "city_breakdown": city_breakdown,
+    }
+
+
 # ──────────────────────────────────────────────────────────────────
 # WIDE → LONG  CONVERTER
 # ──────────────────────────────────────────────────────────────────

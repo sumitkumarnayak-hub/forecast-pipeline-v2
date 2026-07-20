@@ -11,6 +11,7 @@ from app.config import is_smtp_configured
 from core.database.engine import Database
 
 from core.shared.email import (
+    build_data_table_card,
     build_email_html,
     build_master_links_card,
     build_sheet_change_email,
@@ -715,6 +716,7 @@ def notify_npl_submitted(
     hub_count: int = 0,
     submitted_by: str = "",
     user_id: int | None = None,
+    stats: dict | None = None,
     db: Database | None = None,
 ) -> dict:
     """
@@ -755,6 +757,29 @@ def notify_npl_submitted(
         "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
 
+    # Stats/summary block — weekly quantity, MRP, estimated revenue + per-city breakdown
+    stats = stats or {}
+    if stats.get("total_weekly_qty") is not None:
+        fields["Weekly volume"] = f"{int(stats.get('total_weekly_qty', 0)):,} units"
+    if stats.get("avg_mrp"):
+        fields["MRP"] = f"₹{stats.get('avg_mrp', 0):,.0f}"
+    if stats.get("total_weekly_revenue") is not None:
+        fields["Est. weekly revenue"] = f"₹{stats.get('total_weekly_revenue', 0):,.0f}"
+
+    city_breakdown = stats.get("city_breakdown") or []
+    stats_table = build_data_table_card(
+        title="Revenue by city",
+        headers=["City", "Weekly units", "Est. weekly revenue"],
+        rows=[
+            [
+                row.get("city", ""),
+                f"{int(row.get('qty', 0)):,}",
+                f"₹{row.get('revenue', 0):,.0f}",
+            ]
+            for row in city_breakdown
+        ],
+    )
+
     # Build master update card once
     master_card = build_master_links_card()
 
@@ -764,7 +789,7 @@ def notify_npl_submitted(
         fields=fields,
         variant="success",
         badge="Synced",
-        extra_html=master_card,
+        extra_html=stats_table + master_card,
         action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to track status.",
     )
     success_result = _safe_operational_send(
@@ -783,7 +808,7 @@ def notify_npl_submitted(
         fields=fields,
         variant="warning",
         badge="Action needed",
-        extra_html=master_card,
+        extra_html=stats_table + master_card,
         action="Review the linked master sheets and update P Master, P-L Master, and Hub Mapping as required.",
     )
     approval_result = _safe_operational_send(
