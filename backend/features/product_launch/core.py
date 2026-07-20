@@ -33,6 +33,7 @@ from app.config import (
     HUB_LEVEL_PLANNING_SHEET_KEY,
     OUTPUT_PATH,
     FF_AUTOMATION_SHEET_KEY,
+    NEW_PRODUCT_LAUNCH_SHEET_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -2206,6 +2207,74 @@ def wide_to_long(df: pd.DataFrame) -> pd.DataFrame:
     long_df = df.melt(id_vars=id_cols, value_vars=day_cols,
                       var_name="Day", value_name="Plan")
     return long_df.reset_index(drop=True)
+
+
+# ──────────────────────────────────────────────────────────────────
+# NPL(Forecast) — Hub_Plan mirrored in melt/long format
+# ──────────────────────────────────────────────────────────────────
+NPL_FORECAST_SHEET_NAME = "NPL(Forecast)"
+NPL_FORECAST_HEADERS = [
+    "City", "hub_name", "Product_id", "Product_name", "Anchor ID", "Sub_category", "day", "Base_plan",
+]
+
+
+def build_npl_forecast_rows(hub_rows: list[dict]) -> pd.DataFrame:
+    """
+    Melt the same rows being appended to Hub_Plan (one row per city/hub/product,
+    Mon–Sun columns) into NPL(Forecast) long format: one row per
+    city/hub/product/day with City, hub_name, Product_id, Product_name,
+    Anchor ID, Sub_category, day, Base_plan.
+    """
+    empty = pd.DataFrame(columns=NPL_FORECAST_HEADERS)
+    if not hub_rows:
+        return empty
+
+    df = pd.DataFrame(hub_rows)
+    if df.empty:
+        return empty
+
+    df = df.rename(columns={
+        "city_name": "City",
+        "product_id": "Product_id",
+        "product_name": "Product_name",
+        "anchor_id": "Anchor ID",
+        "category": "Sub_category",
+    })
+
+    id_cols = ["City", "hub_name", "Product_id", "Product_name", "Anchor ID", "Sub_category"]
+    for col in id_cols:
+        if col not in df.columns:
+            df[col] = ""
+
+    day_cols = [d for d in WEEKDAYS if d in df.columns]
+    if not day_cols:
+        return empty
+
+    long_df = df.melt(
+        id_vars=id_cols,
+        value_vars=day_cols,
+        var_name="day",
+        value_name="Base_plan",
+    )
+    long_df["Base_plan"] = pd.to_numeric(long_df["Base_plan"], errors="coerce").fillna(0)
+    return long_df[NPL_FORECAST_HEADERS].reset_index(drop=True)
+
+
+def append_npl_forecast_rows(hub_rows: list[dict]) -> int:
+    """Append the same Hub_Plan rows to NPL(Forecast) in melt/long format.
+
+    Lives in the same "New Product Launch" spreadsheet as City_Plan/Hub_Plan;
+    the tab is auto-created (with headers) on first use if missing.
+    """
+    long_df = build_npl_forecast_rows(hub_rows)
+    if long_df.empty:
+        return 0
+    return _append_sheet_rows(
+        NEW_PRODUCT_LAUNCH_SHEET_KEY,
+        NPL_FORECAST_SHEET_NAME,
+        _sanitize(long_df),
+        headers=NPL_FORECAST_HEADERS,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────

@@ -340,6 +340,16 @@ PAGE_CONFIG = {
 }
 
 
+# Recipients for the "master worksheets need updating" NPL email (New Product
+# Launch / expansion / replacement). Comma-separate multiple addresses via the
+# MASTER_EMAIL_RECEIVER env var to override the default below.
+MASTER_EMAIL_RECEIVER: list[str] = [
+    e.strip()
+    for e in os.getenv("MASTER_EMAIL_RECEIVER", "sumitkumar.nayak@licious.com").split(",")
+    if e.strip()
+]
+
+
 def _smtp_host_for_email(email: str) -> str:
     domain = email.split("@")[-1].lower() if "@" in email else ""
     if domain in {"gmail.com", "googlemail.com"}:

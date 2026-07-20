@@ -1377,6 +1377,20 @@ def wizard_submit(
                     worksheet,
                 )
 
+                # Mirror the exact same Hub_Plan rows into NPL(Forecast), melted
+                # into long format (one row per city/hub/product/day).
+                if worksheet == "Hub_Plan":
+                    try:
+                        from features.product_launch.core import append_npl_forecast_rows
+
+                        forecast_rows_written = append_npl_forecast_rows(sources)
+                        logger.info(
+                            "[NPL] submit mirrored %d melted rows to NPL(Forecast)",
+                            forecast_rows_written,
+                        )
+                    except Exception:
+                        logger.exception("[NPL] Failed to mirror Hub_Plan rows to NPL(Forecast)")
+
         # 1.3 Submission already written as Approved — no full-sheet status rewrite needed
 
         steps_status["sheets"] = {

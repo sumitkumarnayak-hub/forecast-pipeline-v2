@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.config import is_smtp_configured
+from app.config import MASTER_EMAIL_RECEIVER, is_smtp_configured
 from core.database.engine import Database
 
 from core.shared.email import (
@@ -19,6 +19,7 @@ from core.shared.email import (
     get_recipient_emails,
     send_email,
     send_launch_notifications,
+    send_to_addresses,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,51 @@ def _safe_operational_send(
             category=category,
             subject=subject,
             html_body=html_body,
+            triggered_by_user_id=triggered_by_user_id,
+            metadata=metadata or {},
+            db=db,
+        )
+        _merge_result(result, send_result)
+    except Exception as exc:
+        logger.exception("Email notification failed: %s", event)
+        result.failed = True
+        result.detail = str(exc)
+
+    return result
+
+
+def _safe_direct_send(
+    *,
+    event: str,
+    recipients: list[str],
+    subject: str,
+    html_body: str,
+    triggered_by_user_id: int | None,
+    metadata: dict | None = None,
+    db: Database | None = None,
+) -> NotifyResult:
+    """Like _safe_operational_send, but bypasses the admin-configured
+    recipient categories and sends straight to explicit addresses."""
+    result = NotifyResult(event=event)
+    db = db or Database()
+
+    if not is_smtp_configured():
+        result.skipped = True
+        result.detail = "SMTP not configured (FROM_EMAIL / FROM_EMAIL_APP_PASSWORD)."
+        return result
+
+    valid_recipients = list(dict.fromkeys(r.strip() for r in (recipients or []) if r and "@" in r))
+    if not valid_recipients:
+        result.skipped = True
+        result.detail = "No valid recipient addresses."
+        return result
+
+    try:
+        send_result = send_to_addresses(
+            recipients=valid_recipients,
+            subject=subject,
+            html_body=html_body,
+            email_type=event,
             triggered_by_user_id=triggered_by_user_id,
             metadata=metadata or {},
             db=db,
@@ -722,18 +768,19 @@ def notify_npl_submitted(
 ) -> dict:
     """
     Two emails after a successful NPL submit:
-      1. Success  → 'general' category  (submission confirmed)
-      2. Approval → 'approval' category (admin action needed)
+      1. Sync confirmation → sent directly to the person who ran the sync
+         (submitted_by). Same summary/stats as before, minus the master
+         worksheet links/instructions, with a "synced successfully" tone.
+      2. Master update alert → sent directly to MASTER_EMAIL_RECEIVER
+         (see app/config.py — comma-separated list, defaults to
+         sumitkumar.nayak@licious.com). This is the full email with stats
+         and the master sheet links/action, unchanged from before.
+    Both are sent directly (send_to_addresses), bypassing the admin-configured
+    recipient categories entirely.
     Returns a combined dict with both statuses.
     """
     db = db or Database()
 
-    if user_id and not user_wants_notifications(user_id, db):
-        return {
-            "ok": False, "skipped": True,
-            "reason": "User disabled email notifications.",
-            "success": {"status": "skipped"}, "approval": {"status": "skipped"},
-        }
     if not is_smtp_configured():
         return {
             "ok": False, "skipped": True,
@@ -753,7 +800,6 @@ def notify_npl_submitted(
         "Product": _esc(product_name),
         "Product ID": _esc(product_id) if product_id else "—",
         "Cities": _esc(cities_label) if cities_label else "—",
-        "Hub rows": str(hub_count),
         "Launch date(s)": _esc(date_label),
         "Submitted by": _esc(submitted_by) if submitted_by else "System",
     }
@@ -785,29 +831,42 @@ def notify_npl_submitted(
         ],
     )
 
-    # Build master update card once
+    # ── Email 1: sync confirmation → the person who ran the sync ──────────
+    # Personal confirmation only — no master-sheet links/instructions.
+    # Respects the submitter's own notification preference (this is about
+    # them, not a business-critical alert like email 2 below).
+    submitter_wants_email = (not user_id or user_wants_notifications(user_id, db))
+    if submitter_wants_email and submitted_by and "@" in submitted_by:
+        success_html = build_email_html(
+            headline="Launch synced successfully",
+            intro=f"Your {_esc(sub_type).lower()} plan for {_esc(product_name)} was synced to the target Google Sheet successfully.",
+            fields=fields,
+            variant="success",
+            badge="Synced",
+            top_html=highlights_card,
+            extra_html=stats_table,
+            action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to track status.",
+        )
+        success_result = _safe_direct_send(
+            event="npl_submitted",
+            recipients=[submitted_by],
+            subject=f"[Planning workbench] Launch synced successfully — {product_name} ({sub_type})",
+            html_body=success_html,
+            triggered_by_user_id=user_id,
+            metadata={"sub_id": sub_id, "sub_type": sub_type},
+            db=db,
+        )
+    else:
+        success_result = NotifyResult(
+            event="npl_submitted",
+            skipped=True,
+            detail="Submitter email unavailable or notifications disabled.",
+        )
+
+    # ── Email 2: master update alert → MASTER_EMAIL_RECEIVER ──────────────
+    # Full email (stats + master sheet links/action) — unchanged content,
+    # always sent regardless of the submitter's personal preference.
     master_card = build_master_links_card()
-
-    success_html = build_email_html(
-        headline="Launch plan synced",
-        intro="Your plan was written to the target Google Sheet. Update the master worksheets so the launch is reflected everywhere.",
-        fields=fields,
-        variant="success",
-        badge="Synced",
-        top_html=highlights_card,
-        extra_html=stats_table + master_card,
-        action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to track status.",
-    )
-    success_result = _safe_operational_send(
-        event="npl_submitted",
-        category="launch_planner",
-        subject=f"[Planning workbench] Launch synced — update masters for {product_name} ({sub_type})",
-        html_body=success_html,
-        triggered_by_user_id=user_id,
-        metadata={"sub_id": sub_id, "sub_type": sub_type},
-        db=db,
-    )
-
     approval_html = build_email_html(
         headline="Master updates needed",
         intro="A launch plan was synced successfully. Please complete the master worksheet updates to finish setup.",
@@ -818,9 +877,9 @@ def notify_npl_submitted(
         extra_html=stats_table + master_card,
         action="Review the linked master sheets and update P Master, P-L Master, and Hub Mapping as required.",
     )
-    approval_result = _safe_operational_send(
+    approval_result = _safe_direct_send(
         event="npl_approval_needed",
-        category="launch_admin",
+        recipients=MASTER_EMAIL_RECEIVER,
         subject=f"[Planning workbench] Action needed — update masters for {product_name} ({sub_type})",
         html_body=approval_html,
         triggered_by_user_id=user_id,
