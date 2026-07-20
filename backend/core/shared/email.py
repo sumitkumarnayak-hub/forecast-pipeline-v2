@@ -76,10 +76,10 @@ _VARIANT_STYLES = {
 def build_master_links_card(*, title: str = "Update these master sheets") -> str:
     """Apple-style action card with links to common planning worksheets."""
     links = [
-        ("P Master", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"),
-        ("P-L Master", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit"),
-        ("Hub Mapping", "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit?gid=272986515#gid=272986515"),
-        ("Pricing", "https://docs.google.com/spreadsheets/d/1OjV5oPzNgrgQVplkGKIdZIWX1ZOxt6UzVviktXgAyEI"),
+        ("P Master", "https://docs.google.com/spreadsheets/d/1TnVwhmJBnVVRGJn0jgQLctJ98P4_EGzC4lXik6s-1mU/edit?gid=1946014559#gid=1946014559"),
+        ("P-L Master", "https://docs.google.com/spreadsheets/d/1TnVwhmJBnVVRGJn0jgQLctJ98P4_EGzC4lXik6s-1mU/edit?gid=1348760312#gid=1348760312"),
+        ("Hub Mapping", "https://docs.google.com/spreadsheets/d/1TnVwhmJBnVVRGJn0jgQLctJ98P4_EGzC4lXik6s-1mU/edit?gid=272986515#gid=272986515"),
+        ("Pricing", "https://docs.google.com/spreadsheets/d/1TnVwhmJBnVVRGJn0jgQLctJ98P4_EGzC4lXik6s-1mU/edit?gid=1397208184#gid=1397208184"),
         ("Pan India", "https://docs.google.com/spreadsheets/d/1clylbzZgy_XADJXHGs8ADJFirRsS7FnsujZGC3vKFAQ/edit"),
     ]
     rows = "".join(
