@@ -21,6 +21,7 @@ import numpy as np
 import gspread
 import io
 import os
+import re
 import logging
 from datetime import datetime, date, timedelta
 from google.oauth2.service_account import Credentials
@@ -1075,6 +1076,46 @@ def _validate_production_pc_column(df: pd.DataFrame) -> list[str]:
     return errors
 
 
+def _parse_shelf_life_value(val) -> float | None:
+    """Parse a shelf life value (may include units, e.g. '15 days'). Returns None when blank."""
+    s = _optional_str(val)
+    if not s:
+        return None
+    match = re.search(r"[-+]?\d*\.?\d+", s)
+    if not match:
+        raise ValueError(f"Shelf Life must be numeric (got {val!r})")
+    return float(match.group())
+
+
+def _validate_shelf_life_columns(df: pd.DataFrame) -> list[str]:
+    """Hub Shelf Life must be between 50% and 90% of Total Shelf Life (when both are given)."""
+    errors: list[str] = []
+    total_col = next((c for c in df.columns if str(c).strip().lower() == "total shelf life"), None)
+    hub_col = next((c for c in df.columns if str(c).strip().lower() == "hub shelf life"), None)
+    if not total_col or not hub_col:
+        return errors
+
+    for idx in df.index:
+        try:
+            total_val = _parse_shelf_life_value(df.at[idx, total_col])
+            hub_val = _parse_shelf_life_value(df.at[idx, hub_col])
+        except ValueError as exc:
+            errors.append(f"Row {int(idx) + 2}: {exc}")
+            continue
+        if total_val is None or hub_val is None:
+            continue
+        if total_val <= 0:
+            errors.append(f"Row {int(idx) + 2}: Total Shelf Life must be greater than 0.")
+            continue
+        ratio = hub_val / total_val
+        if ratio < 0.5 or ratio > 0.9:
+            errors.append(
+                f"Row {int(idx) + 2}: Hub Shelf Life ({hub_val:g}) must be between 50% and 90% of "
+                f"Total Shelf Life ({total_val:g}) — got {ratio * 100:.0f}%."
+            )
+    return errors
+
+
 def _meat_ratio_from_source(source: dict) -> str:
     for key in ("Meat Ratio (for VA)", "Meat Ratio", "meat_ratio_for_va", "meat_ratio"):
         if key in source and source[key] is not None:
@@ -1373,6 +1414,10 @@ def parse_city_upload(file) -> tuple:
     if pc_errors:
         return pd.DataFrame(), pc_errors[:8]
 
+    shelf_life_errors = _validate_shelf_life_columns(df)
+    if shelf_life_errors:
+        return pd.DataFrame(), shelf_life_errors[:8]
+
     try:
         df = CITY_UPLOAD_SCHEMA.validate(df)
     except Exception as err:
@@ -1508,6 +1553,10 @@ def parse_hub_upload(file) -> tuple:
     pc_errors = _validate_production_pc_column(df)
     if pc_errors:
         return pd.DataFrame(), pc_errors[:8]
+
+    shelf_life_errors = _validate_shelf_life_columns(df)
+    if shelf_life_errors:
+        return pd.DataFrame(), shelf_life_errors[:8]
 
     try:
         df = HUB_UPLOAD_SCHEMA.validate(df)
