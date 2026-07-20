@@ -1214,6 +1214,8 @@ def wizard_preview_sync(
             update_date=update_date,
             pm_details_map=pm_details_map,
         )
+        if target_worksheets[0] == "City_Plan":
+            columns, preview_records = _strip_city_plan_hub_columns(columns, preview_records)
 
         hub_plan_rows: list[dict] = []
         hub_plan_columns: list[str] = []
@@ -1329,7 +1331,7 @@ def wizard_submit(
                 current_user=current_user,
                 update_date=update_date,
                 pm_details_map=pm_details_map,
-                dedupe=True,
+                dedupe=False,
             )
             if values_to_append:
                 plan_sheet = (
@@ -1345,7 +1347,12 @@ def wizard_submit(
                     table_range=table_range,
                     row_width=len(sheet_headers),
                 )
-                logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), worksheet)
+                logger.info(
+                    "[NPL] submit appended %d/%d rows to %s (wizard sync, dedupe off)",
+                    len(values_to_append),
+                    len(sources),
+                    worksheet,
+                )
 
         # 1.3 Submission already written as Approved — no full-sheet status rewrite needed
 
@@ -1852,27 +1859,21 @@ HUB_PLAN_COLUMNS = [
 
 
 def _npl_city_plan_key(row_vals: list, headers: list[str]) -> tuple[str, ...] | None:
+    """Duplicate key for City_Plan — city level only (no hub dimension)."""
     try:
-        type_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "type")
-        pid_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "productid")
-        city_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "city")
-        date_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "change date")
-        hub_idx = next(
-            (i for i, h in enumerate(headers) if _normalize_plan_header(h) in ("hub name", "hub_name", "hub")),
-            None,
-        )
+        type_idx = _find_plan_header_idx(headers, "type")
+        pid_idx = _find_plan_header_idx(headers, "product id", "product_id", "sku")
+        city_idx = _find_plan_header_idx(headers, "city", "city name", "city_name")
+        date_idx = _find_plan_header_idx(headers, "change date")
 
         val_type = str(row_vals[type_idx]).strip().lower()
         val_pid = str(row_vals[pid_idx]).strip().lower()
         val_city = str(row_vals[city_idx]).strip().lower()
         val_date = str(row_vals[date_idx]).strip().lower()
-        val_hub = str(row_vals[hub_idx]).strip().lower() if hub_idx is not None and hub_idx < len(row_vals) else ""
 
         if val_type and val_pid and val_city and val_date:
-            if hub_idx is not None and val_hub:
-                return (val_type, val_pid, val_city, val_hub, val_date)
             return (val_type, val_pid, val_city, val_date)
-    except Exception:
+    except (StopIteration, IndexError, ValueError):
         pass
     return None
 
@@ -1967,6 +1968,41 @@ def _normalize_plan_header(h: str) -> str:
 
 def _is_mrp_header(h_norm: str) -> bool:
     return h_norm == "mrp" or ("mrp" in h_norm and "kvi" in h_norm)
+
+
+def _is_hub_column_header(h_norm: str) -> bool:
+    compact = h_norm.replace(" ", "")
+    return h_norm in ("hub name", "hub") or compact in ("hubname", "hub_name")
+
+
+def _find_plan_header_idx(headers: list[str], *names: str) -> int:
+    """Resolve a header index tolerating city vs city_name, hub_name vs Hub Name, etc."""
+    targets = set()
+    for name in names:
+        targets.add(_normalize_plan_header(name))
+        targets.add(_normalize_plan_header(name).replace(" ", ""))
+    for i, h in enumerate(headers):
+        h_norm = _normalize_plan_header(h)
+        h_compact = h_norm.replace(" ", "")
+        if h_norm in targets or h_compact in targets:
+            return i
+    raise StopIteration
+
+
+def _strip_city_plan_hub_columns(
+    headers: list[str],
+    records: list[dict],
+) -> tuple[list[str], list[dict]]:
+    """Remove hub columns from City_Plan preview (city-level rows never include hub)."""
+    keep = [i for i, h in enumerate(headers) if not _is_hub_column_header(_normalize_plan_header(h))]
+    if len(keep) == len(headers):
+        return headers, records
+    new_headers = [headers[i] for i in keep]
+    new_records = [
+        {new_headers[j]: rec.get(headers[i], "") for j, i in enumerate(keep)}
+        for rec in records
+    ]
+    return new_headers, new_records
 
 
 def _read_npl_plan_headers(plan_sheet) -> tuple[int, list[str]]:
@@ -2270,8 +2306,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(str(aid).strip() or pid)
         elif h_norm in ("city", "city name"):
             row.append(source.get("City", ""))
-        elif h_norm in ("hub name", "hub_name", "hub"):
-            row.append(str(source.get("Hub", source.get("hub_name", ""))).strip())
+        elif _is_hub_column_header(h_norm):
+            row.append("")
         elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
@@ -2608,21 +2644,21 @@ def _npl_hub_plan_key_from_b_to_s(row: list) -> tuple[str, str, str, str, str] |
 
 def _npl_hub_plan_key_dynamic(row_vals: list, headers: list[str]) -> tuple[str, str, str, str, str] | None:
     try:
-        type_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "type")
-        pid_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "productid")
-        city_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "city")
-        hub_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "hubname")
-        date_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "change date")
-        
+        type_idx = _find_plan_header_idx(headers, "type")
+        pid_idx = _find_plan_header_idx(headers, "product id", "product_id", "sku")
+        city_idx = _find_plan_header_idx(headers, "city", "city name", "city_name")
+        hub_idx = _find_plan_header_idx(headers, "hub name", "hub_name", "hub")
+        date_idx = _find_plan_header_idx(headers, "change date")
+
         val_type = str(row_vals[type_idx]).strip().lower()
         val_pid = str(row_vals[pid_idx]).strip().lower()
         val_city = str(row_vals[city_idx]).strip().lower()
         val_hub = str(row_vals[hub_idx]).strip().lower()
         val_date = str(row_vals[date_idx]).strip().lower()
-        
+
         if val_type and val_pid and val_city and val_hub and val_date:
             return (val_type, val_pid, val_city, val_hub, val_date)
-    except Exception:
+    except (StopIteration, IndexError, ValueError):
         pass
     return None
 
