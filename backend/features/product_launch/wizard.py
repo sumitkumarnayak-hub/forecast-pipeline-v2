@@ -260,11 +260,14 @@ def preview_hub_rows(
             df[day] = 0
     df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
 
-    from features.product_launch.core import _parse_percent_to_decimal
-    pct_cols = ["Yield", "Meat Ratio", "Meat Ratio (for VA)", "Replacement Percentage", "replacement_percentage"]
+    from features.product_launch.core import _parse_percent_to_decimal, _optional_str
+    pct_cols = ["Yield", "Replacement Percentage", "replacement_percentage"]
     for col in pct_cols:
         if col in df.columns:
             df[col] = df[col].apply(_parse_percent_to_decimal)
+    for col in ["Meat Ratio", "Meat Ratio (for VA)", "UOM", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "PLU_CODE"]:
+        if col in df.columns:
+            df[col] = df[col].apply(_optional_str)
 
     submitted_by = username or ""
     sub_id = gen_sub_id(sub_type)

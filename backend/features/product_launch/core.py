@@ -54,6 +54,9 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Sub Category": pa.Column(str, coerce=True, nullable=True, required=False),
     "SUB_CATEGORY": pa.Column(str, coerce=True, nullable=True, required=False),
     "category": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Anchor ID
+    "Anchor ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "anchor_id": pa.Column(str, coerce=True, nullable=True, required=False),
     # Channel
     "Channel": pa.Column(str, coerce=True, nullable=True, required=False),
     # MRP / MRP\n(Before KVi Discount)
@@ -97,6 +100,9 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Sub Category": pa.Column(str, coerce=True, nullable=True, required=False),
     "SUB_CATEGORY": pa.Column(str, coerce=True, nullable=True, required=False),
     "category": pa.Column(str, coerce=True, nullable=True, required=False),
+    # Anchor ID
+    "Anchor ID": pa.Column(str, coerce=True, nullable=True, required=False),
+    "anchor_id": pa.Column(str, coerce=True, nullable=True, required=False),
     # Channel
     "Channel": pa.Column(str, coerce=True, nullable=True, required=False),
     # MRP / MRP\n(Before KVi Discount)
@@ -567,25 +573,33 @@ def split_city_to_hubs(
                 "hub_name":     hub,
                 "product_id":   str(r.get("product_id", "")).strip(),
                 "product_name": str(r.get("product_name", "")).strip(),
+                "anchor_id":    str(r.get("anchor_id", r.get("product_id", ""))).strip() or str(r.get("product_id", "")).strip(),
                 "category":     category,
+                "Channel":      str(r.get("Channel", DEFAULT_NPL_CHANNEL)).strip() or DEFAULT_NPL_CHANNEL,
                 "MRP":          r.get("MRP", ""),
             }
             for opt in ALL_POSSIBLE_OPTIONAL_COLS:
                 if opt in r:
                     hub_row[opt] = r[opt]
+            meat_ratio = _meat_ratio_from_source(r.to_dict() if hasattr(r, "to_dict") else dict(r))
+            if meat_ratio:
+                hub_row["Meat Ratio (for VA)"] = meat_ratio
+                hub_row["Meat Ratio"] = meat_ratio
             for day in WEEKDAYS:
                 hub_row[day] = day_alloc[day].get(hub, 0)
             rows.append(hub_row)
 
-    cols = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS + ALL_POSSIBLE_OPTIONAL_COLS
+    cols = ["city_name", "hub_name", "product_id", "product_name", "anchor_id", "category", "Channel", "MRP"] + WEEKDAYS + ALL_POSSIBLE_OPTIONAL_COLS
     return (pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols), zero_sal_info)
 
 
 # ──────────────────────────────────────────────────────────────────
 # EXCEL  TEMPLATE  BUILDERS
 # ──────────────────────────────────────────────────────────────────
-CITY_COLS = ["city_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
-HUB_COLS  = ["city_name", "hub_name", "product_id", "product_name", "category", "MRP"] + WEEKDAYS
+DEFAULT_NPL_CHANNEL = "Online"
+
+CITY_COLS = ["city_name", "product_id", "product_name", "anchor_id", "category", "Channel", "MRP"] + WEEKDAYS
+HUB_COLS  = ["city_name", "hub_name", "product_id", "product_name", "anchor_id", "category", "Channel", "MRP"] + WEEKDAYS
 
 ALL_POSSIBLE_OPTIONAL_COLS = [
     "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Meat Ratio",
@@ -593,22 +607,66 @@ ALL_POSSIBLE_OPTIONAL_COLS = [
     "old_product_id", "old_product_name", "replacement_percentage"
 ]
 
+OPTIONAL_PLAN_PROP_COLS = [
+    "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)",
+    "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date",
+]
+
+
+def _optional_str(val) -> str:
+    """Preserve optional template fields as plain strings (any user-entered value)."""
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    return "" if s.lower() in ("nan", "none", "nat", "null") else s
+
+
+def _meat_ratio_from_source(source: dict) -> str:
+    for key in ("Meat Ratio (for VA)", "Meat Ratio", "meat_ratio_for_va", "meat_ratio"):
+        if key in source and source[key] is not None:
+            return _optional_str(source[key])
+    for key, val in source.items():
+        if val is None:
+            continue
+        kn = str(key).strip().lower().replace("_", " ")
+        if "meat ratio" in kn:
+            return _optional_str(val)
+    return ""
+
+
+def _normalize_meat_ratio_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Map any meat-ratio header variant to the canonical Meat Ratio (for VA) column."""
+    if "Meat Ratio" in df.columns and "Meat Ratio (for VA)" not in df.columns:
+        df["Meat Ratio (for VA)"] = df["Meat Ratio"]
+    if "Meat Ratio (for VA)" not in df.columns:
+        for col in list(df.columns):
+            cn = str(col).strip().lower().replace("_", " ")
+            if "meat ratio" in cn:
+                df["Meat Ratio (for VA)"] = df[col]
+                break
+    return df
+
 
 def get_template_columns(plan_level: str, sub_type: str) -> tuple[list[str], list[str]]:
     """Returns (mandatory_cols, optional_cols) dynamically based on plan level and sub_type."""
     if sub_type == "Replacement":
         # Replacement headers
         if plan_level == "city":
-            mandatory = ["City", "Product ID", "Product Name", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+            mandatory = ["City", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
         else:
-            mandatory = ["City", "Hub Name", "Product ID", "Product Name", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+            mandatory = ["City", "Hub Name", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
         optional = ["PLU Code", "UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life", "Hub Shelf Life"]
     else:
         # New Launch & Expansion headers
         if plan_level == "city":
-            mandatory = ["City", "PRODUCT_ID", "PRODUCT_NAME", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+            mandatory = ["City", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
         else:
-            mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+            mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
         optional = ["PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
 
     return mandatory + optional, []
@@ -657,10 +715,12 @@ def build_city_template(cities: list, category: str,
                 row[col] = product_id
             elif col in ["PRODUCT_NAME", "Product Name"]:
                 row[col] = product_name
+            elif col == "Anchor ID":
+                row[col] = product_id
             elif col in ["SUB_CATEGORY", "Sub Category"]:
                 row[col] = category
             elif col == "Channel":
-                row[col] = "General"
+                row[col] = DEFAULT_NPL_CHANNEL
             elif col in ["MRP", "MRP\n(Before KVi Discount)"]:
                 row[col] = mrp
             elif col in ["Old Product ID", "old_product_id"]:
@@ -705,10 +765,12 @@ def build_hub_template(cities_hubs: dict, category: str,
                     row[col] = product_id
                 elif col in ["PRODUCT_NAME", "Product Name"]:
                     row[col] = product_name
+                elif col == "Anchor ID":
+                    row[col] = product_id
                 elif col in ["SUB_CATEGORY", "Sub Category"]:
                     row[col] = category
                 elif col == "Channel":
-                    row[col] = "General"
+                    row[col] = DEFAULT_NPL_CHANNEL
                 elif col in ["MRP", "MRP\n(Before KVi Discount)"]:
                     row[col] = mrp
                 elif col in ["Old Product ID", "old_product_id"]:
@@ -788,14 +850,17 @@ def parse_city_upload(file) -> tuple:
         df["MRP"] = df["MRP\n(Before KVi Discount)"]
     if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
         df["PLU Code"] = df["PLU_CODE"]
-    if "Meat Ratio" in df.columns and "Meat Ratio (for VA)" not in df.columns:
-        df["Meat Ratio (for VA)"] = df["Meat Ratio"]
+    df = _normalize_meat_ratio_column(df)
     if "Old Product ID" in df.columns and "old_product_id" not in df.columns:
         df["old_product_id"] = df["Old Product ID"]
     if "Old Product Name" in df.columns and "old_product_name" not in df.columns:
         df["old_product_name"] = df["Old Product Name"]
     if "Replacement Percentage" in df.columns and "replacement_percentage" not in df.columns:
         df["replacement_percentage"] = df["Replacement Percentage"]
+    if "Anchor ID" in df.columns and "anchor_id" not in df.columns:
+        df["anchor_id"] = df["Anchor ID"]
+    if "Channel" not in df.columns:
+        df["Channel"] = DEFAULT_NPL_CHANNEL
 
     missing = [c for c in ["city_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
@@ -867,6 +932,10 @@ def parse_city_upload(file) -> tuple:
     df["product_id"]   = df["product_id"].astype(str).str.strip()
     df["product_name"] = df.get("product_name", "").astype(str).str.strip()
     df["category"]     = df.get("category", "").astype(str).str.strip()
+    df["anchor_id"]    = df.get("anchor_id", df["product_id"]).astype(str).str.strip()
+    df.loc[df["anchor_id"].eq("") | df["anchor_id"].str.lower().eq("nan"), "anchor_id"] = df["product_id"]
+    df["Channel"]      = df.get("Channel", DEFAULT_NPL_CHANNEL).astype(str).str.strip()
+    df.loc[df["Channel"].eq("") | df["Channel"].str.lower().eq("nan"), "Channel"] = DEFAULT_NPL_CHANNEL
     df["MRP"]          = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
     # Clean and standardize optional columns (Accept all as strings)
@@ -914,14 +983,17 @@ def parse_hub_upload(file) -> tuple:
         df["MRP"] = df["MRP\n(Before KVi Discount)"]
     if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
         df["PLU Code"] = df["PLU_CODE"]
-    if "Meat Ratio" in df.columns and "Meat Ratio (for VA)" not in df.columns:
-        df["Meat Ratio (for VA)"] = df["Meat Ratio"]
+    df = _normalize_meat_ratio_column(df)
     if "Old Product ID" in df.columns and "old_product_id" not in df.columns:
         df["old_product_id"] = df["Old Product ID"]
     if "Old Product Name" in df.columns and "old_product_name" not in df.columns:
         df["old_product_name"] = df["Old Product Name"]
     if "Replacement Percentage" in df.columns and "replacement_percentage" not in df.columns:
         df["replacement_percentage"] = df["Replacement Percentage"]
+    if "Anchor ID" in df.columns and "anchor_id" not in df.columns:
+        df["anchor_id"] = df["Anchor ID"]
+    if "Channel" not in df.columns:
+        df["Channel"] = DEFAULT_NPL_CHANNEL
 
     missing = [c for c in ["city_name", "hub_name", "product_id"] + WEEKDAYS if c not in df.columns]
     if missing:
@@ -991,6 +1063,10 @@ def parse_hub_upload(file) -> tuple:
         df[day] = df[day].apply(_safe_int)
     for col in ["city_name", "hub_name", "product_id", "product_name", "category"]:
         df[col] = df.get(col, "").astype(str).str.strip()
+    df["anchor_id"] = df.get("anchor_id", df["product_id"]).astype(str).str.strip()
+    df.loc[df["anchor_id"].eq("") | df["anchor_id"].str.lower().eq("nan"), "anchor_id"] = df["product_id"]
+    df["Channel"] = df.get("Channel", DEFAULT_NPL_CHANNEL).astype(str).str.strip()
+    df.loc[df["Channel"].eq("") | df["Channel"].str.lower().eq("nan"), "Channel"] = DEFAULT_NPL_CHANNEL
     df["MRP"] = pd.to_numeric(df.get("MRP", 0), errors="coerce").fillna(0)
 
     # Clean and standardize optional columns (Accept all as strings)
@@ -1116,9 +1192,16 @@ def _append_sheet_rows(
     if not cols:
         cols = df.columns.tolist()
     values = _sanitize(df[cols]).values.tolist()
+    return _append_sheet_row_values(sheet, values, chunk_size=chunk_size)
+
+
+def _append_sheet_row_values(sheet, rows: list[list], *, chunk_size: int = 500) -> int:
+    """Append pre-built row lists directly (preserves duplicate headers / column order)."""
+    if not rows:
+        return 0
     written = 0
-    for start in range(0, len(values), chunk_size):
-        chunk = values[start : start + chunk_size]
+    for start in range(0, len(rows), chunk_size):
+        chunk = rows[start : start + chunk_size]
         sheet.append_rows(chunk, value_input_option="USER_ENTERED")
         written += len(chunk)
     return written
@@ -1615,11 +1698,14 @@ def _submit_hub_df(
             df[day] = 0
     df[WEEKDAYS] = df[WEEKDAYS].fillna(0).astype(int)
     
-    # Format percentage fields to decimal floats
-    pct_cols = ["Yield", "Meat Ratio", "Meat Ratio (for VA)", "Replacement Percentage", "replacement_percentage"]
+    # Format percentage fields to decimal floats (Meat Ratio stays free-text)
+    pct_cols = ["Yield", "Replacement Percentage", "replacement_percentage"]
     for col in pct_cols:
         if col in df.columns:
             df[col] = df[col].apply(_parse_percent_to_decimal)
+    for col in ["Meat Ratio", "Meat Ratio (for VA)", "UOM", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "PLU_CODE"]:
+        if col in df.columns:
+            df[col] = df[col].apply(_optional_str)
 
     submitted_by = username or ""
     sub_id = gen_sub_id(sub_type)
@@ -1647,7 +1733,9 @@ def _submit_hub_df(
                 "Product ID", "Product Name", "Category",
                 "City", "Hub", "MRP", "Start Date",
                 "Status", "Rejection_Reason", "Submitted_By",
-                "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+                "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS + [
+                "PLU Code", "PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)",
+                "Total Shelf Life", "Hub Shelf Life", "Channel", "anchor_id"]
     log_df = df[[c for c in log_cols if c in df.columns]]
     save_to_log(_sanitize(log_df))
 

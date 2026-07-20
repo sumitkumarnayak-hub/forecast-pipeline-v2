@@ -1233,16 +1233,7 @@ def wizard_preview_sync(
         else:
             plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
             
-        sheet_sample = plan_sheet.get("A1:AP5")
-        header_row_idx = 1
-        for idx, r in enumerate(sheet_sample, 1):
-            normalized_row = [str(x).strip().upper() for x in r]
-            if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
-                header_row_idx = idx
-                break
-        sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
-        while sheet_headers and not sheet_headers[-1]:
-            sheet_headers.pop()
+        header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
         columns = list(sheet_headers)
 
         # 4. Fetch Product Master details map ONCE outside the loop to prevent loading ages
@@ -1274,18 +1265,11 @@ def wizard_preview_sync(
                 "old_product_id": source.get("old_product_id", ""),
                 "old_product_name": source.get("old_product_name", ""),
                 "replacement_percentage": source.get("replacement_percentage", ""),
+                "Channel": str(source.get("Channel", "Online")).strip() or "Online",
+                "anchor_id": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
+                "Anchor ID": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
             }
-            # Propagate optional template columns if present
-            for opt in ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]:
-                if opt in source and source[opt] is not None:
-                    # If Start Date is customized, prioritize it over Launch Date
-                    if opt == "Start Date" and str(source[opt]).strip():
-                        row_source["Start Date"] = str(source[opt]).strip()
-                    elif opt == "PLU Code":
-                        row_source["PLU_CODE"] = source[opt]
-                        row_source["PLU Code"] = source[opt]
-                    else:
-                        row_source[opt] = source[opt]
+            _propagate_optional_plan_fields(row_source, source)
             if target_worksheet == "product_replacement":
                 row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
             elif target_worksheet == "Hub_Plan":
@@ -1403,16 +1387,7 @@ def wizard_submit(
         else:
             plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
             
-        sheet_sample = plan_sheet.get("A1:AP5")
-        header_row_idx = 1
-        for idx, r in enumerate(sheet_sample, 1):
-            normalized_row = [str(x).strip().upper() for x in r]
-            if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
-                header_row_idx = idx
-                break
-        sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
-        while sheet_headers and not sheet_headers[-1]:
-            sheet_headers.pop()
+        header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
 
         # Dedup keys — bounded read (avoid full-sheet get_all_values on large tabs)
         existing_keys = set()
@@ -1460,18 +1435,11 @@ def wizard_submit(
                 "old_product_id": source.get("old_product_id", ""),
                 "old_product_name": source.get("old_product_name", ""),
                 "replacement_percentage": source.get("replacement_percentage", ""),
+                "Channel": str(source.get("Channel", "Online")).strip() or "Online",
+                "anchor_id": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
+                "Anchor ID": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
             }
-            # Propagate optional template columns if present
-            for opt in ["UOM", "Yield", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date"]:
-                if opt in source and source[opt] is not None:
-                    # If Start Date is customized, prioritize it over Launch Date
-                    if opt == "Start Date" and str(source[opt]).strip():
-                        row_source["Start Date"] = str(source[opt]).strip()
-                    elif opt == "PLU Code":
-                        row_source["PLU_CODE"] = source[opt]
-                        row_source["PLU Code"] = source[opt]
-                    else:
-                        row_source[opt] = source[opt]
+            _propagate_optional_plan_fields(row_source, source)
             if target_worksheet == "product_replacement":
                 row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
                 key = _npl_replacement_key_dynamic(row_vals, sheet_headers)
@@ -1487,17 +1455,10 @@ def wizard_submit(
             values_to_append.append(row_vals)
 
         if values_to_append:
-            import pandas as pd
-            from features.product_launch.core import _append_sheet_rows as _core_append
+            from features.product_launch.core import _open_sheet, _append_sheet_row_values
 
-            append_df = pd.DataFrame(values_to_append, columns=sheet_headers)
-            _core_append(
-                cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY,
-                target_worksheet,
-                append_df,
-                headers=sheet_headers,
-                chunk_size=200,
-            )
+            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
+            _append_sheet_row_values(plan_sheet, values_to_append, chunk_size=200)
             logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), target_worksheet)
 
         # 1.5 Submission already written as Approved — no full-sheet status rewrite needed
@@ -2080,7 +2041,69 @@ def _get_product_master_details_map() -> dict[str, dict]:
     return details_map
 
 
+def _propagate_optional_plan_fields(row_source: dict, source: dict) -> None:
+    """Copy optional template columns from wizard hub_rows into plan row source."""
+    from features.product_launch.core import OPTIONAL_PLAN_PROP_COLS, _meat_ratio_from_source, _optional_str
+
+    meat_ratio = _meat_ratio_from_source(source)
+    row_source["Meat Ratio (for VA)"] = meat_ratio
+    row_source["Meat Ratio"] = meat_ratio
+
+    for opt in OPTIONAL_PLAN_PROP_COLS:
+        if opt in ("Meat Ratio", "Meat Ratio (for VA)"):
+            continue
+        if opt not in source or source[opt] is None:
+            continue
+        if opt == "Start Date" and str(source[opt]).strip():
+            row_source["Start Date"] = str(source[opt]).strip()
+        elif opt == "PLU Code":
+            row_source["PLU_CODE"] = _optional_str(source[opt])
+            row_source["PLU Code"] = _optional_str(source[opt])
+        else:
+            row_source[opt] = _optional_str(source[opt])
+
+
+def _normalize_plan_header(h: str) -> str:
+    import re
+
+    s = str(h).strip().lower().replace("\n", " ")
+    s = s.replace("_", " ")
+    s = re.sub(r"[()]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _is_mrp_header(h_norm: str) -> bool:
+    return h_norm == "mrp" or ("mrp" in h_norm and "kvi" in h_norm)
+
+
+def _read_npl_plan_headers(plan_sheet) -> tuple[int, list[str]]:
+    """Detect header row (row 2 on City_Plan when row 1 is salience %) and read full header line."""
+    sheet_sample = plan_sheet.get("A1:AZ5")
+    header_row_idx = 1
+    for idx, r in enumerate(sheet_sample, 1):
+        normalized_row = [str(x).strip().upper() for x in r]
+        if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
+            header_row_idx = idx
+            break
+    full_row = plan_sheet.get_values(f"A{header_row_idx}:AZ{header_row_idx}")
+    headers = [str(h).strip() for h in (full_row[0] if full_row else plan_sheet.row_values(header_row_idx))]
+    while headers and not headers[-1]:
+        headers.pop()
+    return header_row_idx, headers
+
+
+def _is_meat_ratio_header(h_norm: str) -> bool:
+    compact = h_norm.replace(" ", "")
+    return (
+        h_norm in ("meat ratio (for va)", "meat ratio")
+        or h_norm.startswith("meat ratio")
+        or ("meatratio" in compact and "va" in compact)
+    )
+
+
 def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: str, pm_details_map: dict | None = None) -> list:
+    from features.product_launch.core import _meat_ratio_from_source
+
     row = []
     pid = str(source.get("Product ID", "")).strip()
     
@@ -2105,14 +2128,15 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             pass
             
     for h in headers:
-        h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
+        h_norm = _normalize_plan_header(h)
         if h_norm in ("owner", "owner name"):
             owner = source.get("_owner_email") or source.get("Submitted_By") or "Demand Planning"
             row.append(owner)
         elif h_norm == "type":
             row.append(source.get("Submission_Type", "New Launch"))
         elif h_norm == "channel":
-            row.append("App")
+            ch = source.get("Channel") or source.get("channel") or ""
+            row.append(str(ch).strip() or "Online")
         elif h_norm in ("update date", "updated date"):
             row.append(_format_date_npl(update_date))
         elif h_norm in ("sub category", "subcategory"):
@@ -2122,10 +2146,11 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
         elif h_norm in ("product name", "sku name"):
             row.append(source.get("Product Name", ""))
         elif h_norm == "anchor id":
-            row.append(pid)
+            aid = source.get("Anchor ID") or source.get("anchor_id") or pid
+            row.append(str(aid).strip() or pid)
         elif h_norm in ("city", "city name"):
             row.append(source.get("City", ""))
-        elif h_norm in ("mrp", "mrp (before kvi discount)"):
+        elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
             row.append(_format_date_npl(source.get("Start Date", "")))
@@ -2135,8 +2160,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(source.get("Yield", pm_details.get("Yield", "")))
         elif h_norm == "rm":
             row.append(source.get("RM", pm_details.get("RM", "")))
-        elif h_norm in ("meat ratio (for va)", "meat ratio"):
-            row.append(source.get("Meat Ratio (for VA)", "NA"))
+        elif _is_meat_ratio_header(h_norm):
+            row.append(_meat_ratio_from_source(source))
         elif h_norm == "total shelf life":
             row.append(source.get("Total Shelf Life", pm_details.get("Total Shelf Life", "")))
         elif h_norm == "hub shelf life":
@@ -2159,12 +2184,12 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
-        elif h_norm == "submitted by":
-            row.append(source.get("Submitted_By", ""))
         elif h_norm == "owner email":
-            row.append(source.get("_owner_email", ""))
+            row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":
             row.append(source.get("Timestamp", ""))
+        elif h_norm == "submitted by":
+            row.append(source.get("Submitted_By", ""))
         else:
             row.append("")
     return row
@@ -2175,7 +2200,7 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
     from datetime import datetime
     from app import config as cfg
 
-    from features.product_launch.core import _open_sheet
+    from features.product_launch.core import _open_sheet, _meat_ratio_from_source
 
 
     if not cfg.NEW_PRODUCT_LAUNCH_SHEET_URL:
@@ -2211,18 +2236,7 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
     else:
         plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
     
-    # Locate header row dynamically (row containing OWNER or PRODUCT_ID)
-    sheet_sample = plan_sheet.get("A1:AP5")
-    header_row_idx = 1
-    for idx, r in enumerate(sheet_sample, 1):
-        normalized_row = [str(x).strip().upper() for x in r]
-        if any(h in normalized_row for h in ["OWNER", "PRODUCT_ID", "PRODUCT ID", "SKU"]):
-            header_row_idx = idx
-            break
-            
-    sheet_headers = [str(h).strip() for h in plan_sheet.row_values(header_row_idx)]
-    while sheet_headers and not sheet_headers[-1]:
-        sheet_headers.pop()
+    header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
     columns = list(sheet_headers)
 
     # Pre-build product master details lookups map
@@ -2285,7 +2299,13 @@ def _prepare_new_product_launch_sync(submission_id: str, *, include_existing_che
             "old_product_id": source.get("Old Product ID", ""),
             "old_product_name": source.get("Old Product Name", ""),
             "replacement_percentage": source.get("Replacement Percentage", ""),
+            "Channel": "Online",
+            "anchor_id": pid,
+            "Anchor ID": pid,
         }
+        meat_ratio = _meat_ratio_from_source(source)
+        row_source["Meat Ratio (for VA)"] = meat_ratio
+        row_source["Meat Ratio"] = meat_ratio
 
         if target_worksheet == "product_replacement":
             row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
@@ -2354,6 +2374,8 @@ def _append_approved_to_new_product_launch(submission_id: str, owner_email: str 
 
 
 def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: str, pm_details_map: dict | None = None) -> list:
+    from features.product_launch.core import _meat_ratio_from_source
+
     row = []
     pid = str(source.get("Product ID", "")).strip()
     
@@ -2361,14 +2383,15 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
     pm_details = pm_details_map.get(pid, {}) if pm_details_map is not None else {}
     
     for h in headers:
-        h_norm = str(h).strip().lower().replace("\n", " ").replace("_", " ")
+        h_norm = _normalize_plan_header(h)
         if h_norm in ("owner", "owner name"):
             owner = source.get("_owner_email") or source.get("Submitted_By") or "Demand Planning"
             row.append(owner)
         elif h_norm == "type":
             row.append(source.get("Submission_Type", "New Launch"))
         elif h_norm == "channel":
-            row.append("App")
+            ch = source.get("Channel") or source.get("channel") or ""
+            row.append(str(ch).strip() or "Online")
         elif h_norm in ("update date", "updated date"):
             row.append(_format_date_npl(update_date))
         elif h_norm in ("sub category", "subcategory"):
@@ -2378,14 +2401,15 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
         elif h_norm in ("product name", "sku name", "product_name"):
             row.append(source.get("Product Name", ""))
         elif h_norm == "anchor id":
-            row.append(pid)
+            aid = source.get("Anchor ID") or source.get("anchor_id") or pid
+            row.append(str(aid).strip() or pid)
         elif h_norm in ("city", "city name"):
             # If both city and hub_name exist as headers, "city" should get City, and "hub name" should get Hub.
             # However, in some headers "city" can refer to either, so we check carefully.
             row.append(source.get("City", ""))
         elif h_norm in ("hub name", "hub_name", "hub"):
             row.append(source.get("Hub", ""))
-        elif h_norm in ("mrp", "mrp (before kvi discount)"):
+        elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
             row.append(_format_date_npl(source.get("Start Date", "")))
@@ -2395,8 +2419,8 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
             row.append(source.get("Yield", pm_details.get("Yield", "")))
         elif h_norm == "rm":
             row.append(source.get("RM", pm_details.get("RM", "")))
-        elif h_norm in ("meat ratio (for va)", "meat ratio"):
-            row.append(source.get("Meat Ratio (for VA)", "NA"))
+        elif _is_meat_ratio_header(h_norm):
+            row.append(_meat_ratio_from_source(source))
         elif h_norm == "total shelf life":
             row.append(source.get("Total Shelf Life", pm_details.get("Total Shelf Life", "")))
         elif h_norm == "hub shelf life":
@@ -2419,12 +2443,12 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
-        elif h_norm == "submitted by":
-            row.append(source.get("Submitted_By", ""))
         elif h_norm == "owner email":
-            row.append(source.get("_owner_email", ""))
+            row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":
             row.append(source.get("Timestamp", ""))
+        elif h_norm == "submitted by":
+            row.append(source.get("Submitted_By", ""))
         else:
             row.append("")
     return row
@@ -2517,6 +2541,8 @@ def _npl_replacement_key_dynamic(row_vals: list, headers: list[str]) -> tuple[st
 
 
 def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date: str, pm_details_map: dict | None = None) -> list:
+    from features.product_launch.core import _meat_ratio_from_source
+
     row = []
     pid = str(source.get("Product ID", "")).strip()
     pm_details = pm_details_map.get(pid, {}) if pm_details_map is not None else {}
@@ -2535,7 +2561,8 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
         elif h_norm == "type":
             row.append(source.get("Submission_Type", "Replacement"))
         elif h_norm == "channel":
-            row.append("App")
+            ch = source.get("Channel") or source.get("channel") or ""
+            row.append(str(ch).strip() or "Online")
         elif h_norm in ("update date", "updated date"):
             row.append(_format_date_npl(update_date))
         elif h_norm in ("sub category", "subcategory"):
@@ -2545,12 +2572,13 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
         elif h_norm in ("product name", "sku name", "product_name"):
             row.append(source.get("Product Name", ""))
         elif h_norm == "anchor id":
-            row.append(pid)
+            aid = source.get("Anchor ID") or source.get("anchor_id") or pid
+            row.append(str(aid).strip() or pid)
         elif h_norm in ("city", "city name"):
             row.append(source.get("City", ""))
         elif h_norm in ("hub name", "hub_name", "hub"):
             row.append(source.get("Hub", ""))
-        elif h_norm in ("mrp", "mrp (before kvi discount)"):
+        elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
             row.append(_format_date_npl(source.get("Start Date", "")))
@@ -2560,8 +2588,8 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
             row.append(source.get("Yield", pm_details.get("Yield", "")))
         elif h_norm == "rm":
             row.append(source.get("RM", pm_details.get("RM", "")))
-        elif h_norm in ("meat ratio (for va)", "meat ratio"):
-            row.append(source.get("Meat Ratio (for VA)", "NA"))
+        elif _is_meat_ratio_header(h_norm):
+            row.append(_meat_ratio_from_source(source))
         elif h_norm == "total shelf life":
             row.append(source.get("Total Shelf Life", pm_details.get("Total Shelf Life", "")))
         elif h_norm == "hub shelf life":
@@ -2584,12 +2612,12 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
-        elif h_norm == "submitted by":
-            row.append(source.get("Submitted_By", ""))
         elif h_norm == "owner email":
-            row.append(source.get("_owner_email", ""))
+            row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":
             row.append(source.get("Timestamp", ""))
+        elif h_norm == "submitted by":
+            row.append(source.get("Submitted_By", ""))
         elif h_norm == "old product id":
             row.append(source.get("old_product_id", ""))
         elif h_norm == "old product name":

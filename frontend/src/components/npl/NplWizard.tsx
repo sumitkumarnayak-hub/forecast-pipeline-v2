@@ -16,6 +16,7 @@ type WizardStage = BaseStage | ReplacementStage | "setup";
 
 const COLUMN_LABEL_MAP: Record<string, string> = {
   city_name: "City",
+  anchor_id: "Anchor ID",
   Channel: "Channel",
   Mon: "Mon",
   Tue: "Tue",
@@ -78,7 +79,9 @@ const getVisibleColumns = (subType: string, planLevel: string): string[] => {
     cols.push(
       "product_id",
       "product_name",
+      "anchor_id",
       "category",
+      "Channel",
       "MRP",
       "old_product_id",
       "old_product_name",
@@ -99,7 +102,9 @@ const getVisibleColumns = (subType: string, planLevel: string): string[] => {
     cols.push(
       "product_id",
       "product_name",
+      "anchor_id",
       "category",
+      "Channel",
       "MRP",
       ...weekdaysList,
       "PLU_CODE",
