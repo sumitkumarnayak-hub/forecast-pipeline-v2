@@ -69,12 +69,20 @@ def cached(
     *,
     ttl: float = 30.0,
     skip_cache: bool = False,
+    is_cacheable: Callable[[T], bool] | None = None,
 ) -> T:
+    """
+    is_cacheable: optional guard evaluated on the freshly computed value before
+    storing it. Use this for payloads that can come back "empty" on a transient
+    upstream hiccup (e.g. a Sheets read blip) — skipping the cache_set in that
+    case means the *next* request retries live instead of being stuck serving
+    the empty result for the full TTL.
+    """
     if not skip_cache:
         hit = cache_get(ns, key)
         if hit is not None:
             return hit
     value = factory()
-    if not skip_cache:
+    if not skip_cache and (is_cacheable is None or is_cacheable(value)):
         cache_set(ns, key, value, ttl=ttl)
     return value

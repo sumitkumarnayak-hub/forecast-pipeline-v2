@@ -323,6 +323,7 @@ def load_salience_source() -> pd.DataFrame:
 
     sheet_key = _salience_spreadsheet_key()
     if not sheet_key:
+        logger.warning("[NPL] load_salience_source(): no salience spreadsheet key configured.")
         return pd.DataFrame()
 
     def _fetch():
@@ -332,14 +333,19 @@ def load_salience_source() -> pd.DataFrame:
             sheet = _open_sheet(sheet_key, SALIENCE_SHEET_NAME)
             return sheet.get_all_values()
 
-    data = read_sheet_values_cached(
-        sheet_key,
-        SALIENCE_SHEET_NAME,
-        "all",
-        sheet_category="dp_logics",
-        fetcher=_fetch,
-    )
+    try:
+        data = read_sheet_values_cached(
+            sheet_key,
+            SALIENCE_SHEET_NAME,
+            "all",
+            sheet_category="dp_logics",
+            fetcher=_fetch,
+        )
+    except Exception as exc:
+        logger.error("[NPL] load_salience_source(): failed to read '%s' — %s", SALIENCE_SHEET_NAME, exc)
+        return pd.DataFrame()
     if not data or len(data) < 2:
+        logger.warning("[NPL] load_salience_source(): '%s' returned no rows.", SALIENCE_SHEET_NAME)
         return pd.DataFrame()
 
     df = pd.DataFrame(data[1:], columns=data[0])
@@ -713,7 +719,15 @@ def load_hub_salience() -> pd.DataFrame:
     logger.warning(
         "Hub level Suggestion unavailable — using equal-weight salience from Hub Mapping"
     )
-    return _load_equal_weight_hub_salience()
+    equal_weight = _load_equal_weight_hub_salience()
+    if equal_weight.empty:
+        logger.error(
+            "[NPL] load_hub_salience() exhausted all sources (Hub level Suggestion, "
+            "parquet cache, equal-weight Hub Mapping) and returned 0 rows — the wizard "
+            "will show no cities/hubs until this is resolved. Check Sheets connectivity "
+            "and credentials."
+        )
+    return equal_weight
 
 
 def get_cities_from_salience(sal_df: pd.DataFrame) -> list:

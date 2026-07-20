@@ -183,7 +183,7 @@ interface SyncStep {
 
 export default function NplWizard({ subType, title, description }: NplWizardProps) {
   const { readOnly } = useAuth();
-  const { context, products: allProducts, loading: nplLoading, error: nplError, getProductsByCategory } =
+  const { context, products: allProducts, loading: nplLoading, error: nplError, getProductsByCategory, refresh: refreshNplContext } =
     useNplBootstrap();
   const categories = context?.categories ?? [];
   const cities = context?.cities ?? [];
@@ -1308,7 +1308,23 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                     </button>
                   ))
                 ) : (
-                  <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+                  <span className="text-xs text-muted flex items-center gap-2">
+                    {nplLoading ? (
+                      "Loading cities…"
+                    ) : (
+                      <>
+                        No cities available.
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem" }}
+                          onClick={() => refreshNplContext()}
+                        >
+                          Retry
+                        </button>
+                      </>
+                    )}
+                  </span>
                 )}
               </div>
             </div>
@@ -1456,7 +1472,23 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                     </button>
                   ))
                 ) : (
-                  <span className="text-xs text-muted">{nplLoading ? "Loading cities…" : "No cities available"}</span>
+                  <span className="text-xs text-muted flex items-center gap-2">
+                    {nplLoading ? (
+                      "Loading cities…"
+                    ) : (
+                      <>
+                        No cities available.
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem" }}
+                          onClick={() => refreshNplContext()}
+                        >
+                          Retry
+                        </button>
+                      </>
+                    )}
+                  </span>
                 )}
               </div>
             </div>

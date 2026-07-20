@@ -51,7 +51,12 @@ export async function loadNplBootstrap(options?: { force?: boolean }): Promise<N
     bootstrapInflight = api
       .get<NplBootstrapData>("/api/new-product-launch/bootstrap")
       .then(({ data }) => {
-        writeSessionBootstrap(KEY_BOOTSTRAP, data);
+        // Don't cache an empty-cities response — that's almost always a transient
+        // backend read hiccup, and caching it would strand the wizard on
+        // "No cities available" for the full session TTL instead of retrying.
+        if (data?.cities?.length) {
+          writeSessionBootstrap(KEY_BOOTSTRAP, data);
+        }
         return data;
       })
       .finally(() => {

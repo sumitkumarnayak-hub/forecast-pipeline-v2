@@ -205,7 +205,13 @@ def npl_categories(current_user: dict = Depends(get_current_user)):
 
 
     try:
-        categories = cached(CacheNS.NPL_WIZARD, "categories", wiz.list_categories, ttl=_NPL_CACHE_TTL)
+        categories = cached(
+            CacheNS.NPL_WIZARD,
+            "categories",
+            wiz.list_categories,
+            ttl=_NPL_CACHE_TTL,
+            is_cacheable=lambda v: bool(v),
+        )
         return {"categories": categories}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -956,7 +962,16 @@ def wizard_context(current_user: dict = Depends(get_current_user)):
     from features.product_launch import wizard as wiz
 
 
-    return cached(CacheNS.NPL_WIZARD, "context", wiz.wizard_context_payload, ttl=_NPL_CACHE_TTL)
+    return cached(
+        CacheNS.NPL_WIZARD,
+        "context",
+        wiz.wizard_context_payload,
+        ttl=_NPL_CACHE_TTL,
+        # Never cache an empty-cities result — that's almost always a transient
+        # Sheets read hiccup, and caching it would strand the wizard with
+        # "No cities available" for the full TTL instead of self-healing.
+        is_cacheable=lambda v: bool(v.get("cities")),
+    )
 
 
 @router.get("/bootstrap")
@@ -1002,7 +1017,14 @@ def npl_bootstrap(current_user: dict = Depends(get_current_user)):
         from core.utils.dataframe import sanitize_for_json
         return sanitize_for_json(payload)
         
-    return cached(CacheNS.NPL_WIZARD, "combined_bootstrap_v3", _load_all, ttl=_NPL_CACHE_TTL)
+    return cached(
+        CacheNS.NPL_WIZARD,
+        "combined_bootstrap_v3",
+        _load_all,
+        ttl=_NPL_CACHE_TTL,
+        # Same reasoning as /wizard/context — don't lock in a transient empty read.
+        is_cacheable=lambda v: bool(v.get("cities")),
+    )
 
 
 @router.get("/wizard/hubs")
@@ -1019,7 +1041,8 @@ def wizard_hubs(
         CacheNS.NPL_WIZARD,
         cache_key,
         lambda: {"hubs": wiz.list_hubs_for_city(city, category)},
-        ttl=_NPL_CACHE_TTL
+        ttl=_NPL_CACHE_TTL,
+        is_cacheable=lambda v: bool(v.get("hubs")),
     )
 
 
