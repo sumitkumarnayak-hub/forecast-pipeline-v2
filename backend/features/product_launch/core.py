@@ -72,6 +72,7 @@ CITY_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Hub Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Production PC": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
@@ -118,6 +119,7 @@ HUB_UPLOAD_SCHEMA = pa.DataFrameSchema({
     "Hub Shelf Life": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU Code": pa.Column(str, coerce=True, nullable=True, required=False),
     "PLU_CODE": pa.Column(str, coerce=True, nullable=True, required=False),
+    "Production PC": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product ID": pa.Column(str, coerce=True, nullable=True, required=False),
     "Old Product Name": pa.Column(str, coerce=True, nullable=True, required=False),
     "old_product_id": pa.Column(str, coerce=True, nullable=True, required=False),
@@ -287,9 +289,77 @@ def get_product_info(df_master: pd.DataFrame, product_id: str) -> dict:
 # HUB SALIENCE  (Hub level Suggestion sheet — same as Product)
 # ──────────────────────────────────────────────────────────────────
 
+def _salience_spreadsheet_key() -> str | None:
+    """Spreadsheet ID for Hub level Suggestion (DP Logics preferred, Hub Level Planning fallback)."""
+    from app import config as cfg
+
+    for key in (getattr(cfg, "DP_LOGICS_SHEET_KEY", None), SPREADSHEET_ID):
+        if key:
+            return key
+    return None
+
+
+def _normalize_weekday(val) -> str:
+    """Map day labels to Mon–Sun."""
+    text = str(val).strip()
+    if text in WEEKDAYS:
+        return text
+    aliases = {
+        "monday": "Mon", "mon": "Mon",
+        "tuesday": "Tue", "tues": "Tue", "tue": "Tue",
+        "wednesday": "Wed", "wed": "Wed",
+        "thursday": "Thu", "thur": "Thu", "thu": "Thu",
+        "friday": "Fri", "fri": "Fri",
+        "saturday": "Sat", "sat": "Sat",
+        "sunday": "Sun", "sun": "Sun",
+    }
+    return aliases.get(text.lower(), text)
+
+
 def load_salience_source() -> pd.DataFrame:
-    """Dynamically construct equal-weighted salience source from Hub_Mapping active hubs."""
-    return load_hub_salience()
+    """Load hub-level Base_plan rows from Hub level Suggestion (Product parity)."""
+    from features.product_launch.sheet_reads import read_sheet_values_cached
+
+    sheet_key = _salience_spreadsheet_key()
+    if not sheet_key:
+        return pd.DataFrame()
+
+    def _fetch():
+        from core.shared.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(sheet_key, SALIENCE_SHEET_NAME)
+            return sheet.get_all_values()
+
+    data = read_sheet_values_cached(
+        sheet_key,
+        SALIENCE_SHEET_NAME,
+        "all",
+        sheet_category="dp_logics",
+        fetcher=_fetch,
+    )
+    if not data or len(data) < 2:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data[1:], columns=data[0])
+    df = _normalize_columns(df)
+
+    day_col = _resolve_col(df, "day", "Day")
+    if day_col and day_col != "day":
+        df = df.rename(columns={day_col: "day"})
+    if "day" in df.columns:
+        df["day"] = df["day"].map(_normalize_weekday)
+
+    if "Base_plan" not in df.columns:
+        bp = _resolve_col(df, "Base_plan", "Base plan", "base_plan", "BasePlan")
+        if bp:
+            df = df.rename(columns={bp: "Base_plan"})
+    if "Base_plan" not in df.columns:
+        return pd.DataFrame()
+
+    df["Base_plan"] = pd.to_numeric(df["Base_plan"], errors="coerce").fillna(0).round()
+    df = df[df["Base_plan"] > 0]
+    return df.reset_index(drop=True)
 
 
 def load_hub_sku_master() -> pd.DataFrame:
@@ -380,15 +450,65 @@ def get_expansion_cities(hub_sku_df: pd.DataFrame, category: str, all_cities: li
 
 
 def compute_salience_category(df: pd.DataFrame) -> pd.DataFrame:
-    """Salience helper, fallback to category-agnostic salience."""
-    return df[["city_name", "hub_name", "sub_category", "salience"]] if not df.empty else df
+    """
+    Salience at city × hub × category (× day when day column is present).
+    salience = hub Base_plan / city Base_plan for the same category (and day).
+    """
+    empty = pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
+    if df is None or df.empty:
+        return empty
+
+    work = _normalize_columns(df.copy())
+    city_col = _resolve_col(work, "city_name", "City Name", "city")
+    hub_col = _resolve_col(work, "hub_name", "Hub Name", "hub")
+    sc_col = _subcat_col(work)
+    if not city_col or not hub_col or sc_col not in work.columns or "Base_plan" not in work.columns:
+        return empty
+
+    if city_col != "city_name":
+        work = work.rename(columns={city_col: "city_name"})
+    if hub_col != "hub_name":
+        work = work.rename(columns={hub_col: "hub_name"})
+    if sc_col != "sub_category":
+        work = work.rename(columns={sc_col: "sub_category"})
+
+    day_col = _resolve_col(work, "day", "Day")
+    if day_col and day_col != "day":
+        work = work.rename(columns={day_col: "day"})
+    if "day" in work.columns:
+        work["day"] = work["day"].map(_normalize_weekday)
+
+    hub_group = ["city_name", "hub_name", "sub_category"]
+    city_group = ["city_name", "sub_category"]
+    if "day" in work.columns:
+        hub_group.append("day")
+        city_group.append("day")
+
+    hub_tot = (
+        work.groupby(hub_group, as_index=False)["Base_plan"]
+        .sum()
+        .rename(columns={"Base_plan": "hub_total"})
+    )
+    city_tot = (
+        work.groupby(city_group, as_index=False)["Base_plan"]
+        .sum()
+        .rename(columns={"Base_plan": "city_total"})
+    )
+    merged = pd.merge(hub_tot, city_tot, on=city_group, how="left")
+    merged["salience"] = np.where(
+        merged["city_total"] > 0,
+        merged["hub_total"] / merged["city_total"],
+        0.0,
+    )
+
+    out_cols = ["city_name", "hub_name", "sub_category", "salience"]
+    if "day" in merged.columns:
+        out_cols.append("day")
+    return merged[out_cols]
 
 
-def load_hub_salience() -> pd.DataFrame:
-    """
-    Returns city_name, hub_name, sub_category, salience.
-    Built from FF Automation Hub Mapping active hubs with equal salience split.
-    """
+def _load_equal_weight_hub_salience() -> pd.DataFrame:
+    """Fallback salience: equal weight across active hubs per city from Hub Mapping."""
     hub_df = load_hub_sku_master()
     if hub_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
@@ -420,6 +540,55 @@ def load_hub_salience() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_hub_salience() -> pd.DataFrame:
+    """
+    Returns city_name, hub_name, sub_category, salience (+ day when available).
+
+    Primary: Hub level Suggestion Base_plan (hub × category × day).
+    Fallback: outputs/hub_suggestion_latest.parquet, then equal-weight Hub Mapping.
+    """
+    raw = load_salience_source()
+    if not raw.empty:
+        computed = compute_salience_category(raw)
+        if not computed.empty:
+            return computed
+
+    path = os.path.join(OUTPUTS_DIR, "hub_suggestion_latest.parquet")
+    if os.path.exists(path):
+        try:
+            df = pd.read_parquet(path)
+            df = _normalize_columns(df)
+            sc = _subcat_col(df)
+            if sc != "sub_category":
+                df = df.rename(columns={sc: "sub_category"})
+            city_col = _resolve_col(df, "city_name", "City Name", "city")
+            hub_col = _resolve_col(df, "hub_name", "Hub Name", "hub")
+            if city_col and hub_col and "sub_category" in df.columns:
+                if city_col != "city_name":
+                    df = df.rename(columns={city_col: "city_name"})
+                if hub_col != "hub_name":
+                    df = df.rename(columns={hub_col: "hub_name"})
+                day_col = _resolve_col(df, "day", "Day")
+                if day_col and day_col != "day":
+                    df = df.rename(columns={day_col: "day"})
+                if "day" in df.columns:
+                    df["day"] = df["day"].map(_normalize_weekday)
+                if "Base_plan" in df.columns and "salience" not in df.columns:
+                    return compute_salience_category(df)
+                if "salience" in df.columns:
+                    cols = ["city_name", "hub_name", "sub_category", "salience"]
+                    if "day" in df.columns:
+                        cols.append("day")
+                    return df[[c for c in cols if c in df.columns]]
+        except Exception as exc:
+            logger.warning("Could not load hub salience parquet fallback: %s", exc)
+
+    logger.warning(
+        "Hub level Suggestion unavailable — using equal-weight salience from Hub Mapping"
+    )
+    return _load_equal_weight_hub_salience()
+
+
 def get_cities_from_salience(sal_df: pd.DataFrame) -> list:
     if sal_df is None or sal_df.empty:
         return []
@@ -437,17 +606,10 @@ def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> 
     if sal_df is None:
         sal_df = pd.DataFrame()
 
-    # 1. Prefer active hubs from Hub Sku Master when available for the city/category.
-    hub_sku_df = load_hub_sku_master()
-    if category and not hub_sku_df.empty:
-        active_hubs = get_active_hubs_for_city(hub_sku_df, city, category)
-        if active_hubs:
-            return active_hubs
-
-    # 2. Try with category filtering from Hub Level Suggestion (salience) sheet
     city_col = _resolve_col(sal_df, "city_name", "City Name", "city")
     hub_col = _resolve_col(sal_df, "hub_name", "Hub Name", "hub")
-    
+
+    # 1. Prefer hubs from Hub level Suggestion salience (Product city-plan parity)
     if city_col and hub_col and not sal_df.empty:
         mask = sal_df[city_col].astype(str).str.strip().str.lower() == str(city).strip().lower()
         if category:
@@ -457,13 +619,17 @@ def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> 
                 hubs = sorted(sal_df.loc[cat_mask, hub_col].dropna().astype(str).str.strip().unique().tolist())
                 if hubs:
                     return hubs
-
-        # 3. Fallback: Try fetching all hubs in this city from salience sheet, regardless of category
         hubs = sorted(sal_df.loc[mask, hub_col].dropna().astype(str).str.strip().unique().tolist())
         if hubs:
             return hubs
 
-    # 4. Fallback: Try fetching all hubs in this city from Hub Sku Master, regardless of category
+    # 2. Active hubs from Hub Mapping / Sku Master
+    hub_sku_df = load_hub_sku_master()
+    if category and not hub_sku_df.empty:
+        active_hubs = get_active_hubs_for_city(hub_sku_df, city, category)
+        if active_hubs:
+            return active_hubs
+
     if not hub_sku_df.empty:
         active_hubs = get_active_hubs_for_city(hub_sku_df, city, category=None)
         if active_hubs:
@@ -475,6 +641,38 @@ def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> 
 # ──────────────────────────────────────────────────────────────────
 # CITY → HUB  SPLIT  (per-day salience allocation)
 # ──────────────────────────────────────────────────────────────────
+def _hub_day_salience(
+    sal_df: pd.DataFrame,
+    city: str,
+    hub: str,
+    category: str,
+    day: str,
+    *,
+    per_day_salience: bool,
+) -> float:
+    """Salience for one hub on one day; falls back to city-wide (all categories) when category match is zero."""
+    sc_col = _subcat_col(sal_df)
+
+    def _lookup(use_category: bool) -> float:
+        mask = (
+            (sal_df["city_name"].astype(str).str.strip() == city)
+            & (sal_df["hub_name"].astype(str).str.strip() == hub)
+        )
+        if use_category and sc_col in sal_df.columns and category:
+            mask &= sal_df[sc_col].astype(str).str.strip().str.lower() == category.strip().lower()
+        if per_day_salience:
+            mask &= sal_df["day"].astype(str).str.strip() == day
+        rows_match = sal_df[mask]
+        if rows_match.empty:
+            return 0.0
+        return float(rows_match["salience"].sum())
+
+    val = _lookup(use_category=True)
+    if val == 0.0 and category:
+        val = _lookup(use_category=False)
+    return val
+
+
 def _weighted_alloc(total: int, hub_sal: dict) -> dict:
     """Allocate 'total' units across hubs by salience; every hub gets ≥ 1."""
     hubs = list(hub_sal.keys())
@@ -539,33 +737,30 @@ def split_city_to_hubs(
         if not hubs:
             continue
 
-        zero_hubs = []
-        sc_col = _subcat_col(sal_df)
+        zero_hubs: list[str] = []
         per_day_salience = "day" in sal_df.columns
         # Pre-compute per-day allocations
         day_alloc = {}
         for day in WEEKDAYS:
-            day_sal = {}
-            for hub in hubs:
-                mask = (
-                    (sal_df["city_name"].astype(str).str.strip() == city) &
-                    (sal_df["hub_name"].astype(str).str.strip() == hub) &
-                    (sal_df[sc_col].astype(str).str.strip().str.lower() == category.lower())
+            day_sal = {
+                hub: _hub_day_salience(
+                    sal_df, city, hub, category, day, per_day_salience=per_day_salience,
                 )
-                if per_day_salience:
-                    mask &= sal_df["day"].astype(str).str.strip() == day
-                rows_match = sal_df[mask]
-                day_sal[hub] = float(rows_match["salience"].iloc[0]) if not rows_match.empty else 0.0
+                for hub in hubs
+            }
 
-            # Track zero-salience hubs (once, not per day)
+            # Track hubs still at zero after category + city-wide fallback (Mon only)
             if day == WEEKDAYS[0]:
                 zero_hubs = [h for h, s in day_sal.items() if s == 0.0]
 
-            total       = int(float(r.get(day, 0) or 0))
+            total = int(float(r.get(day, 0) or 0))
             day_alloc[day] = _weighted_alloc(total, day_sal)
 
         if zero_hubs:
-            zero_sal_info[city] = zero_hubs
+            existing = zero_sal_info.setdefault(city, [])
+            for hub in zero_hubs:
+                if hub not in existing:
+                    existing.append(hub)
 
         for hub in hubs:
             hub_row = {
@@ -590,7 +785,30 @@ def split_city_to_hubs(
             rows.append(hub_row)
 
     cols = ["city_name", "hub_name", "product_id", "product_name", "anchor_id", "category", "Channel", "MRP"] + WEEKDAYS + ALL_POSSIBLE_OPTIONAL_COLS
-    return (pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols), zero_sal_info)
+    hub_df = pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+    if not hub_df.empty and not city_df.empty:
+        for day in WEEKDAYS:
+            if day not in city_df.columns or day not in hub_df.columns:
+                continue
+            for _, city_row in city_df.iterrows():
+                city = str(city_row.get("city_name", "")).strip()
+                pid = str(city_row.get("product_id", "")).strip()
+                expected = int(float(city_row.get(day, 0) or 0))
+                if not city:
+                    continue
+                mask = (
+                    (hub_df["city_name"].astype(str).str.strip() == city)
+                    & (hub_df["product_id"].astype(str).str.strip() == pid)
+                )
+                actual = int(hub_df.loc[mask, day].sum()) if mask.any() else 0
+                if actual != expected:
+                    logger.warning(
+                        "[NPL] split total mismatch %s %s %s: expected=%s actual=%s",
+                        city, pid, day, expected, actual,
+                    )
+
+    return (hub_df, zero_sal_info)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -604,12 +822,14 @@ HUB_COLS  = ["city_name", "hub_name", "product_id", "product_name", "anchor_id",
 ALL_POSSIBLE_OPTIONAL_COLS = [
     "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Meat Ratio",
     "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date",
+    "Production PC",
     "old_product_id", "old_product_name", "replacement_percentage"
 ]
 
 OPTIONAL_PLAN_PROP_COLS = [
     "UOM", "Yield", "RM", "Meat Ratio", "Meat Ratio (for VA)",
     "Total Shelf Life", "Hub Shelf Life", "PLU Code", "Start Date",
+    "Production PC",
 ]
 
 
@@ -624,6 +844,90 @@ def _optional_str(val) -> str:
         pass
     s = str(val).strip()
     return "" if s.lower() in ("nan", "none", "nat", "null") else s
+
+
+def _parse_meat_ratio_percent(val) -> float | None:
+    """Parse meat ratio as a percentage in 0–100. Returns None when blank."""
+    s = _optional_str(val)
+    if not s:
+        return None
+    raw = str(val).strip()
+    has_pct = "%" in raw
+    num_str = s.replace("%", "").strip()
+    try:
+        num = float(num_str)
+    except ValueError as exc:
+        raise ValueError(f"Meat Ratio must be numeric up to 100% (got {raw!r})") from exc
+    if not has_pct and 0 < num <= 1:
+        num *= 100
+    if num < 0 or num > 100:
+        raise ValueError(f"Meat Ratio must be between 0 and 100% (got {raw!r})")
+    return num
+
+
+def _validate_meat_ratio_column(df: pd.DataFrame) -> list[str]:
+    """Validate Meat Ratio (for VA) / Meat Ratio values are <= 100%."""
+    errors: list[str] = []
+    candidates = [
+        c for c in df.columns
+        if "meat ratio" in str(c).strip().lower()
+    ]
+    for col in candidates:
+        for idx, val in df[col].items():
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                continue
+            if str(val).strip() == "":
+                continue
+            try:
+                _parse_meat_ratio_percent(val)
+            except ValueError as exc:
+                errors.append(f"Row {int(idx) + 2}, column '{col}': {exc}")
+    return errors
+
+
+def _normalize_upload_mrp_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Map template MRP header to internal MRP and drop duplicate column."""
+    mrp_header = "MRP\n(Before KVi Discount)"
+    if mrp_header in df.columns:
+        if "MRP" not in df.columns:
+            df["MRP"] = df[mrp_header]
+        df = df.drop(columns=[mrp_header])
+    return df
+
+
+def _validate_required_text_columns(
+    df: pd.DataFrame,
+    columns: list[tuple[str, str]],
+) -> list[str]:
+    """Row-level validation for required text columns. columns = [(field, label), ...]."""
+    errors: list[str] = []
+    for col, label in columns:
+        if col not in df.columns:
+            errors.append(f"Column '{label}' is missing from the uploaded sheet.")
+            continue
+        for idx, val in df[col].items():
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                errors.append(f"Row {int(idx) + 2}: {label} is required.")
+                continue
+            text = str(val).strip()
+            if not text or text.lower() in ("nan", "none", "nat"):
+                errors.append(f"Row {int(idx) + 2}: {label} is required.")
+    return errors
+
+
+def _validate_production_pc_column(df: pd.DataFrame) -> list[str]:
+    """Production PC is mandatory on every data row."""
+    errors: list[str] = []
+    pc_col = next((c for c in df.columns if str(c).strip().lower() == "production pc"), None)
+    if not pc_col:
+        return ["Column 'Production PC' is missing from the uploaded sheet."]
+    for idx, val in df[pc_col].items():
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            errors.append(f"Row {int(idx) + 2}: Production PC is required.")
+            continue
+        if not str(val).strip() or str(val).strip().lower() in ("nan", "none", "nat"):
+            errors.append(f"Row {int(idx) + 2}: Production PC is required.")
+    return errors
 
 
 def _meat_ratio_from_source(source: dict) -> str:
@@ -657,16 +961,16 @@ def get_template_columns(plan_level: str, sub_type: str) -> tuple[list[str], lis
     if sub_type == "Replacement":
         # Replacement headers
         if plan_level == "city":
-            mandatory = ["City", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+            mandatory = ["City", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage", "Production PC"] + WEEKDAYS
         else:
-            mandatory = ["City", "Hub Name", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage"] + WEEKDAYS
+            mandatory = ["City", "Hub Name", "Product ID", "Product Name", "Anchor ID", "Sub Category", "Channel", "MRP", "Old Product ID", "Old Product Name", "Replacement Percentage", "Production PC"] + WEEKDAYS
         optional = ["PLU Code", "UOM", "Yield", "RM", "Meat Ratio", "Total Shelf Life", "Hub Shelf Life"]
     else:
         # New Launch & Expansion headers
         if plan_level == "city":
-            mandatory = ["City", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+            mandatory = ["City", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)", "Production PC"] + WEEKDAYS
         else:
-            mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)"] + WEEKDAYS
+            mandatory = ["City", "hub_name", "PRODUCT_ID", "PRODUCT_NAME", "Anchor ID", "SUB_CATEGORY", "Channel", "MRP\n(Before KVi Discount)", "Production PC"] + WEEKDAYS
         optional = ["PLU_CODE", "UOM", "Yield", "RM", "Meat Ratio (for VA)", "Total Shelf Life", "Hub Shelf Life"]
 
     return mandatory + optional, []
@@ -846,8 +1150,7 @@ def parse_city_upload(file) -> tuple:
         df["category"] = df["SUB_CATEGORY"]
     elif "Sub Category" in df.columns and "category" not in df.columns:
         df["category"] = df["Sub Category"]
-    if "MRP\n(Before KVi Discount)" in df.columns and "MRP" not in df.columns:
-        df["MRP"] = df["MRP\n(Before KVi Discount)"]
+    df = _normalize_upload_mrp_column(df)
     if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
         df["PLU Code"] = df["PLU_CODE"]
     df = _normalize_meat_ratio_column(df)
@@ -866,37 +1169,44 @@ def parse_city_upload(file) -> tuple:
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
     
-    errors = []
-    
-    # 1. Clean nulls & check for empty columns on core fields only
-    for col in ["city_name", "product_id", "product_name", "category"]:
-        if col in df.columns:
-            if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
-                errors.append(f"Row values in column '{col}' cannot be empty.")
-            
-    # Add dtype validation
-    numeric_cols = ["MRP", "MRP\n(Before KVi Discount)"] + WEEKDAYS
-    for col in df.columns:
-        if col in numeric_cols:
-            if not pd.to_numeric(df[col], errors="coerce").notna().all():
-                errors.append(f"Column '{col}' must contain only numeric values.")
-    
-    # 2. Validate MRP is not empty, numeric and > 0
-    if "MRP" in df.columns:
-        mrp_series = pd.to_numeric(df["MRP"], errors="coerce")
-        if mrp_series.isna().any():
-            errors.append("Column 'MRP' contains empty or non-numeric values.")
-        elif (mrp_series <= 0).any():
-            errors.append("Column 'MRP' values must be strictly greater than 0.")
-    else:
+    errors = _validate_required_text_columns(
+        df,
+        [
+            ("city_name", "City"),
+            ("product_id", "Product ID"),
+            ("product_name", "Product Name"),
+            ("category", "Sub Category"),
+        ],
+    )
+
+    # Validate MRP per row
+    if "MRP" not in df.columns:
         errors.append("Column 'MRP' is missing from the uploaded sheet.")
+    else:
+        for idx, val in df["MRP"].items():
+            mrp = pd.to_numeric(val, errors="coerce")
+            if pd.isna(mrp):
+                errors.append(f"Row {int(idx) + 2}: MRP must be a number greater than 0.")
+            elif float(mrp) <= 0:
+                errors.append(f"Row {int(idx) + 2}: MRP must be greater than 0.")
+
+    for day in WEEKDAYS:
+        if day not in df.columns:
+            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
+            continue
+        for idx, val in df[day].items():
+            day_val = pd.to_numeric(val, errors="coerce")
+            if pd.isna(day_val):
+                errors.append(f"Row {int(idx) + 2}: {day} must be a number.")
+            elif float(day_val) < 0:
+                errors.append(f"Row {int(idx) + 2}: {day} must be non-negative.")
 
     # 3. Validate cities list against official list
     if "city_name" in df.columns and not errors:
         try:
-            from features.product_launch.core import load_salience_source, get_cities_from_salience
+            from features.product_launch.core import get_cities_from_salience, load_hub_salience
 
-            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_salience_source())}
+            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_hub_salience())}
             invalid_rows = []
             for idx, row in df.iterrows():
                 city = str(row["city_name"]).strip()
@@ -907,19 +1217,16 @@ def parse_city_upload(file) -> tuple:
         except Exception as e:
             logger.warning(f"Error checking valid cities list: {e}")
 
-    # 4. Validate Mon-Sun allocations are non-negative integers
-    for day in WEEKDAYS:
-        if day in df.columns:
-            day_series = pd.to_numeric(df[day], errors="coerce")
-            if day_series.isna().any():
-                errors.append(f"Column '{day}' contains empty or non-numeric values.")
-            elif (day_series < 0).any():
-                errors.append(f"Column '{day}' values must be non-negative (>= 0).")
-        else:
-            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
-
     if errors:
-        return pd.DataFrame(), errors
+        return pd.DataFrame(), errors[:12]
+
+    meat_errors = _validate_meat_ratio_column(df)
+    if meat_errors:
+        return pd.DataFrame(), meat_errors[:8]
+
+    pc_errors = _validate_production_pc_column(df)
+    if pc_errors:
+        return pd.DataFrame(), pc_errors[:8]
 
     try:
         df = CITY_UPLOAD_SCHEMA.validate(df)
@@ -979,8 +1286,7 @@ def parse_hub_upload(file) -> tuple:
         df["category"] = df["SUB_CATEGORY"]
     elif "Sub Category" in df.columns and "category" not in df.columns:
         df["category"] = df["Sub Category"]
-    if "MRP\n(Before KVi Discount)" in df.columns and "MRP" not in df.columns:
-        df["MRP"] = df["MRP\n(Before KVi Discount)"]
+    df = _normalize_upload_mrp_column(df)
     if "PLU_CODE" in df.columns and "PLU Code" not in df.columns:
         df["PLU Code"] = df["PLU_CODE"]
     df = _normalize_meat_ratio_column(df)
@@ -999,37 +1305,44 @@ def parse_hub_upload(file) -> tuple:
     if missing:
         return pd.DataFrame(), [f"Missing columns: {missing}"]
     
-    errors = []
-    
-    # 1. Clean nulls & check for empty columns on core fields only
-    for col in ["city_name", "hub_name", "product_id", "product_name", "category"]:
-        if col in df.columns:
-            if df[col].astype(str).str.strip().eq("").any() or df[col].isna().any():
-                errors.append(f"Row values in column '{col}' cannot be empty.")
-            
-    # Add dtype validation
-    numeric_cols = ["MRP", "MRP\n(Before KVi Discount)"] + WEEKDAYS
-    for col in df.columns:
-        if col in numeric_cols:
-            if not pd.to_numeric(df[col], errors="coerce").notna().all():
-                errors.append(f"Column '{col}' must contain only numeric values.")
-    
-    # 2. Validate MRP is not empty, numeric and > 0
-    if "MRP" in df.columns:
-        mrp_series = pd.to_numeric(df["MRP"], errors="coerce")
-        if mrp_series.isna().any():
-            errors.append("Column 'MRP' contains empty or non-numeric values.")
-        elif (mrp_series <= 0).any():
-            errors.append("Column 'MRP' values must be strictly greater than 0.")
-    else:
+    errors = _validate_required_text_columns(
+        df,
+        [
+            ("city_name", "City"),
+            ("hub_name", "Hub Name"),
+            ("product_id", "Product ID"),
+            ("product_name", "Product Name"),
+            ("category", "Sub Category"),
+        ],
+    )
+
+    if "MRP" not in df.columns:
         errors.append("Column 'MRP' is missing from the uploaded sheet.")
+    else:
+        for idx, val in df["MRP"].items():
+            mrp = pd.to_numeric(val, errors="coerce")
+            if pd.isna(mrp):
+                errors.append(f"Row {int(idx) + 2}: MRP must be a number greater than 0.")
+            elif float(mrp) <= 0:
+                errors.append(f"Row {int(idx) + 2}: MRP must be greater than 0.")
+
+    for day in WEEKDAYS:
+        if day not in df.columns:
+            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
+            continue
+        for idx, val in df[day].items():
+            day_val = pd.to_numeric(val, errors="coerce")
+            if pd.isna(day_val):
+                errors.append(f"Row {int(idx) + 2}: {day} must be a number.")
+            elif float(day_val) < 0:
+                errors.append(f"Row {int(idx) + 2}: {day} must be non-negative.")
 
     # 3. Validate cities list against official list
     if "city_name" in df.columns and not errors:
         try:
-            from features.product_launch.core import load_salience_source, get_cities_from_salience
+            from features.product_launch.core import get_cities_from_salience, load_hub_salience
 
-            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_salience_source())}
+            valid_cities = {c.strip().lower() for c in get_cities_from_salience(load_hub_salience())}
             invalid_rows = []
             for idx, row in df.iterrows():
                 city = str(row["city_name"]).strip()
@@ -1040,19 +1353,16 @@ def parse_hub_upload(file) -> tuple:
         except Exception as e:
             logger.warning(f"Error checking valid cities list: {e}")
 
-    # 4. Validate Mon-Sun allocations are non-negative integers
-    for day in WEEKDAYS:
-        if day in df.columns:
-            day_series = pd.to_numeric(df[day], errors="coerce")
-            if day_series.isna().any():
-                errors.append(f"Column '{day}' contains empty or non-numeric values.")
-            elif (day_series < 0).any():
-                errors.append(f"Column '{day}' values must be non-negative (>= 0).")
-        else:
-            errors.append(f"Column '{day}' is missing from the uploaded sheet.")
-
     if errors:
-        return pd.DataFrame(), errors
+        return pd.DataFrame(), errors[:12]
+
+    meat_errors = _validate_meat_ratio_column(df)
+    if meat_errors:
+        return pd.DataFrame(), meat_errors[:8]
+
+    pc_errors = _validate_production_pc_column(df)
+    if pc_errors:
+        return pd.DataFrame(), pc_errors[:8]
 
     try:
         df = HUB_UPLOAD_SCHEMA.validate(df)
@@ -1195,14 +1505,36 @@ def _append_sheet_rows(
     return _append_sheet_row_values(sheet, values, chunk_size=chunk_size)
 
 
-def _append_sheet_row_values(sheet, rows: list[list], *, chunk_size: int = 500) -> int:
-    """Append pre-built row lists directly (preserves duplicate headers / column order)."""
+def _append_sheet_row_values(
+    sheet,
+    rows: list[list],
+    *,
+    chunk_size: int = 500,
+    table_range: str | None = None,
+    row_width: int | None = None,
+) -> int:
+    """Append pre-built row lists directly (preserves duplicate headers / column order).
+
+    table_range: anchor append to column A (e.g. ``A2`` when headers are on row 2).
+    Without this, Google Sheets may append starting at a wrong column when the sheet
+    has sparse / misaligned historical rows.
+    """
     if not rows:
         return 0
     written = 0
+    append_kwargs: dict = {"value_input_option": "USER_ENTERED"}
+    if table_range:
+        append_kwargs["table_range"] = table_range
     for start in range(0, len(rows), chunk_size):
-        chunk = rows[start : start + chunk_size]
-        sheet.append_rows(chunk, value_input_option="USER_ENTERED")
+        chunk = []
+        for row in rows[start : start + chunk_size]:
+            if row_width is not None:
+                if len(row) < row_width:
+                    row = row + [""] * (row_width - len(row))
+                elif len(row) > row_width:
+                    row = row[:row_width]
+            chunk.append(row)
+        sheet.append_rows(chunk, **append_kwargs)
         written += len(chunk)
     return written
 

@@ -265,7 +265,7 @@ def preview_hub_rows(
     for col in pct_cols:
         if col in df.columns:
             df[col] = df[col].apply(_parse_percent_to_decimal)
-    for col in ["Meat Ratio", "Meat Ratio (for VA)", "UOM", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "PLU_CODE"]:
+    for col in ["Meat Ratio", "Meat Ratio (for VA)", "UOM", "RM", "Total Shelf Life", "Hub Shelf Life", "PLU Code", "PLU_CODE", "Production PC"]:
         if col in df.columns:
             df[col] = df[col].apply(_optional_str)
 

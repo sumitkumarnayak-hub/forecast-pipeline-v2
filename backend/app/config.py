@@ -23,7 +23,7 @@ def _env_path(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         import logging
-        logging.getLogger("planning_suite.config").debug(
+        logging.getLogger("planning_workbench.config").debug(
             "Configuration environment variable '%s' is not set. Google Sheets features for this worksheet will fail.",
             name
         )
@@ -311,7 +311,7 @@ VALIDATION_RULES = {
     }
 }
 
-APP_TITLE = "Planning Suite"
+APP_TITLE = "Planning workbench"
 APP_ICON = "📊"
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
@@ -333,7 +333,7 @@ def get_auth_secret() -> str:
 
 
 PAGE_CONFIG = {
-    "page_title": "Planning Suite — Demand Planning",
+    "page_title": "Planning workbench — Demand Planning",
     "page_icon": APP_ICON,
     "layout": "wide",
     "initial_sidebar_state": "expanded"

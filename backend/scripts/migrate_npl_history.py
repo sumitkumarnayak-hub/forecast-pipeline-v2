@@ -4,7 +4,7 @@ import json
 import logging
 from pathlib import Path
 
-# Add backend/src to path so we can import planning_suite
+# Add backend/src to path so we can import planning_workbench
 backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir / "src"))
 

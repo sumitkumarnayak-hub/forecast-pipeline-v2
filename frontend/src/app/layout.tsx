@@ -3,8 +3,8 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Planning Suite — Demand Planning",
-  description: "Demand Planning & Forecasting Suite for weekly baseline and final plan orchestration.",
+  title: "Planning workbench — Demand Planning",
+  description: "Demand Planning & Forecasting workbench for weekly baseline and final plan orchestration.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

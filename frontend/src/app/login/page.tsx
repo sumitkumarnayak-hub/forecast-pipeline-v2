@@ -69,7 +69,7 @@ export default function LoginPage() {
       <div className="relative w-full max-w-[400px] rounded-3xl bg-white/45 backdrop-blur-2xl border border-white/60 p-10 shadow-[0_8px_32px_0_rgba(31,38,135,0.04)] box-border">
         {/* Logo/Icon */}
         <div className="text-center mb-8">
-          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Planning Suite</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Planning workbench</h2>
           <p className="text-xs text-slate-500 mt-1">Demand Planning Platform</p>
         </div>
 

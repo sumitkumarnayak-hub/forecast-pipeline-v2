@@ -159,12 +159,12 @@ def notify_autopilot_run_finished(
             },
             variant="success",
             badge="Pipeline",
-            action="Open <strong>Planning Suite → Baseline → Auto-Pilot</strong> to review the run log.",
+            action="Open <strong>Planning workbench → Baseline → Auto-Pilot</strong> to review the run log.",
         )
         return _safe_operational_send(
             event="autopilot_completed",
             category="pipeline",
-            subject=f"[Planning Suite] Pipeline completed — {run_name}",
+            subject=f"[Planning workbench] Pipeline completed — {run_name}",
             html_body=html_body,
             triggered_by_user_id=user_id,
             metadata=meta,
@@ -188,12 +188,12 @@ def notify_autopilot_run_finished(
         error_block=error_detail,
         variant="error",
         badge="Pipeline",
-        action="Open <strong>Planning Suite → Baseline</strong> and click <strong>Try again</strong>.",
+        action="Open <strong>Planning workbench → Baseline</strong> and click <strong>Try again</strong>.",
     )
     return _safe_operational_send(
         event="autopilot_failed",
         category="pipeline",
-        subject=f"[Planning Suite] Pipeline FAILED — {run_name}",
+        subject=f"[Planning workbench] Pipeline FAILED — {run_name}",
         html_body=html_body,
         triggered_by_user_id=user_id,
         metadata=meta,
@@ -225,12 +225,12 @@ def notify_baseline_run_finished(
             },
             variant="warning",
             badge="Approval",
-            action="Open <strong>Planning Suite → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
+            action="Open <strong>Planning workbench → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
         )
         return _safe_operational_send(
             event="baseline_completed",
             category="approval",
-            subject=f"[Planning Suite] Baseline ready for approval — {run_name}",
+            subject=f"[Planning workbench] Baseline ready for approval — {run_name}",
             html_body=html_body,
             triggered_by_user_id=user_id,
             metadata=meta,
@@ -248,12 +248,12 @@ def notify_baseline_run_finished(
         error_block=error_detail,
         variant="error",
         badge="Baseline",
-        action="Open <strong>Planning Suite → Baseline</strong> to review logs and re-run.",
+        action="Open <strong>Planning workbench → Baseline</strong> to review logs and re-run.",
     )
     return _safe_operational_send(
         event="baseline_failed",
         category="pipeline",
-        subject=f"[Planning Suite] Baseline FAILED — {run_name}",
+        subject=f"[Planning workbench] Baseline FAILED — {run_name}",
         html_body=html_body,
         triggered_by_user_id=user_id,
         metadata=meta,
@@ -280,12 +280,12 @@ def notify_baseline_approved(
         },
         variant="success",
         badge="Approved",
-        action="Open <strong>Planning Suite → Final Plan</strong> to sync inputs and run.",
+        action="Open <strong>Planning workbench → Final Plan</strong> to sync inputs and run.",
     )
     return _safe_operational_send(
         event="baseline_approved",
         category="general",
-        subject=f"[Planning Suite] Baseline approved — {run_name}",
+        subject=f"[Planning workbench] Baseline approved — {run_name}",
         html_body=html_body,
         triggered_by_user_id=approver_id,
         metadata={"run_id": run_id, "run_name": run_name},
@@ -322,7 +322,7 @@ def notify_final_plan_run_finished(
         return _safe_operational_send(
             event="final_plan_completed",
             category="general",
-            subject=f"[Planning Suite] Final Plan completed — {run_name}",
+            subject=f"[Planning workbench] Final Plan completed — {run_name}",
             html_body=html_body,
             triggered_by_user_id=user_id,
             metadata=meta,
@@ -340,12 +340,12 @@ def notify_final_plan_run_finished(
         error_block=error_detail,
         variant="error",
         badge="Final Plan",
-        action="Open <strong>Planning Suite → Final Plan</strong> to review inputs and re-run.",
+        action="Open <strong>Planning workbench → Final Plan</strong> to review inputs and re-run.",
     )
     return _safe_operational_send(
         event="final_plan_failed",
         category="pipeline",
-        subject=f"[Planning Suite] Final Plan FAILED — {run_name}",
+        subject=f"[Planning workbench] Final Plan FAILED — {run_name}",
         html_body=html_body,
         triggered_by_user_id=user_id,
         metadata=meta,
@@ -387,13 +387,13 @@ def notify_pipeline_audit_finished(
     if status == "failed":
         headline = "Pipeline audit — blockers found"
         intro = "One or more pipeline checks failed. The weekly flow cannot proceed until fixed."
-        action = "Open <strong>Planning Suite → Baseline</strong> for details."
+        action = "Open <strong>Planning workbench → Baseline</strong> for details."
         variant = "error"
         badge = "Audit"
     else:
         headline = "Pipeline audit — manual action required"
         intro = "Pipeline checks passed partially. Some steps need human action (e.g. approval)."
-        action = "Open <strong>Planning Suite → Baseline</strong> and complete manual steps."
+        action = "Open <strong>Planning workbench → Baseline</strong> and complete manual steps."
         if needs_approval:
             action += " Baseline may need <strong>admin approval</strong>."
         variant = "warning"
@@ -411,7 +411,7 @@ def notify_pipeline_audit_finished(
     result = _safe_operational_send(
         event="pipeline_audit",
         category="pipeline",
-        subject=f"[Planning Suite] Pipeline audit {status.upper()} — {run_id}",
+        subject=f"[Planning workbench] Pipeline audit {status.upper()} — {run_id}",
         html_body=html_body,
         triggered_by_user_id=user_id,
         metadata={"run_id": run_id, "summary": summary},
@@ -425,12 +425,12 @@ def notify_pipeline_audit_finished(
             fields={"Pipeline run": _mono(run_id)},
             variant="warning",
             badge="Approval",
-            action="Open <strong>Planning Suite → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
+            action="Open <strong>Planning workbench → Baseline → Manual workflow</strong> and click <strong>Approve</strong>.",
         )
         approval_result = _safe_operational_send(
             event="pipeline_approval_hint",
             category="approval",
-            subject=f"[Planning Suite] Approval may be required — pipeline {run_id}",
+            subject=f"[Planning workbench] Approval may be required — pipeline {run_id}",
             html_body=approval_html,
             triggered_by_user_id=user_id,
             metadata={"run_id": run_id, "source": "pipeline_audit"},
@@ -531,7 +531,7 @@ def notify_validation_result(
     if passed:
         headline = "Validation passed"
         intro = "A data validation check completed with no blocking errors."
-        subject = f"[Planning Suite] Validation PASSED — {validation_type}"
+        subject = f"[Planning workbench] Validation PASSED — {validation_type}"
         variant = "success"
         badge = "Validation"
         error_block = ""
@@ -541,7 +541,7 @@ def notify_validation_result(
     else:
         headline = "Validation failed"
         intro = "A data validation check found errors that need review."
-        subject = f"[Planning Suite] Validation FAILED — {validation_type}"
+        subject = f"[Planning workbench] Validation FAILED — {validation_type}"
         variant = "error"
         badge = "Validation"
         error_block = issues_text or "Validation failed (no detail recorded)."
@@ -559,7 +559,7 @@ def notify_validation_result(
         info_block=info_block,
         variant=variant,
         badge=badge,
-        action="Open <strong>Planning Suite → Validation</strong> to review and re-run checks.",
+        action="Open <strong>Planning workbench → Validation</strong> to review and re-run checks.",
     )
     return _safe_operational_send(
         event="validation_pass" if passed else "validation_fail",
@@ -631,13 +631,13 @@ def notify_master_sync_result(
     if passed:
         headline = f"Master sync completed — {label}"
         intro = f"The {label} master data sync finished successfully."
-        subject = f"[Planning Suite] Master Sync SUCCESS — {master_type}"
+        subject = f"[Planning workbench] Master Sync SUCCESS — {master_type}"
         variant = "success"
         badge = "Master sync"
     else:
         headline = f"Master sync failed — {label}"
         intro = f"The {label} master data sync could not complete. Review the error below."
-        subject = f"[Planning Suite] Master Sync FAILED — {master_type}"
+        subject = f"[Planning workbench] Master Sync FAILED — {master_type}"
         variant = "error"
         badge = "Master sync"
 
@@ -652,7 +652,7 @@ def notify_master_sync_result(
         error_block=error_message if not passed else "",
         variant=variant,
         badge=badge,
-        action="Open <strong>Planning Suite → Master Data Management</strong> to view sync history.",
+        action="Open <strong>Planning workbench → Master Data Management</strong> to view sync history.",
     )
     return _safe_operational_send(
         event="master_sync_success" if passed else "master_sync_fail",
@@ -691,12 +691,12 @@ def notify_npl_step_failed(
         error_block=error[:2000],
         variant="error",
         badge="Product Launch",
-        action="Open <strong>Planning Suite → Product Launch</strong> and retry the failed step.",
+        action="Open <strong>Planning workbench → Product Launch</strong> and retry the failed step.",
     )
     return _safe_operational_send(
         event="npl_step_failed",
         category="pipeline",
-        subject=f"[Planning Suite] NPL step FAILED — {step_name} ({sub_type})",
+        subject=f"[Planning workbench] NPL step FAILED — {step_name} ({sub_type})",
         html_body=html_body,
         triggered_by_user_id=user_id,
         metadata=meta,
@@ -765,12 +765,12 @@ def notify_npl_submitted(
         variant="success",
         badge="Synced",
         extra_html=master_card,
-        action="Open <strong>Planning Suite → Product Launch → Submission History</strong> to track status.",
+        action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to track status.",
     )
     success_result = _safe_operational_send(
         event="npl_submitted",
         category="launch_planner",
-        subject=f"[Planning Suite] Launch synced — update masters for {product_name} ({sub_type})",
+        subject=f"[Planning workbench] Launch synced — update masters for {product_name} ({sub_type})",
         html_body=success_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
@@ -789,7 +789,7 @@ def notify_npl_submitted(
     approval_result = _safe_operational_send(
         event="npl_approval_needed",
         category="launch_admin",
-        subject=f"[Planning Suite] Action needed — update masters for {product_name} ({sub_type})",
+        subject=f"[Planning workbench] Action needed — update masters for {product_name} ({sub_type})",
         html_body=approval_html,
         triggered_by_user_id=user_id,
         metadata={"sub_id": sub_id, "sub_type": sub_type},
@@ -906,7 +906,7 @@ def notify_ff_input_changed(version_entry: dict) -> NotifyResult:
         row_count_after=after,
         diff_table_html=_build_sheet_diff_table_html(diff, headers),
         badge="Hub Launch",
-        action="Open <strong>Planning Suite → Hub Launch</strong> and run <strong>Fetch & Preview Sync Mappings</strong> before syncing to P-H Master.",
+        action="Open <strong>Planning workbench → Hub Launch</strong> and run <strong>Fetch & Preview Sync Mappings</strong> before syncing to P-H Master.",
     )
 
     return _safe_operational_send(
@@ -949,7 +949,7 @@ def notify_hub_mapping_changed(version_entry: dict) -> NotifyResult:
         row_count_after=after,
         diff_table_html=_build_sheet_diff_table_html(diff, headers),
         badge="Hub Mapping",
-        action="Open <strong>Planning Suite → Hub Launch</strong> to review Hub Mapping and run sync when ready.",
+        action="Open <strong>Planning workbench → Hub Launch</strong> to review Hub Mapping and run sync when ready.",
     )
 
     return _safe_operational_send(

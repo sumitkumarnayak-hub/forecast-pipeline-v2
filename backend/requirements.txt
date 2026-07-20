@@ -1,4 +1,4 @@
-# ── Original planning_suite dependencies ──────────────────────────────────────
+# ── Original planning_workbench dependencies ──────────────────────────────────────
 pandas>=2.2.3
 numpy>=2.2.0
 

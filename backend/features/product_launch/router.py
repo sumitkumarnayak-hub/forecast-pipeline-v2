@@ -246,10 +246,10 @@ def npl_all_product_ids(current_user: dict = Depends(get_current_user)):
 @router.get("/salience/cities")
 def npl_salience_cities(current_user: dict = Depends(get_current_user)):
     try:
-        from features.product_launch.core import get_cities_from_salience, load_salience_source
+        from features.product_launch.core import get_cities_from_salience, load_hub_salience
 
 
-        sal = load_salience_source()
+        sal = load_hub_salience()
         return {"cities": get_cities_from_salience(sal)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -262,10 +262,10 @@ def npl_salience_hubs(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        from features.product_launch.core import get_hubs_for_city, load_salience_source
+        from features.product_launch.core import get_hubs_for_city, load_hub_salience
 
 
-        sal = load_salience_source()
+        sal = load_hub_salience()
         return {"hubs": get_hubs_for_city(sal, city, category)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -937,6 +937,7 @@ class HubRowsBody(BaseModel):
 
 class SubmitBody(BaseModel):
     hub_rows: List[dict]
+    city_rows: List[dict] | None = None
     sub_type: str = "New Launch"
     launch_date: str | None = None
     send_email: bool = True
@@ -1171,10 +1172,6 @@ def wizard_preview_sync(
     body: SubmitBody,
     current_user: dict = Depends(require_write),
 ):
-    from app import config as cfg
-
-    from features.product_launch.core import _open_sheet
-
     from datetime import datetime
 
     t0 = time.perf_counter()
@@ -1182,111 +1179,67 @@ def wizard_preview_sync(
     try:
         from features.product_launch import wizard as wiz
 
-        # 1. Apply launch dates
         rows = wiz.apply_launch_dates(body.hub_rows, body.launch_date)
+        hub_rows = _resolve_hub_plan_rows(rows, body.plan_level)
+        if body.plan_level == "city":
+            raw_city = body.city_rows if body.city_rows else _aggregate_hub_rows_to_city_rows(body.hub_rows)
+            city_rows = wiz.apply_launch_dates(raw_city, body.launch_date)
+        else:
+            city_rows = []
 
-        # 2. Aggregate hub rows to city rows for City_Plan sheet
-        WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        aggregated_sources = {}
-        for source in rows:
-            pid = str(source.get("product_id", "")).strip()
-            pname = source.get("product_name", "")
-            cat = source.get("category", "")
-            city = source.get("city_name", "")
-            mrp = source.get("MRP", "")
-            start_date = source.get("Launch Date", "")
-            
-            group_key = (body.sub_type, pid, pname, cat, city, mrp, start_date)
-            if group_key not in aggregated_sources:
-                aggregated_sources[group_key] = {
-                    "Submission_Type": body.sub_type,
-                    "Product ID": pid,
-                    "Product Name": pname,
-                    "Category": cat,
-                    "City": city,
-                    "MRP": mrp,
-                    "Start Date": start_date,
-                    "Submitted_By": username,
-                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0, "Fri": 0, "Sat": 0, "Sun": 0
-                }
-            for day in WEEKDAYS:
-                try:
-                    val = int(float(source.get(day, 0) or 0))
-                except Exception:
-                    val = 0
-                aggregated_sources[group_key][day] += val
-
-        # 3. Determine level target tab based on body.plan_level (default to hub check)
         if body.sub_type == "Replacement":
-            target_worksheet = "product_replacement"
+            target_worksheets = ["product_replacement"]
         elif body.plan_level == "city":
-            target_worksheet = "City_Plan"
+            target_worksheets = ["City_Plan", "Hub_Plan"]
         elif body.plan_level == "hub":
-            target_worksheet = "Hub_Plan"
+            target_worksheets = ["Hub_Plan"]
         else:
-            has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
-            target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+            has_hubs = any(str(r.get("hub_name", "")).strip() for r in hub_rows)
+            target_worksheets = ["Hub_Plan"] if has_hubs else ["City_Plan"]
 
-        if target_worksheet == "product_replacement":
-            plan_sheet = ensure_product_replacement_sheet_exists(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY)
-        else:
-            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
-            
-        header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
-        columns = list(sheet_headers)
-
-        # 4. Fetch Product Master details map ONCE outside the loop to prevent loading ages
         pm_details_map = _get_product_master_details_map()
-
-        # 5. Build preview rows matching target layout dynamically
-        preview_records = []
         update_date = datetime.now().strftime("%Y-%m-%d")
-        for source in rows:
-            row_source = {
-                "Submission_Type": body.sub_type,
-                "Product ID": str(source.get("product_id", "")).strip(),
-                "Product Name": source.get("product_name", ""),
-                "Category": source.get("category", ""),
-                "City": source.get("city_name", ""),
-                "Hub": str(source.get("hub_name", "")).strip(),
-                "MRP": source.get("MRP", ""),
-                "Start Date": source.get("Launch Date", ""),
-                "Submitted_By": username,
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Mon": source.get("Mon", 0),
-                "Tue": source.get("Tue", 0),
-                "Wed": source.get("Wed", 0),
-                "Thu": source.get("Thu", 0),
-                "Fri": source.get("Fri", 0),
-                "Sat": source.get("Sat", 0),
-                "Sun": source.get("Sun", 0),
-                "_owner_email": current_user.get("email", current_user.get("sub", "")),
-                "old_product_id": source.get("old_product_id", ""),
-                "old_product_name": source.get("old_product_name", ""),
-                "replacement_percentage": source.get("replacement_percentage", ""),
-                "Channel": str(source.get("Channel", "Online")).strip() or "Online",
-                "anchor_id": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
-                "Anchor ID": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
-            }
-            _propagate_optional_plan_fields(row_source, source)
-            if target_worksheet == "product_replacement":
-                row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-            elif target_worksheet == "Hub_Plan":
-                row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-            else:
-                # Group/aggregate logic for City level is pre-grouped if needed, but we build dynamically
-                row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-                
-            record = {}
-            for col_name, val in zip(sheet_headers, row_vals):
-                if str(col_name).strip():
-                    record[str(col_name).strip()] = val
-            preview_records.append(record)
+
+        def _sources_for_worksheet(worksheet: str) -> list[dict]:
+            if worksheet == "City_Plan":
+                return city_rows
+            return hub_rows
+
+        _, columns, preview_records, _ = _prepare_plan_worksheet_rows(
+            target_worksheets[0],
+            _sources_for_worksheet(target_worksheets[0]),
+            sub_type=body.sub_type,
+            username=username,
+            current_user=current_user,
+            update_date=update_date,
+            pm_details_map=pm_details_map,
+        )
+
+        hub_plan_rows: list[dict] = []
+        hub_plan_columns: list[str] = []
+        if len(target_worksheets) > 1 and target_worksheets[1] == "Hub_Plan":
+            _, hub_plan_columns, hub_plan_rows, _ = _prepare_plan_worksheet_rows(
+                "Hub_Plan",
+                hub_rows,
+                sub_type=body.sub_type,
+                username=username,
+                current_user=current_user,
+                update_date=update_date,
+                pm_details_map=pm_details_map,
+            )
 
         elapsed = round((time.perf_counter() - t0) * 1000)
         logger.info("[NPL] preview-sync OK — %d rows in %dms", len(preview_records), elapsed)
-        return {"rows": preview_records, "columns": columns, "preview_ms": elapsed}
+        payload = {
+            "rows": preview_records,
+            "columns": columns,
+            "preview_ms": elapsed,
+            "targets": target_worksheets,
+        }
+        if hub_plan_rows:
+            payload["hub_plan_rows"] = hub_plan_rows
+            payload["hub_plan_columns"] = hub_plan_columns
+        return payload
     except Exception as exc:
         elapsed = round((time.perf_counter() - t0) * 1000)
         logger.exception("[NPL] preview-sync crashed in %dms", elapsed)
@@ -1324,10 +1277,16 @@ def wizard_submit(
     t_sheets = time.perf_counter()
     try:
         rows = wiz.apply_launch_dates(body.hub_rows, body.launch_date)
+        hub_rows = _resolve_hub_plan_rows(rows, body.plan_level)
+        if body.plan_level == "city":
+            raw_city = body.city_rows if body.city_rows else _aggregate_hub_rows_to_city_rows(body.hub_rows)
+            city_rows = wiz.apply_launch_dates(raw_city, body.launch_date)
+        else:
+            city_rows = []
         
-        # 1.1 Append to Submission_Log and Launch_Output
+        # 1.1 Append to Submission_Log and Launch_Output (hub-split rows)
         result = wiz.submit_hub_rows(
-            rows,
+            hub_rows,
             sub_type=body.sub_type,
             username=username,
             user_id=user_id,
@@ -1339,129 +1298,56 @@ def wizard_submit(
         product_name = result.get("product_name", "")
         hub_count = result.get("rows", 0)
 
-        # 1.2 Aggregate hub rows to city rows for direct City_Plan sync
-        WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        aggregated_sources = {}
-        for source in rows:
-            pid = str(source.get("product_id", "")).strip()
-            pname = source.get("product_name", "")
-            cat = source.get("category", "")
-            city = source.get("city_name", "")
-            mrp = source.get("MRP", "")
-            start_date = source.get("Launch Date", "")
-            
-            group_key = (body.sub_type, pid, pname, cat, city, mrp, start_date)
-            if group_key not in aggregated_sources:
-                aggregated_sources[group_key] = {
-                    "Submission_Type": body.sub_type,
-                    "Product ID": pid,
-                    "Product Name": pname,
-                    "Category": cat,
-                    "City": city,
-                    "MRP": mrp,
-                    "Start Date": start_date,
-                    "Submitted_By": username,
-                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0, "Fri": 0, "Sat": 0, "Sun": 0
-                }
-            for day in WEEKDAYS:
-                try:
-                    val = int(float(source.get(day, 0) or 0))
-                except Exception:
-                    val = 0
-                aggregated_sources[group_key][day] += val
-
-        # 1.3 Determine level target tab based on body.plan_level (default to hub check)
+        # 1.2 Append to City_Plan / Hub_Plan (city plan → both sheets with salience split)
         if body.sub_type == "Replacement":
-            target_worksheet = "product_replacement"
+            target_worksheets = ["product_replacement"]
         elif body.plan_level == "city":
-            target_worksheet = "City_Plan"
+            target_worksheets = ["City_Plan", "Hub_Plan"]
         elif body.plan_level == "hub":
-            target_worksheet = "Hub_Plan"
+            target_worksheets = ["Hub_Plan"]
         else:
-            has_hubs = any(str(r.get("hub_name", "")).strip() for r in rows)
-            target_worksheet = "Hub_Plan" if has_hubs else "City_Plan"
+            has_hubs = any(str(r.get("hub_name", "")).strip() for r in hub_rows)
+            target_worksheets = ["Hub_Plan"] if has_hubs else ["City_Plan"]
 
-        if target_worksheet == "product_replacement":
-            plan_sheet = ensure_product_replacement_sheet_exists(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY)
-        else:
-            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
-            
-        header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
-
-        # Dedup keys — bounded read (avoid full-sheet get_all_values on large tabs)
-        existing_keys = set()
-        try:
-            tail_rows = plan_sheet.get_values(f"A{header_row_idx}:AZ{header_row_idx + 800}")
-            for row in tail_rows[1:]:
-                if len(row) < len(sheet_headers):
-                    row = row + [""] * (len(sheet_headers) - len(row))
-                if target_worksheet == "product_replacement":
-                    key = _npl_replacement_key_dynamic(row, sheet_headers)
-                elif target_worksheet == "Hub_Plan":
-                    key = _npl_hub_plan_key_dynamic(row, sheet_headers)
-                else:
-                    key = _npl_city_plan_key(row, sheet_headers)
-                if key:
-                    existing_keys.add(key)
-        except Exception as dedupe_exc:
-            logger.warning("[NPL] submit dedupe scan skipped: %s", dedupe_exc)
-
-        # 1.4 Fetch Product Master details map ONCE outside the loop
         pm_details_map = _get_product_master_details_map()
-
-        values_to_append = []
         update_date = datetime.now().strftime("%Y-%m-%d")
-        for source in rows:
-            row_source = {
-                "Submission_Type": body.sub_type,
-                "Product ID": str(source.get("product_id", "")).strip(),
-                "Product Name": source.get("product_name", ""),
-                "Category": source.get("category", ""),
-                "City": source.get("city_name", ""),
-                "Hub": str(source.get("hub_name", "")).strip(),
-                "MRP": source.get("MRP", ""),
-                "Start Date": source.get("Launch Date", ""),
-                "Submitted_By": username,
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Mon": source.get("Mon", 0),
-                "Tue": source.get("Tue", 0),
-                "Wed": source.get("Wed", 0),
-                "Thu": source.get("Thu", 0),
-                "Fri": source.get("Fri", 0),
-                "Sat": source.get("Sat", 0),
-                "Sun": source.get("Sun", 0),
-                "_owner_email": current_user.get("email", current_user.get("sub", "")),
-                "old_product_id": source.get("old_product_id", ""),
-                "old_product_name": source.get("old_product_name", ""),
-                "replacement_percentage": source.get("replacement_percentage", ""),
-                "Channel": str(source.get("Channel", "Online")).strip() or "Online",
-                "anchor_id": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
-                "Anchor ID": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
-            }
-            _propagate_optional_plan_fields(row_source, source)
-            if target_worksheet == "product_replacement":
-                row_vals = _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-                key = _npl_replacement_key_dynamic(row_vals, sheet_headers)
-            elif target_worksheet == "Hub_Plan":
-                row_vals = _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-                key = _npl_hub_plan_key_dynamic(row_vals, sheet_headers)
-            else:
-                row_vals = _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
-                key = _npl_city_plan_key(row_vals, sheet_headers)
-    
-            if key and key in existing_keys:
-                continue
-            values_to_append.append(row_vals)
+        from features.product_launch.core import _append_sheet_row_values
 
-        if values_to_append:
-            from features.product_launch.core import _open_sheet, _append_sheet_row_values
+        worksheet_sources = {
+            "City_Plan": city_rows,
+            "Hub_Plan": hub_rows,
+            "product_replacement": hub_rows,
+        }
 
-            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, target_worksheet)
-            _append_sheet_row_values(plan_sheet, values_to_append, chunk_size=200)
-            logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), target_worksheet)
+        for worksheet in target_worksheets:
+            sources = worksheet_sources.get(worksheet, hub_rows)
+            values_to_append, sheet_headers, _, header_row_idx = _prepare_plan_worksheet_rows(
+                worksheet,
+                sources,
+                sub_type=body.sub_type,
+                username=username,
+                current_user=current_user,
+                update_date=update_date,
+                pm_details_map=pm_details_map,
+                dedupe=True,
+            )
+            if values_to_append:
+                plan_sheet = (
+                    ensure_product_replacement_sheet_exists(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY)
+                    if worksheet == "product_replacement"
+                    else _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, worksheet)
+                )
+                table_range = f"A{header_row_idx or 1}"
+                _append_sheet_row_values(
+                    plan_sheet,
+                    values_to_append,
+                    chunk_size=200,
+                    table_range=table_range,
+                    row_width=len(sheet_headers),
+                )
+                logger.info("[NPL] submit appended %d rows to %s", len(values_to_append), worksheet)
 
-        # 1.5 Submission already written as Approved — no full-sheet status rewrite needed
+        # 1.3 Submission already written as Approved — no full-sheet status rewrite needed
 
         steps_status["sheets"] = {
             "status": "success",
@@ -1484,7 +1370,7 @@ def wizard_submit(
     t_db = time.perf_counter()
     try:
         import pandas as pd
-        hub_df = pd.DataFrame(rows)
+        hub_df = pd.DataFrame(hub_rows)
         cities = sorted(hub_df["city_name"].dropna().astype(str).unique().tolist()) if "city_name" in hub_df.columns else []
         product_id = str(hub_df["product_id"].iloc[0]) if "product_id" in hub_df.columns and len(hub_df) else ""
         category = str(hub_df["category"].iloc[0]) if "category" in hub_df.columns and len(hub_df) else ""
@@ -1965,19 +1851,26 @@ HUB_PLAN_COLUMNS = [
 ]
 
 
-def _npl_city_plan_key(row_vals: list, headers: list[str]) -> tuple[str, str, str, str] | None:
+def _npl_city_plan_key(row_vals: list, headers: list[str]) -> tuple[str, ...] | None:
     try:
         type_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "type")
         pid_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower().replace("_", "") == "productid")
         city_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "city")
         date_idx = next(i for i, h in enumerate(headers) if str(h).strip().lower() == "change date")
-        
+        hub_idx = next(
+            (i for i, h in enumerate(headers) if _normalize_plan_header(h) in ("hub name", "hub_name", "hub")),
+            None,
+        )
+
         val_type = str(row_vals[type_idx]).strip().lower()
         val_pid = str(row_vals[pid_idx]).strip().lower()
         val_city = str(row_vals[city_idx]).strip().lower()
         val_date = str(row_vals[date_idx]).strip().lower()
-        
+        val_hub = str(row_vals[hub_idx]).strip().lower() if hub_idx is not None and hub_idx < len(row_vals) else ""
+
         if val_type and val_pid and val_city and val_date:
+            if hub_idx is not None and val_hub:
+                return (val_type, val_pid, val_city, val_hub, val_date)
             return (val_type, val_pid, val_city, val_date)
     except Exception:
         pass
@@ -2087,9 +1980,236 @@ def _read_npl_plan_headers(plan_sheet) -> tuple[int, list[str]]:
             break
     full_row = plan_sheet.get_values(f"A{header_row_idx}:AZ{header_row_idx}")
     headers = [str(h).strip() for h in (full_row[0] if full_row else plan_sheet.row_values(header_row_idx))]
+    # Drop leading blank cells from sparse get_values rows so column A = first header.
+    while headers and not headers[0]:
+        headers.pop(0)
     while headers and not headers[-1]:
         headers.pop()
     return header_row_idx, headers
+
+
+def _headers_have_hub_column(headers: list[str]) -> bool:
+    return any(_normalize_plan_header(h) in ("hub name", "hub_name", "hub") for h in headers)
+
+
+def _city_plan_hub_col_1based(headers: list[str]) -> int | None:
+    """1-based column index for hub_name (existing header or empty slot right after City)."""
+    city_col = None
+    for i, h in enumerate(headers, 1):
+        if _normalize_plan_header(h) == "city":
+            city_col = i
+            break
+    if city_col is None:
+        return None
+    hub_col = city_col + 1
+    if hub_col <= len(headers):
+        h_norm = _normalize_plan_header(headers[hub_col - 1])
+        if h_norm in ("hub name", "hub_name", "hub") or not str(headers[hub_col - 1]).strip():
+            return hub_col
+    return None
+
+
+def _ensure_city_plan_hub_column(plan_sheet, header_row_idx: int, headers: list[str]) -> tuple[int, list[str]]:
+    """Ensure hub_name exists on City_Plan immediately after City."""
+    if _headers_have_hub_column(headers):
+        return header_row_idx, headers
+    hub_col = _city_plan_hub_col_1based(headers)
+    try:
+        if hub_col is not None:
+            plan_sheet.update_cell(header_row_idx, hub_col, "hub_name")
+            logger.info("[NPL] set hub_name header on City_Plan col %d", hub_col)
+        else:
+            city_col = next(i for i, h in enumerate(headers, 1) if _normalize_plan_header(h) == "city")
+            hub_col = city_col + 1
+            plan_sheet.insert_cols([[]], col=hub_col, inherit_from_before=False)
+            plan_sheet.update_cell(header_row_idx, hub_col, "hub_name")
+            logger.info("[NPL] inserted hub_name column on City_Plan col %d", hub_col)
+    except Exception as exc:
+        logger.warning("[NPL] could not ensure hub_name column on City_Plan: %s", exc)
+    return _read_npl_plan_headers(plan_sheet)
+
+
+def _aggregate_hub_rows_to_city_rows(hub_rows: list[dict]) -> list[dict]:
+    """Fallback: sum hub-split rows back to city-level template rows."""
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    grouped: dict[tuple, dict] = {}
+    for row in hub_rows:
+        key = (
+            str(row.get("product_id", "")).strip(),
+            str(row.get("product_name", "")).strip(),
+            str(row.get("city_name", "")).strip(),
+            str(row.get("category", "")).strip(),
+            str(row.get("MRP", row.get("mrp", ""))).strip(),
+            str(row.get("anchor_id", "")).strip(),
+            str(row.get("Channel", "")).strip(),
+            str(row.get("old_product_id", "")).strip(),
+            str(row.get("old_product_name", "")).strip(),
+            str(row.get("replacement_percentage", "")).strip(),
+        )
+        if key not in grouped:
+            base = dict(row)
+            base.pop("hub_name", None)
+            for d in weekdays:
+                base[d] = 0
+            grouped[key] = base
+        for d in weekdays:
+            try:
+                grouped[key][d] = int(grouped[key].get(d, 0) or 0) + int(row.get(d, 0) or 0)
+            except (TypeError, ValueError):
+                pass
+    return list(grouped.values())
+
+
+def _resolve_hub_plan_rows(hub_rows: list[dict], plan_level: str | None) -> list[dict]:
+    """Hub_Plan rows: salience-split when uploading at city level."""
+    if plan_level != "city":
+        return hub_rows
+    if any(str(r.get("hub_name", "")).strip() for r in hub_rows):
+        return hub_rows
+    from features.product_launch import wizard as wiz
+
+    split = wiz.split_city_rows(hub_rows)
+    return split.get("hub_rows") or hub_rows
+
+
+def _wizard_plan_row_source(
+    source: dict,
+    *,
+    sub_type: str,
+    username: str,
+    current_user: dict,
+) -> dict:
+    from datetime import datetime
+
+    row_source = {
+        "Submission_Type": sub_type,
+        "Product ID": str(source.get("product_id", "")).strip(),
+        "Product Name": source.get("product_name", ""),
+        "Category": source.get("category", ""),
+        "City": source.get("city_name", ""),
+        "Hub": str(source.get("hub_name", "")).strip(),
+        "MRP": source.get("MRP", ""),
+        "Start Date": source.get("Launch Date", ""),
+        "Submitted_By": username,
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Mon": source.get("Mon", 0),
+        "Tue": source.get("Tue", 0),
+        "Wed": source.get("Wed", 0),
+        "Thu": source.get("Thu", 0),
+        "Fri": source.get("Fri", 0),
+        "Sat": source.get("Sat", 0),
+        "Sun": source.get("Sun", 0),
+        "_owner_email": current_user.get("email", current_user.get("sub", "")),
+        "old_product_id": source.get("old_product_id", ""),
+        "old_product_name": source.get("old_product_name", ""),
+        "replacement_percentage": source.get("replacement_percentage", ""),
+        "Channel": str(source.get("Channel", "Online")).strip() or "Online",
+        "anchor_id": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
+        "Anchor ID": str(source.get("anchor_id") or source.get("product_id", "")).strip(),
+    }
+    _propagate_optional_plan_fields(row_source, source)
+    return row_source
+
+
+def _plan_row_key(worksheet: str, row_vals: list, headers: list[str]):
+    if worksheet == "product_replacement":
+        return _npl_replacement_key_dynamic(row_vals, headers)
+    if worksheet == "Hub_Plan":
+        return _npl_hub_plan_key_dynamic(row_vals, headers)
+    return _npl_city_plan_key(row_vals, headers)
+
+
+def _build_plan_row_values(
+    worksheet: str,
+    row_source: dict,
+    sheet_headers: list[str],
+    *,
+    update_date: str,
+    pm_details_map: dict,
+) -> list:
+    if worksheet == "product_replacement":
+        return _build_replacement_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+    if worksheet == "Hub_Plan":
+        return _build_hub_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+    return _build_city_plan_row_dynamic(row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map)
+
+
+def _row_vals_to_record(sheet_headers: list[str], row_vals: list) -> dict:
+    record = {}
+    for col_name, val in zip(sheet_headers, row_vals):
+        if str(col_name).strip():
+            record[str(col_name).strip()] = val
+    return record
+
+
+def _load_existing_plan_keys(plan_sheet, header_row_idx: int, sheet_headers: list[str], worksheet: str) -> set:
+    existing_keys = set()
+    try:
+        tail_rows = plan_sheet.get_values(f"A{header_row_idx}:AZ{header_row_idx + 800}")
+        for row in tail_rows[1:]:
+            if len(row) < len(sheet_headers):
+                row = row + [""] * (len(sheet_headers) - len(row))
+            key = _plan_row_key(worksheet, row, sheet_headers)
+            if key:
+                existing_keys.add(key)
+    except Exception as dedupe_exc:
+        logger.warning("[NPL] plan dedupe scan skipped for %s: %s", worksheet, dedupe_exc)
+    return existing_keys
+
+
+def _prepare_plan_worksheet_rows(
+    worksheet: str,
+    sources: list[dict],
+    *,
+    sub_type: str,
+    username: str,
+    current_user: dict,
+    update_date: str,
+    pm_details_map: dict,
+    dedupe: bool = False,
+    plan_sheet=None,
+    header_row_idx: int | None = None,
+    sheet_headers: list[str] | None = None,
+    existing_keys: set | None = None,
+) -> tuple[list[list], list[str], list[dict]]:
+    """Build row values for a plan worksheet (preview or append)."""
+    from app import config as cfg
+
+    if plan_sheet is None:
+        from features.product_launch.core import _open_sheet
+
+        if worksheet == "product_replacement":
+            plan_sheet = ensure_product_replacement_sheet_exists(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY)
+        else:
+            plan_sheet = _open_sheet(cfg.NEW_PRODUCT_LAUNCH_SHEET_KEY, worksheet)
+        header_row_idx, sheet_headers = _read_npl_plan_headers(plan_sheet)
+
+    if dedupe and existing_keys is None:
+        existing_keys = _load_existing_plan_keys(plan_sheet, header_row_idx, sheet_headers, worksheet)
+    elif existing_keys is None:
+        existing_keys = set()
+
+    values_to_append: list[list] = []
+    preview_records: list[dict] = []
+    for source in sources:
+        row_source = _wizard_plan_row_source(
+            source, sub_type=sub_type, username=username, current_user=current_user,
+        )
+        row_vals = _build_plan_row_values(
+            worksheet, row_source, sheet_headers, update_date=update_date, pm_details_map=pm_details_map,
+        )
+        width = len(sheet_headers)
+        if len(row_vals) < width:
+            row_vals = row_vals + [""] * (width - len(row_vals))
+        elif len(row_vals) > width:
+            row_vals = row_vals[:width]
+        key = _plan_row_key(worksheet, row_vals, sheet_headers)
+        if dedupe and key and key in existing_keys:
+            continue
+        values_to_append.append(row_vals)
+        preview_records.append(_row_vals_to_record(sheet_headers, row_vals))
+
+    return values_to_append, sheet_headers, preview_records, header_row_idx
 
 
 def _is_meat_ratio_header(h_norm: str) -> bool:
@@ -2150,6 +2270,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(str(aid).strip() or pid)
         elif h_norm in ("city", "city name"):
             row.append(source.get("City", ""))
+        elif h_norm in ("hub name", "hub_name", "hub"):
+            row.append(str(source.get("Hub", source.get("hub_name", ""))).strip())
         elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
@@ -2184,6 +2306,8 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
+        elif h_norm == "production pc":
+            row.append(str(source.get("Production PC", "")).strip())
         elif h_norm == "owner email":
             row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":
@@ -2408,7 +2532,7 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
             # However, in some headers "city" can refer to either, so we check carefully.
             row.append(source.get("City", ""))
         elif h_norm in ("hub name", "hub_name", "hub"):
-            row.append(source.get("Hub", ""))
+            row.append(str(source.get("Hub", source.get("hub_name", ""))).strip())
         elif _is_mrp_header(h_norm):
             row.append(source.get("MRP", ""))
         elif h_norm == "change date":
@@ -2443,6 +2567,8 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
+        elif h_norm == "production pc":
+            row.append(str(source.get("Production PC", "")).strip())
         elif h_norm == "owner email":
             row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":
@@ -2612,6 +2738,8 @@ def _build_replacement_row_dynamic(source: dict, headers: list[str], update_date
             row.append(int(float(source.get("Sun", 0) or 0)))
         elif h_norm in ("planning confirmation", "planning confirm"):
             row.append("Confirmed")
+        elif h_norm == "production pc":
+            row.append(str(source.get("Production PC", "")).strip())
         elif h_norm == "owner email":
             row.append(source.get("_owner_email", source.get("Submitted_By", "")))
         elif h_norm == "submitted at":

@@ -1,1 +1,1 @@
-# Planning Suite FastAPI backend package
+# Planning workbench FastAPI backend package

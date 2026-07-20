@@ -1,6 +1,6 @@
 # System Architecture & Technical Specifications
 
-This document describes the high-level architecture, module decomposition, request lifecycle, authentication mechanisms, and background worker systems of the Demand Planning & Forecasting Suite.
+This document describes the high-level architecture, module decomposition, request lifecycle, authentication mechanisms, and background worker systems of the Demand Planning & Forecasting workbench.
 
 ---
 

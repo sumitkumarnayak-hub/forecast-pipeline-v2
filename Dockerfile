@@ -1,4 +1,4 @@
-# Planning Suite API — Hugging Face Spaces (Docker SDK) at root
+# Planning workbench API — Hugging Face Spaces (Docker SDK) at root
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

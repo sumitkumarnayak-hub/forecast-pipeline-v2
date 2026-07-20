@@ -146,7 +146,7 @@ export default function Sidebar({
           <LayoutGrid size={18} strokeWidth={2.25} />
         </div>
         <div className="sidebar-brand-text">
-          <span className="sidebar-brand-name">Planning Suite</span>
+          <span className="sidebar-brand-name">Planning workbench</span>
           <span className="sidebar-brand-tag">Demand Planning</span>
         </div>
       </div>

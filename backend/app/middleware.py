@@ -9,7 +9,7 @@ from starlette.responses import Response
 
 from app.logging import new_request_id, request_id_var
 
-logger = logging.getLogger("planning_suite.http")
+logger = logging.getLogger("planning_workbench.http")
 
 
 async def request_context_middleware(request: Request, call_next):

@@ -1,5 +1,5 @@
 /**
- * In-app user guide for Planning Suite — focused on Product Launch, Hub Launch, and Settings.
+ * In-app user guide for Planning workbench — focused on Product Launch, Hub Launch, and Settings.
  */
 
 export type GuideSection = {
@@ -14,7 +14,7 @@ export type GuideSection = {
 };
 
 export const GUIDE_INTRO = {
-  title: "Planning Suite — Scoped Deployment Guide",
+  title: "Planning workbench — Scoped Deployment Guide",
   subtitle:
     "A walkthrough of the scoped planning tool focused exclusively on New Product Launch, Hub Launch, and Settings. Other modules are currently marked as 'Coming Soon'.",
   version: "3.0 (Scoped)",
@@ -25,7 +25,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
     id: "what-is-this",
     title: "What is this Scoped Deployment?",
     paragraphs: [
-      "This deployment of the Planning Suite focuses on managing the product and location lifecycle: executing new product launches, expanding products to new segments, managing old SKU replacements, and cloning hub mappings.",
+      "This deployment of the Planning workbench focuses on managing the product and location lifecycle: executing new product launches, expanding products to new segments, managing old SKU replacements, and cloning hub mappings.",
       "Most backend logic reads and writes data directly to cached Google Sheets (such as the Submission_Log, P-H Master, and Hub Mapping tables). This app serves as your operational control panel.",
       "Other forecasting pipeline modules (Dashboard, Auto-Pilot, Baseline, and Final Plan) are disabled and display a 'Coming Soon' screen in this release.",
     ],

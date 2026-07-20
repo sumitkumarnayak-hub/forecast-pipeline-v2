@@ -150,7 +150,7 @@ def get_settings_bootstrap(
             token_exp=token_exp,
         ),
         "about": {
-            "app_name": "Planning Suite",
+            "app_name": "Planning workbench",
             "api_version": "2.0.0",
             "database_backend": cfg.get_database_backend(),
             "environment": cfg.APP_ENV,

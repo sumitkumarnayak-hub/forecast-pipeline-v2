@@ -1,7 +1,7 @@
 """
-FastAPI entry point for the Planning Suite backend.
+FastAPI entry point for the Planning workbench backend.
 
-All existing business logic lives in src/planning_suite/ — untouched.
+All existing business logic lives in src/planning_workbench/ — untouched.
 This file only wires up routes, CORS, lifespan, and the DB init.
 """
 import logging
@@ -46,7 +46,7 @@ if _sentry_dsn:
         ],
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
         environment=os.getenv("APP_ENV", "development"),
-        release=os.getenv("APP_RELEASE", "planning-suite@2.0.0"),
+        release=os.getenv("APP_RELEASE", "planning-workbench@2.0.0"),
     )
 
 from fastapi import FastAPI, HTTPException, Request
@@ -184,8 +184,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Planning Suite API",
-    description="FastAPI backend for the Demand Planning & Forecasting Suite",
+    title="Planning workbench API",
+    description="FastAPI backend for the Demand Planning & Forecasting workbench",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -258,7 +258,7 @@ app.include_router(demo_filter.router,        prefix="/api/demo-filter",        
 def health():
     return {
         "status": "ok",
-        "service": "Planning Suite API v2",
+        "service": "Planning workbench API v2",
         "version": "2.0.0",
         "environment": os.getenv("APP_ENV", "development"),
     }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "@/lib/api";
+import axios from "axios";
 import { useAuth } from "@/hooks/useAuth";
 import { useNplBootstrap } from "@/context/NplContext";
 import { ChevronRight, Download, Info, Mail, Upload, RefreshCw } from "lucide-react";
@@ -66,16 +67,18 @@ const getColumnLabel = (col: string, subType: string, planLevel: string): string
       case "Meat Ratio":
       case "Meat Ratio (for VA)":
         return "Meat Ratio (for VA)";
+      case "Production PC":
+        return "Production PC";
       default: return col;
     }
   }
 };
 
-const getVisibleColumns = (subType: string, planLevel: string): string[] => {
+const getVisibleColumns = (subType: string, planLevel: string, showHubSplit = false): string[] => {
   const weekdaysList = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   if (subType === "Replacement") {
     const cols = ["city_name"];
-    if (planLevel === "hub") cols.push("hub_name");
+    if (planLevel === "hub" || showHubSplit) cols.push("hub_name");
     cols.push(
       "product_id",
       "product_name",
@@ -93,12 +96,13 @@ const getVisibleColumns = (subType: string, planLevel: string): string[] => {
       "RM",
       "Meat Ratio",
       "Total Shelf Life",
-      "Hub Shelf Life"
+      "Hub Shelf Life",
+      "Production PC"
     );
     return cols;
   } else {
     const cols = ["city_name"];
-    if (planLevel === "hub") cols.push("hub_name");
+    if (planLevel === "hub" || showHubSplit) cols.push("hub_name");
     cols.push(
       "product_id",
       "product_name",
@@ -113,7 +117,8 @@ const getVisibleColumns = (subType: string, planLevel: string): string[] => {
       "RM",
       "Meat Ratio (for VA)",
       "Total Shelf Life",
-      "Hub Shelf Life"
+      "Hub Shelf Life",
+      "Production PC"
     );
     return cols;
   }
@@ -140,23 +145,25 @@ interface EmailResult {
  * swallowed silently.
  */
 function logError(scope: string, error: unknown, context?: Record<string, unknown>) {
+  const message = extractErrorMessage(error, "Unknown error");
   // eslint-disable-next-line no-console
-  console.error(`[NplWizard:${scope}]`, { error, ...context });
+  console.error(`[NplWizard:${scope}]`, message, context ?? {});
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
-  const error = err as {
-    response?: { data?: { detail?: string | string[] | { message?: string; steps?: unknown } } };
-    message?: string;
-  };
-  const detail = error?.response?.data?.detail;
-  if (Array.isArray(detail)) return detail.join("; ");
-  if (typeof detail === "object" && detail !== null && "message" in detail) {
-    const msg = String((detail as { message?: string }).message || "").trim();
-    if (msg) return msg;
+  if (axios.isAxiosError(err)) {
+    const detail = err.response?.data?.detail;
+    if (Array.isArray(detail)) {
+      return detail.map(item => (typeof item === "string" ? item : JSON.stringify(item))).join("; ");
+    }
+    if (typeof detail === "object" && detail !== null && "message" in detail) {
+      const msg = String((detail as { message?: string }).message || "").trim();
+      if (msg) return msg;
+    }
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (err.message) return err.message;
   }
-  if (typeof detail === "string" && detail) return detail;
-  if (error?.message) return error.message;
+  if (err instanceof Error && err.message) return err.message;
   return fallback;
 }
 
@@ -222,6 +229,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const hubLoadStateRef = useRef<Record<string, { category: string; requestId: number }>>({});
 
   const [hubRows, setHubRows] = useState<Record<string, unknown>[]>([]);
+  const [cityTemplateRows, setCityTemplateRows] = useState<Record<string, unknown>[]>([]);
   const [hubColumns, setHubColumns] = useState<string[]>([]);
   const [zeroSal, setZeroSal] = useState<Record<string, string[]>>({});
   const [launchDate, setLaunchDate] = useState("");
@@ -235,6 +243,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
   const [newLaunchPid, setNewLaunchPid] = useState("");
   const [newLaunchName, setNewLaunchName] = useState("");
+  const [newLaunchMrp, setNewLaunchMrp] = useState("");
 
   const [oldCategory, setOldCategory] = useState("");
   const [newCategory, setNewCategory] = useState("");
@@ -252,6 +261,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
   const [dupes, setDupes] = useState<Record<string, unknown>[] | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
   const [previewCols, setPreviewCols] = useState<string[]>([]);
+  const [hubPlanPreviewRows, setHubPlanPreviewRows] = useState<Record<string, unknown>[] | null>(null);
+  const [hubPlanPreviewCols, setHubPlanPreviewCols] = useState<string[]>([]);
   const [emailResult, setEmailResult] = useState<{
     planner?: EmailResult;
     admin?: EmailResult;
@@ -446,6 +457,24 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       setMsg({ text: "Select at least one city", type: "warning" });
       return;
     }
+    if (!planLevel) {
+      setMsg({ text: "Select Plan Level before downloading the template", type: "warning" });
+      return;
+    }
+    if (subType === "New Launch") {
+      if (!templateProductId.trim() || !templateProductName.trim()) {
+        setMsg({ text: "Enter Product ID and Product Name before downloading the template.", type: "warning" });
+        return;
+      }
+      if (!newLaunchMrp.trim() || Number(newLaunchMrp) <= 0) {
+        setMsg({ text: "Enter a valid MRP before downloading the template.", type: "warning" });
+        return;
+      }
+    }
+    if (isExpansion && (!expansionPid.trim() || !expansionName.trim())) {
+      setMsg({ text: "Search and select an existing SKU before downloading the template.", type: "warning" });
+      return;
+    }
     setBusy("template");
     try {
       const path =
@@ -466,7 +495,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : (isExpansion ? "" : ""), // Expansion doesn't have an input MRP in Step 1
+              mrp: isReplacement ? newMrp : (isExpansion ? "" : newLaunchMrp),
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -477,7 +506,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               category: templateCategory,
               product_id: templateProductId,
               product_name: templateProductName,
-              mrp: isReplacement ? newMrp : (isExpansion ? "" : ""),
+              mrp: isReplacement ? newMrp : (isExpansion ? "" : newLaunchMrp),
               sub_type: isReplacement ? "Replacement" : "New Launch",
               old_product_id: isReplacement ? oldPid : "",
               old_product_name: isReplacement ? oldProductName : "",
@@ -572,18 +601,53 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     document.body.removeChild(link);
   };
 
-  const handleNextFromUpload = () => {
+  const handleNextFromUpload = async () => {
     if (isReplacement && hubRows.length === 0) {
       const defaultRows = generateDefaultRows();
       if (planLevel === "hub" && defaultRows.length === 0) {
         setMsg({ text: "Please select at least one hub.", type: "warning" });
         return;
       }
-      setHubRows(defaultRows);
-      const visibleKeys = getVisibleColumns(subType, planLevel);
-      setHubColumns(visibleKeys);
+      if (planLevel === "city") {
+        await splitCityRows(defaultRows);
+      } else {
+        setHubRows(defaultRows);
+        const visibleKeys = getVisibleColumns(subType, planLevel);
+        setHubColumns(visibleKeys);
+      }
     }
     setStage("split");
+  };
+
+  const splitCityRows = async (cityRows: Record<string, unknown>[]) => {
+    setCityTemplateRows(cityRows);
+    if (!cityRows.length) {
+      setHubRows([]);
+      setHubColumns(getVisibleColumns(subType, planLevel));
+      return;
+    }
+    setBusy("split");
+    setStepState({ step: "split", status: "loading", message: "Splitting city quantities to hubs..." });
+    try {
+      const forcedHubs = Object.fromEntries(
+        Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
+      );
+      const { data } = await api.post("/api/new-product-launch/wizard/split-city", {
+        city_rows: cityRows,
+        forced_hubs: Object.keys(forcedHubs).length ? forcedHubs : undefined,
+      });
+      setHubRows(data.hub_rows || []);
+      setZeroSal(data.zero_salience || {});
+      const visibleKeys = getVisibleColumns(subType, planLevel, true);
+      const splitCols = (data.columns || []).filter((c: string) => visibleKeys.includes(c));
+      setHubColumns(splitCols.length ? splitCols : visibleKeys);
+      setStepState({ step: "", status: "idle", message: "" });
+    } catch (err: unknown) {
+      logError("splitCityRows", err, { planLevel, rowCount: cityRows.length });
+      setMsg({ text: extractErrorMessage(err, "City → hub split failed"), type: "danger" });
+      setStepState({ step: "split", status: "error", message: "Split failed" });
+    }
+    setBusy("");
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -601,20 +665,21 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           : "/api/new-product-launch/wizard/parse-hub";
       const { data } = await api.post(path, form, { headers: { "Content-Type": "multipart/form-data" } });
 
-      const forcedHubs = Object.fromEntries(
-        Object.entries(selectedHubs).filter(([, hubs]) => hubs.length > 0),
-      );
-
-      setHubRows(data.rows || []);
-      const visibleKeys = getVisibleColumns(subType, planLevel);
-      const filtered = (data.columns || []).filter((c: string) => visibleKeys.includes(c));
-      setHubColumns(filtered);
+      if (planLevel === "city") {
+        await splitCityRows(data.rows || []);
+      } else {
+        setCityTemplateRows([]);
+        setHubRows(data.rows || []);
+        const visibleKeys = getVisibleColumns(subType, planLevel);
+        const filtered = (data.columns || []).filter((c: string) => visibleKeys.includes(c));
+        setHubColumns(filtered);
+      }
       setStage("split");
       setStepState({ step: "", status: "idle", message: "" });
     } catch (err: unknown) {
       const errorMsg = extractErrorMessage(err, "Upload failed");
       logError("handleUpload", err, { planLevel, fileName: file.name });
-      setStepState({ step: "upload", status: "error", message: errorMsg });
+      setStepState({ step: "upload", status: "error", message: errorMsg.split("; ")[0] || errorMsg });
       setMsg({ text: errorMsg, type: "danger" });
     }
     setBusy("");
@@ -698,11 +763,14 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setBusy("preview");
     setStepState({ step: "preview", status: "loading", message: "Generating sync preview..." });
     setPreviewRows(null);
+    setHubPlanPreviewRows(null);
     const t0 = performance.now();
     try {
-      const dated = hubRows.map(r => ({ ...r, launch_date: launchDate }));
+      const datedHub = hubRows.map(r => ({ ...r, launch_date: launchDate }));
+      const datedCity = cityTemplateRows.map(r => ({ ...r, launch_date: launchDate }));
       const { data } = await api.post("/api/new-product-launch/wizard/preview-sync", {
-        hub_rows: dated,
+        hub_rows: datedHub,
+        city_rows: planLevel === "city" ? datedCity : undefined,
         sub_type: subType,
         launch_date: launchDate,
         plan_level: planLevel || undefined,
@@ -710,7 +778,16 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       const elapsed = Math.round(performance.now() - t0);
       setPreviewRows(data.rows || []);
       setPreviewCols(data.columns || []);
-      setMsg({ text: `Sync preview generated (${data.rows?.length || 0} rows) in ${elapsed}ms — target: ${isReplacement ? "product_replacement" : (planLevel === "city" ? "City_Plan" : "Hub_Plan")}`, type: "success" });
+      setHubPlanPreviewRows(data.hub_plan_rows || null);
+      setHubPlanPreviewCols(data.hub_plan_columns || []);
+      const targets = (data.targets as string[] | undefined)?.join(" + ") ||
+        (isReplacement ? "product_replacement" : (planLevel === "city" ? "City_Plan + Hub_Plan" : "Hub_Plan"));
+      const cityCount = data.rows?.length || 0;
+      const hubCount = data.hub_plan_rows?.length || 0;
+      const countMsg = planLevel === "city" && !isReplacement
+        ? `${cityCount} city + ${hubCount} hub rows`
+        : `${cityCount} rows`;
+      setMsg({ text: `Sync preview generated (${countMsg}) in ${elapsed}ms — target: ${targets}`, type: "success" });
       setStepState({ step: "preview", status: "success", message: `Preview loaded in ${elapsed}ms` });
     } catch (err: unknown) {
       logError("previewSync", err, { subType, launchDate, planLevel });
@@ -735,7 +812,17 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
     setStepState({ step: "submit", status: "loading", message: "Syncing data to Google Sheets & database..." });
 
     try {
-      const dated = hubRows.map(r => ({
+      const datedHub = hubRows.map(r => ({
+        ...r,
+        launch_date: launchDate,
+        ...(isReplacement ? {
+          old_product_id: oldPid,
+          old_product_name: oldProductName,
+          replacement_percentage: splitPct,
+          MRP: newMrp || r.MRP || r.mrp || "",
+        } : {})
+      }));
+      const datedCity = cityTemplateRows.map(r => ({
         ...r,
         launch_date: launchDate,
         ...(isReplacement ? {
@@ -747,7 +834,8 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       }));
       const t0Submit = performance.now();
       const { data } = await api.post("/api/new-product-launch/wizard/submit", {
-        hub_rows: dated,
+        hub_rows: datedHub,
+        city_rows: planLevel === "city" ? datedCity : undefined,
         sub_type: subType,
         launch_date: launchDate,
         plan_level: planLevel || undefined,
@@ -892,6 +980,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
       // Reset rows to fresh start for setup transition
       setHubRows([]);
+      setCityTemplateRows([]);
       setHubColumns([]);
 
       setStage("upload");
@@ -942,7 +1031,7 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
             </button>
           </div>
           <p className="text-xs text-amber-800 leading-normal">
-            The wizard has successfully synced new product configurations to the {isReplacement ? "product_replacement" : (planLevel === "hub" ? "Hub_Plan" : "City_Plan (FF Input)")} sheet. Please update the master worksheets to reflect the new configurations.
+            The wizard has successfully synced new product configurations to the {isReplacement ? "product_replacement" : (planLevel === "hub" ? "Hub_Plan" : planLevel === "city" ? "City_Plan and Hub_Plan" : "City_Plan (FF Input)")} sheet{planLevel === "city" && !isReplacement ? "s" : ""}. Please update the master worksheets to reflect the new configurations.
           </p>
         </div>
       )}
@@ -1303,6 +1392,45 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
               )}
             </div>
           )}
+          {!isReplacement && subType === "New Launch" && (
+            <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
+              <div className="form-group">
+                <label className="form-label">Product ID *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  value={newLaunchPid}
+                  onChange={e => setNewLaunchPid(e.target.value)}
+                  placeholder="Enter new product ID"
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Product Name *</label>
+                <input
+                  type="text"
+                  className="form-input text-sm"
+                  value={newLaunchName}
+                  onChange={e => setNewLaunchName(e.target.value)}
+                  placeholder="Enter new product name"
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">MRP (Before KVi Discount) *</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  className="form-input text-sm"
+                  value={newLaunchMrp}
+                  onChange={e => setNewLaunchMrp(e.target.value)}
+                  placeholder="Enter MRP"
+                  disabled={readOnly}
+                />
+              </div>
+            </div>
+          )}
           {!isReplacement && (
             <div className="grid-2 mb-3" style={{ maxWidth: 560 }}>
               {!isExpansion && (
@@ -1548,9 +1676,25 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
 
       {stage === "split" && hubRows.length > 0 && (
         <>
+          {planLevel === "city" && (
+            <p className="text-xs text-muted mb-2">
+              City plan split to <strong>{hubRows.length}</strong> hub rows (salience-weighted preview).
+              On sync, <strong>{cityTemplateRows.length || hubRows.length}</strong> city template row(s) append to <strong>City_Plan</strong> and <strong>{hubRows.length}</strong> hub-split row(s) append to <strong>Hub_Plan</strong>.
+            </p>
+          )}
           {Object.keys(zeroSal).length > 0 && (
             <div className="alert alert-warning text-xs mb-3">
-              Zero salience hubs (equal split): {JSON.stringify(zeroSal)}
+              <strong>Hubs with no salience for this sub-category:</strong>{" "}
+              {Object.entries(zeroSal).map(([city, hubs]) => (
+                <span key={city} className="mr-2">
+                  {city}: {Array.isArray(hubs) ? hubs.join(", ") : String(hubs)}
+                </span>
+              ))}
+              <p className="mt-1 mb-0">
+                These hubs have no Base_plan in <em>Hub level Suggestion</em> for your selected category.
+                Quantities are split using city-wide hub salience where available, otherwise an equal minimum share vs other hubs.
+                Fill Production PC and all plan columns in the template before upload.
+              </p>
             </div>
           )}
           <div className="table-wrap mb-3" style={{ maxHeight: 360, overflow: "auto" }}>
@@ -1609,7 +1753,23 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
       {stage === "confirm" && (
         <>
           <p className="text-sm mb-2">
-            Sync <strong>{hubRows.length}</strong> {isReplacement ? "product_replacement" : (planLevel === "city" ? "city" : "hub")} rows as <strong>{subType}</strong> &mdash; launch {launchDate}
+            Sync{" "}
+            {planLevel === "city" && !isReplacement ? (
+              <>
+                <strong>{cityTemplateRows.length || hubRows.length}</strong> city +{" "}
+                <strong>{hubRows.length}</strong> hub-split
+              </>
+            ) : (
+              <strong>{hubRows.length}</strong>
+            )}{" "}
+            {isReplacement
+              ? "product_replacement"
+              : planLevel === "city"
+                ? "city plan"
+                : planLevel === "hub"
+                  ? "hub"
+                  : "city"}{" "}
+            rows as <strong>{subType}</strong> &mdash; launch {launchDate}
             {isReplacement && oldPid && newPid && (
               <> · replace {oldPid} → {newPid} ({splitPct}% to new)</>
             )}
@@ -1693,7 +1853,9 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
           {previewRows && previewRows.length > 0 && (
             <div className="mb-4">
               <h5 className="text-xs font-semibold mb-2 text-muted uppercase tracking-wider">
-                Log Preview — Exact columns to be written to Google Sheets
+                {planLevel === "city" && !isReplacement
+                  ? `City_Plan preview — ${cityTemplateRows.length || previewRows.length} city template row(s)`
+                  : "Log Preview — Exact columns to be written to Google Sheets"}
               </h5>
               <div className="table-wrap border rounded" style={{ maxHeight: 280, overflow: "auto" }}>
                 <table className="table-sm">
@@ -1708,6 +1870,36 @@ export default function NplWizard({ subType, title, description }: NplWizardProp
                     {previewRows.map((row, i) => (
                       <tr key={i}>
                         {previewCols.map(c => (
+                          <td key={c} style={{ fontSize: "0.65rem", padding: "0.25rem 0.4rem", whiteSpace: "nowrap" }}>
+                            {String(row[c] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {hubPlanPreviewRows && hubPlanPreviewRows.length > 0 && (
+            <div className="mb-4">
+              <h5 className="text-xs font-semibold mb-2 text-muted uppercase tracking-wider">
+                Hub_Plan preview — {hubPlanPreviewRows.length} hub-split row(s)
+              </h5>
+              <div className="table-wrap border rounded" style={{ maxHeight: 280, overflow: "auto" }}>
+                <table className="table-sm">
+                  <thead>
+                    <tr style={{ background: "rgba(255, 255, 255, 0.05)" }}>
+                      {hubPlanPreviewCols.map(c => (
+                        <th key={c} style={{ fontSize: "0.68rem", padding: "0.35rem 0.4rem", whiteSpace: "nowrap" }}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hubPlanPreviewRows.map((row, i) => (
+                      <tr key={i}>
+                        {hubPlanPreviewCols.map(c => (
                           <td key={c} style={{ fontSize: "0.65rem", padding: "0.25rem 0.4rem", whiteSpace: "nowrap" }}>
                             {String(row[c] ?? "")}
                           </td>

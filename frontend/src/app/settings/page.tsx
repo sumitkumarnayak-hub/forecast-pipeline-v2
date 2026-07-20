@@ -595,7 +595,7 @@ export default function SettingsPage() {
       <div className="card" style={{ padding: "1.25rem 1.5rem" }}>
         <h4 style={{ margin: "0 0 0.5rem", fontWeight: 700 }}>Team user guide</h4>
         <p className="text-sm text-muted" style={{ margin: "0 0 1rem", lineHeight: 1.6 }}>
-          New to Planning Suite? Read the step-by-step guide: weekly workflow, page overview, roles, and troubleshooting.
+          New to Planning workbench? Read the step-by-step guide: weekly workflow, page overview, roles, and troubleshooting.
         </p>
         <Link href="/about" className="btn btn-primary btn-sm">
           <BookOpen size={14} /> Open About &amp; User Guide
@@ -604,7 +604,7 @@ export default function SettingsPage() {
       <div className="card" style={{ padding: "1.5rem" }}>
       <h4 style={{ margin: "0 0 1rem", fontWeight: 700 }}>System information</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", fontSize: "0.84rem" }}>
-        <div><span className="text-muted">Application:</span> {boot?.about?.app_name || "Planning Suite"}</div>
+        <div><span className="text-muted">Application:</span> {boot?.about?.app_name || "Planning workbench"}</div>
         <div><span className="text-muted">API version:</span> {boot?.about?.api_version || "2.0.0"}</div>
         <div><span className="text-muted">Environment:</span> {String(boot?.about?.environment ?? env?.app_env ?? "—")}</div>
         <div><span className="text-muted">Database:</span> {String(boot?.about?.database_backend ?? env?.database_backend ?? "—")}</div>

@@ -58,8 +58,8 @@ To build a premium visual experience, the frontend client matches modern UI/UX d
    ```bash
    python -m py_compile app/main.py
    ```
-2. **Execute REST API Integration Suite**:
-   Run the endpoints test suite:
+2. **Execute REST API Integration workbench**:
+   Run the endpoints test workbench:
    ```bash
    python scripts/test_api_endpoints.py
    ```

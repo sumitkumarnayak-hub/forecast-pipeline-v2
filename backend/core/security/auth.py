@@ -25,7 +25,7 @@ def init_auth_session_state() -> None:
 
 def _material_font_css() -> str:
     """Backward-compatible alias for login page."""
-    from planning_suite.ui.fonts import material_font_css
+    from planning_workbench.ui.fonts import material_font_css
     return material_font_css()
 
 
@@ -146,7 +146,7 @@ class AuthManager:
                 </div>
                 <div style="font-size: 1.65rem; font-weight: 700; color: #0F172A;
                             letter-spacing: -0.03em; line-height: 1.2;">
-                    Planning Suite
+                    Planning workbench
                 </div>
                 <div style="font-size: 0.875rem; color: #64748B; margin-top: 0.4rem;">
                     Sign in to your account

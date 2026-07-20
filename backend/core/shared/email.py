@@ -192,7 +192,7 @@ def build_email_html(
           <tr>
             <td style="padding:28px 32px 0 32px;">
               <p style="margin:0 0 20px 0;font-size:13px;font-weight:600;color:#86868B;letter-spacing:-0.01em;">
-                Planning Suite{badge_html}
+                Planning workbench{badge_html}
               </p>
               <h1 style="margin:0;font-size:26px;font-weight:600;color:#1D1D1F;letter-spacing:-0.03em;line-height:1.2;">{_esc(headline)}</h1>
               <p style="margin:14px 0 0 0;font-size:16px;color:#515154;line-height:1.55;">{_esc(intro)}</p>
@@ -210,7 +210,7 @@ def build_email_html(
           <tr>
             <td style="padding:18px 32px 24px 32px;border-top:1px solid #F2F2F7;">
               <p style="margin:0;font-size:12px;color:#AEAEB2;line-height:1.5;">
-                This is an automated message from Planning Suite.<br />
+                This is an automated message from Planning workbench.<br />
                 {_esc(ts)}
               </p>
             </td>
@@ -585,7 +585,7 @@ def send_test_email(
         action="You can safely ignore this message, or use Settings → Notifications to manage recipients.",
     )
 
-    subject = f"Planning Suite — test email ({now})"
+    subject = f"Planning workbench — test email ({now})"
     return send_to_addresses(
         recipients=to_addresses,
         subject=subject,
@@ -636,13 +636,13 @@ def send_launch_notifications(
         variant="warning",
         badge="Admin",
         extra_html=build_master_links_card(),
-        action="Open <strong>Planning Suite → Product Launch → Submission History</strong> to review and approve.",
+        action="Open <strong>Planning workbench → Product Launch → Submission History</strong> to review and approve.",
     )
 
     meta = {"submission_id": sub_id, "submission_type": sub_type, "product_name": product_name}
     planner_result = send_email(
         category="launch_planner",
-        subject=f"[Planning Suite] New {sub_type} — {product_name}",
+        subject=f"[Planning workbench] New {sub_type} — {product_name}",
         html_body=planner_html,
         triggered_by_user_id=triggered_by_user_id,
         metadata={**meta, "audience": "planner"},
@@ -650,7 +650,7 @@ def send_launch_notifications(
     )
     admin_result = send_email(
         category="launch_admin",
-        subject=f"[Planning Suite] Approval required — {sub_type}: {product_name}",
+        subject=f"[Planning workbench] Approval required — {sub_type}: {product_name}",
         html_body=admin_html,
         triggered_by_user_id=triggered_by_user_id,
         metadata={**meta, "audience": "admin"},
@@ -679,7 +679,7 @@ def send_welcome_email(
     safe_role = html.escape(role)
 
     body_html = build_email_html(
-        headline="Welcome to Planning Suite",
+        headline="Welcome to Planning workbench",
         intro=f"Hi {safe_name}, your account is ready. Sign in with the credentials below.",
         fields={
             "Username": safe_username,
@@ -690,14 +690,14 @@ def send_welcome_email(
         action=(
             "Open the "
             "<a href='https://forecast-pipeline-v2-frontend-nu.vercel.app/login' "
-            "style='color:#0071E3;text-decoration:none;font-weight:600;'>Planning Suite login page</a> "
+            "style='color:#0071E3;text-decoration:none;font-weight:600;'>Planning workbench login page</a> "
             "to get started."
         ),
     )
 
     return send_to_addresses(
         recipients=[email],
-        subject=f"[Planning Suite] Account Created — Welcome {safe_name}!",
+        subject=f"[Planning workbench] Account Created — Welcome {safe_name}!",
         html_body=body_html,
         email_type="general",
         db=db,

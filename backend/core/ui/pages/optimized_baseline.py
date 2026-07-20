@@ -329,7 +329,7 @@ class OptimizedBaselineGenerator:
         if read_only:
             st.info("You have read-only access. Pipeline runs are disabled for your role.")
 
-        from planning_suite.ui.components.autopilot_runner import render_autopilot_runner
+        from planning_workbench.ui.components.autopilot_runner import render_autopilot_runner
 
         render_autopilot_runner(user_id, read_only=read_only)
 

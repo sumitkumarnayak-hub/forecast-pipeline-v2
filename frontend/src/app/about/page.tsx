@@ -28,7 +28,7 @@ export default function AboutPage() {
   return (
     <AppShell
       title="About & User Guide"
-      subtitle="How to use Planning Suite — written for new team members"
+      subtitle="How to use Planning workbench — written for new team members"
     >
       <div className="guide-layout">
         <aside className="guide-toc card">

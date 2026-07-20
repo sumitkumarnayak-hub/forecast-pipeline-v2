@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     });
 
     const info = await transporter.sendMail({
-      from: `"Planning Suite" <${smtpUser}>`,
+      from: `"Planning workbench" <${smtpUser}>`,
       to: Array.isArray(to) ? to.join(", ") : to,
       subject: subject,
       html: html,
