@@ -362,6 +362,120 @@ def load_salience_source() -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _truthy_flag(val) -> bool:
+    """1 / TRUE / Y / A / Active all count as an "on" flag; blank / 0 / N / I do not."""
+    s = str(val).strip().lower()
+    return s in ("1", "1.0", "true", "yes", "y", "a", "active")
+
+
+def load_hub_sku_master_flags() -> pd.DataFrame:
+    """
+    Raw "Hub Sku Master" tab (hub_level_planning sheet) normalized to
+    city_name / hub_name / hub_active / active_plan (booleans).
+
+    Returns an empty DataFrame if the tab is missing/unreadable so callers can
+    skip the active-hub filter rather than break the split.
+    """
+    from features.product_launch.sheet_reads import read_sheet_values_cached
+
+    if not SPREADSHEET_ID:
+        return pd.DataFrame()
+
+    def _fetch():
+        from core.shared.sheets_throttle import sheets_slot
+
+        with sheets_slot():
+            sheet = _open_sheet(SPREADSHEET_ID, HUB_SKU_MASTER_SHEET)
+            return sheet.get_all_values()
+
+    try:
+        data = read_sheet_values_cached(
+            SPREADSHEET_ID,
+            HUB_SKU_MASTER_SHEET,
+            "all",
+            sheet_category="hub_level_planning",
+            fetcher=_fetch,
+        )
+    except Exception as exc:
+        logger.warning("Could not load Hub Sku Master tab: %s", exc)
+        return pd.DataFrame()
+
+    if not data or len(data) < 2:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data[1:], columns=data[0])
+    df = _normalize_columns(df)
+
+    city_col = _resolve_col(df, "city_name", "City Name", "city")
+    hub_col = _resolve_col(df, "hub_name", "Hub Name", "hub")
+    if not city_col or not hub_col:
+        return pd.DataFrame()
+
+    active_col = _resolve_col(df, "hub active", "hub_active", "Hub Active", "hubactive")
+    plan_col = _resolve_col(
+        df, "active plan", "active_plan", "Active Plan", "plan active", "planactive", "activeplan",
+    )
+
+    out = pd.DataFrame({
+        "city_name": df[city_col].astype(str).str.strip(),
+        "hub_name": df[hub_col].astype(str).str.strip(),
+    })
+    out["hub_active"] = df[active_col].apply(_truthy_flag) if active_col else True
+    out["active_plan"] = df[plan_col].apply(_truthy_flag) if plan_col else True
+    return out[(out["city_name"] != "") & (out["hub_name"] != "")].reset_index(drop=True)
+
+
+def get_active_hub_sku_master_pairs() -> set[tuple[str, str]]:
+    """
+    (city_name, hub_name) pairs (lowercased) where Hub Sku Master marks
+    Hub Active = 1 AND Active Plan = 1.
+
+    Empty set means the filter is unavailable — callers should skip it
+    rather than treat "no active hubs" as "no hubs at all".
+    """
+    df = load_hub_sku_master_flags()
+    if df.empty:
+        return set()
+    active = df[df["active_plan"]]
+    return {
+        (str(c).strip().lower(), str(h).strip().lower())
+        for c, h in zip(active["city_name"], active["hub_name"])
+        if str(c).strip() and str(h).strip()
+    }
+
+
+def _filter_rows_by_active_hub_pairs(
+    df: pd.DataFrame,
+    pairs: set[tuple[str, str]],
+    *,
+    city_col: str | None = None,
+    hub_col: str | None = None,
+) -> pd.DataFrame:
+    """Keep only rows whose (city, hub) is in the active-hub whitelist.
+
+    If nothing matches (e.g. naming drift between sheets) the original
+    frame is returned unchanged so the split never silently drops to zero.
+    """
+    if df is None or df.empty or not pairs:
+        return df
+    city_col = city_col or _resolve_col(df, "city_name", "City Name", "city")
+    hub_col = hub_col or _resolve_col(df, "hub_name", "Hub Name", "hub")
+    if not city_col or not hub_col:
+        return df
+    mask = [
+        (str(c).strip().lower(), str(h).strip().lower()) in pairs
+        for c, h in zip(df[city_col], df[hub_col])
+    ]
+    filtered = df[pd.Series(mask, index=df.index)]
+    if filtered.empty:
+        logger.warning(
+            "[NPL] Hub Sku Master active-hub filter matched 0 rows — "
+            "keeping unfiltered salience source (check city/hub name alignment)."
+        )
+        return df
+    return filtered
+
+
 def load_hub_sku_master() -> pd.DataFrame:
     """City/hub catalog from FF Automation Hub Mapping (cached parquet)."""
     from features.product_launch.ff_masters import hub_mapping_as_catalog
@@ -517,6 +631,9 @@ def _load_equal_weight_hub_salience() -> pd.DataFrame:
     if active_df.empty:
         return pd.DataFrame(columns=["city_name", "hub_name", "sub_category", "salience"])
 
+    active_pairs = get_active_hub_sku_master_pairs()
+    active_df = _filter_rows_by_active_hub_pairs(active_df, active_pairs)
+
     city_counts = active_df.groupby("city_name")["hub_name"].count().to_dict()
     master_df = load_product_master()
     categories = get_categories(master_df)
@@ -544,11 +661,19 @@ def load_hub_salience() -> pd.DataFrame:
     """
     Returns city_name, hub_name, sub_category, salience (+ day when available).
 
+    Hub universe: only (city, hub) pairs where Hub Sku Master marks
+    Hub Active = 1 AND Active Plan = 1 (see get_active_hub_sku_master_pairs).
+    That whitelist is applied to whichever Base_plan source is used below,
+    so salience is only ever split across currently-active, actively-planned hubs.
+
     Primary: Hub level Suggestion Base_plan (hub × category × day).
     Fallback: outputs/hub_suggestion_latest.parquet, then equal-weight Hub Mapping.
     """
+    active_pairs = get_active_hub_sku_master_pairs()
+
     raw = load_salience_source()
     if not raw.empty:
+        raw = _filter_rows_by_active_hub_pairs(raw, active_pairs)
         computed = compute_salience_category(raw)
         if not computed.empty:
             return computed
@@ -573,6 +698,7 @@ def load_hub_salience() -> pd.DataFrame:
                     df = df.rename(columns={day_col: "day"})
                 if "day" in df.columns:
                     df["day"] = df["day"].map(_normalize_weekday)
+                df = _filter_rows_by_active_hub_pairs(df, active_pairs)
                 if "Base_plan" in df.columns and "salience" not in df.columns:
                     return compute_salience_category(df)
                 if "salience" in df.columns:
@@ -602,7 +728,7 @@ def _require_salience(sal_df: pd.DataFrame) -> bool:
     return sal_df is not None and not sal_df.empty
 
 
-def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> list:
+def _get_hubs_for_city_raw(sal_df: pd.DataFrame, city: str, category: str = None) -> list:
     if sal_df is None:
         sal_df = pd.DataFrame()
 
@@ -636,6 +762,25 @@ def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> 
             return active_hubs
 
     return []
+
+
+def get_hubs_for_city(sal_df: pd.DataFrame, city: str, category: str = None) -> list:
+    """Hubs eligible for a city, restricted to Hub Sku Master Hub Active=1 & Active Plan=1.
+
+    Falls back to the unfiltered list when the active-hub whitelist is
+    unavailable or matches nothing (naming drift) so the split never breaks.
+    """
+    hubs = _get_hubs_for_city_raw(sal_df, city, category)
+    if not hubs:
+        return hubs
+
+    active_pairs = get_active_hub_sku_master_pairs()
+    if not active_pairs:
+        return hubs
+
+    city_l = str(city).strip().lower()
+    filtered = [h for h in hubs if (city_l, str(h).strip().lower()) in active_pairs]
+    return filtered if filtered else hubs
 
 
 # ──────────────────────────────────────────────────────────────────
