@@ -341,11 +341,11 @@ PAGE_CONFIG = {
 
 
 # Recipients for the "master worksheets need updating" NPL email (New Product
-# Launch / expansion / replacement). Comma-separate multiple addresses via the
-# MASTER_EMAIL_RECEIVER env var to override the default below.
+# Launch / expansion / replacement). Set as a comma-separated list in the
+# MASTER_EMAIL_RECEIVER env var (backend only — no default is hardcoded here).
 MASTER_EMAIL_RECEIVER: list[str] = [
     e.strip()
-    for e in os.getenv("MASTER_EMAIL_RECEIVER", "sumitkumar.nayak@licious.com").split(",")
+    for e in os.getenv("MASTER_EMAIL_RECEIVER", "").split(",")
     if e.strip()
 ]
 
