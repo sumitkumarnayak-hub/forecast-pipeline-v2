@@ -71,6 +71,11 @@ export default function UsersAdminTab({ onMessage }: Props) {
 
   const createUser = async () => {
     if (!newUser.email || !newUser.password) return;
+    const emailClean = newUser.email.trim().toLowerCase();
+    if (!emailClean.endsWith("@licious.com")) {
+      onMessage("Email domain must be @licious.com only.", "danger");
+      return;
+    }
     setCreating(true);
     try {
       await api.post("/api/settings/users", newUser);

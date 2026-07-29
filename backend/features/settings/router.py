@@ -411,6 +411,9 @@ def create_user_admin(
     current_user: dict = Depends(require_admin),
     db: Database = Depends(get_db),
 ):
+    email_clean = body.email.strip().lower()
+    if not email_clean.endswith("@licious.com"):
+        raise HTTPException(status_code=400, detail="Email domain must be @licious.com only")
     try:
         user = db.create_user(
             password=body.password,

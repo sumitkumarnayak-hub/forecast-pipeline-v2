@@ -601,6 +601,8 @@ class Database:
         email = email.strip().lower()
         if not email or not password:
             raise ValueError("Email and password are required")
+        if not email.endswith("@licious.com"):
+            raise ValueError("Email domain must be @licious.com only")
 
         password_hash = bcrypt.hashpw(
             password.encode("utf-8"), bcrypt.gensalt()
