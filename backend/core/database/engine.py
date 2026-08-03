@@ -1941,7 +1941,7 @@ class Database:
         return info
 
     def _migrate_hub_launch_version_history(self, conn) -> None:
-        """Create the hub_launch_version_history table if missing."""
+        """Create the hub_launch_version_history table if missing, and add email_status columns."""
         if self.backend == "postgresql":
             conn.execute(
                 text("""
@@ -1953,10 +1953,21 @@ class Database:
                         row_count_before INTEGER,
                         row_count_after INTEGER,
                         headers_json TEXT,
-                        is_dismissed INTEGER DEFAULT 0
+                        is_dismissed INTEGER DEFAULT 0,
+                        email_status TEXT DEFAULT 'pending',
+                        email_detail TEXT DEFAULT ''
                     )
                 """)
             )
+            # Idempotent: add columns if they were missing from an older schema
+            for col, definition in [
+                ("email_status", "TEXT DEFAULT 'pending'"),
+                ("email_detail", "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    conn.execute(text(f"ALTER TABLE hub_launch_version_history ADD COLUMN IF NOT EXISTS {col} {definition}"))
+                except Exception:
+                    pass
             return
 
         conn.execute(
@@ -1969,10 +1980,23 @@ class Database:
                     row_count_before INTEGER,
                     row_count_after INTEGER,
                     headers_json TEXT,
-                    is_dismissed INTEGER DEFAULT 0
+                    is_dismissed INTEGER DEFAULT 0,
+                    email_status TEXT DEFAULT 'pending',
+                    email_detail TEXT DEFAULT ''
                 )
             """)
         )
+        # Idempotent: add columns if missing from older SQLite schema
+        existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(hub_launch_version_history)")).fetchall()}
+        for col, definition in [
+            ("email_status", "TEXT DEFAULT 'pending'"),
+            ("email_detail", "TEXT DEFAULT ''"),
+        ]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE hub_launch_version_history ADD COLUMN {col} {definition}"))
+                except Exception:
+                    pass
 
     def save_hub_launch_version(
         self,
@@ -1988,24 +2012,43 @@ class Database:
         """Persist a new FF Input change version snapshot to DB (for cross-user persistence)."""
         try:
             with self.engine.begin() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO hub_launch_version_history
-                            (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed)
-                        VALUES
-                            (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0)
-                        ON CONFLICT (version_id) DO NOTHING
-                    """),
-                    {
-                        "version_id": version_id,
-                        "detected_at": detected_at,
-                        "summary": summary,
-                        "diff_json": json.dumps(diff),
-                        "row_count_before": row_count_before,
-                        "row_count_after": row_count_after,
-                        "headers_json": json.dumps(headers),
-                    }
-                )
+                if self.backend == "postgresql":
+                    conn.execute(
+                        text("""
+                            INSERT INTO hub_launch_version_history
+                                (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail)
+                            VALUES
+                                (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0, 'pending', '')
+                            ON CONFLICT (version_id) DO NOTHING
+                        """),
+                        {
+                            "version_id": version_id,
+                            "detected_at": detected_at,
+                            "summary": summary,
+                            "diff_json": json.dumps(diff),
+                            "row_count_before": row_count_before,
+                            "row_count_after": row_count_after,
+                            "headers_json": json.dumps(headers),
+                        }
+                    )
+                else:
+                    conn.execute(
+                        text("""
+                            INSERT OR IGNORE INTO hub_launch_version_history
+                                (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail)
+                            VALUES
+                                (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0, 'pending', '')
+                        """),
+                        {
+                            "version_id": version_id,
+                            "detected_at": detected_at,
+                            "summary": summary,
+                            "diff_json": json.dumps(diff),
+                            "row_count_before": row_count_before,
+                            "row_count_after": row_count_after,
+                            "headers_json": json.dumps(headers),
+                        }
+                    )
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Failed to save hub launch version %s to DB", version_id)
@@ -2016,22 +2059,21 @@ class Database:
             with self.engine.connect() as conn:
                 rows = conn.execute(
                     text("""
-                        SELECT version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed
+                        SELECT version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail
                         FROM hub_launch_version_history
                         ORDER BY detected_at DESC
                         LIMIT :limit
                     """),
                     {"limit": limit}
                 ).fetchall()
-                
+
                 results = []
                 for r in rows:
-                    # Parse timestamp to standard ISO format
                     dt = r[1]
                     ts_str = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
                     if ts_str.endswith("+00:00"):
                         ts_str = ts_str[:-6] + "Z"
-                        
+
                     results.append({
                         "version_id": r[0],
                         "detected_at": ts_str,
@@ -2041,6 +2083,8 @@ class Database:
                         "row_count_after": r[5],
                         "headers": json.loads(r[6]) if r[6] else [],
                         "is_dismissed": bool(r[7]),
+                        "email_status": r[8] or "pending",
+                        "email_detail": r[9] or "",
                     })
                 return results
         except Exception:
@@ -2060,7 +2104,7 @@ class Database:
                         LIMIT 1
                     """)
                 ).fetchone()
-                
+
                 if not row:
                     return {"change_detected": False}
                 return {
@@ -2086,8 +2130,31 @@ class Database:
             import logging
             logging.getLogger(__name__).exception("Failed to dismiss hub launch alerts in DB")
 
+    def update_hub_launch_email_status(
+        self,
+        version_id: str,
+        status: str,
+        detail: str = "",
+    ) -> None:
+        """Write back email outcome (sent / skipped / failed) for a FF Input change version."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        UPDATE hub_launch_version_history
+                        SET email_status = :status, email_detail = :detail
+                        WHERE version_id = :version_id
+                    """),
+                    {"status": status, "detail": detail or "", "version_id": version_id},
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to update email status for hub launch version %s", version_id
+            )
+
     def _migrate_hub_sku_master_version_history(self, conn) -> None:
-        """Create the hub_sku_master_version_history table if missing."""
+        """Create the hub_sku_master_version_history table if missing (deprecated alias for hub_mapping)."""
         if self.backend == "postgresql":
             conn.execute(
                 text("""
@@ -2232,7 +2299,7 @@ class Database:
             logging.getLogger(__name__).exception("Failed to dismiss hub sku master alerts in DB")
 
     def _migrate_hub_mapping_version_history(self, conn) -> None:
-        """Create the hub_mapping_version_history table if missing."""
+        """Create the hub_mapping_version_history table if missing, and add email_status columns."""
         if self.backend == "postgresql":
             conn.execute(
                 text("""
@@ -2244,10 +2311,20 @@ class Database:
                         row_count_before INTEGER,
                         row_count_after INTEGER,
                         headers_json TEXT,
-                        is_dismissed INTEGER DEFAULT 0
+                        is_dismissed INTEGER DEFAULT 0,
+                        email_status TEXT DEFAULT 'pending',
+                        email_detail TEXT DEFAULT ''
                     )
                 """)
             )
+            for col, definition in [
+                ("email_status", "TEXT DEFAULT 'pending'"),
+                ("email_detail", "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    conn.execute(text(f"ALTER TABLE hub_mapping_version_history ADD COLUMN IF NOT EXISTS {col} {definition}"))
+                except Exception:
+                    pass
             return
 
         conn.execute(
@@ -2260,10 +2337,22 @@ class Database:
                     row_count_before INTEGER,
                     row_count_after INTEGER,
                     headers_json TEXT,
-                    is_dismissed INTEGER DEFAULT 0
+                    is_dismissed INTEGER DEFAULT 0,
+                    email_status TEXT DEFAULT 'pending',
+                    email_detail TEXT DEFAULT ''
                 )
             """)
         )
+        existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(hub_mapping_version_history)")).fetchall()}
+        for col, definition in [
+            ("email_status", "TEXT DEFAULT 'pending'"),
+            ("email_detail", "TEXT DEFAULT ''"),
+        ]:
+            if col not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE hub_mapping_version_history ADD COLUMN {col} {definition}"))
+                except Exception:
+                    pass
 
     def save_hub_mapping_version(
         self,
@@ -2279,24 +2368,43 @@ class Database:
         """Persist a new Hub_Mapping change version snapshot to DB."""
         try:
             with self.engine.begin() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO hub_mapping_version_history
-                            (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed)
-                        VALUES
-                            (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0)
-                        ON CONFLICT (version_id) DO NOTHING
-                    """),
-                    {
-                        "version_id": version_id,
-                        "detected_at": detected_at,
-                        "summary": summary,
-                        "diff_json": json.dumps(diff),
-                        "row_count_before": row_count_before,
-                        "row_count_after": row_count_after,
-                        "headers_json": json.dumps(headers),
-                    },
-                )
+                if self.backend == "postgresql":
+                    conn.execute(
+                        text("""
+                            INSERT INTO hub_mapping_version_history
+                                (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail)
+                            VALUES
+                                (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0, 'pending', '')
+                            ON CONFLICT (version_id) DO NOTHING
+                        """),
+                        {
+                            "version_id": version_id,
+                            "detected_at": detected_at,
+                            "summary": summary,
+                            "diff_json": json.dumps(diff),
+                            "row_count_before": row_count_before,
+                            "row_count_after": row_count_after,
+                            "headers_json": json.dumps(headers),
+                        },
+                    )
+                else:
+                    conn.execute(
+                        text("""
+                            INSERT OR IGNORE INTO hub_mapping_version_history
+                                (version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail)
+                            VALUES
+                                (:version_id, :detected_at, :summary, :diff_json, :row_count_before, :row_count_after, :headers_json, 0, 'pending', '')
+                        """),
+                        {
+                            "version_id": version_id,
+                            "detected_at": detected_at,
+                            "summary": summary,
+                            "diff_json": json.dumps(diff),
+                            "row_count_before": row_count_before,
+                            "row_count_after": row_count_after,
+                            "headers_json": json.dumps(headers),
+                        },
+                    )
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Failed to save hub mapping version %s to DB", version_id)
@@ -2307,7 +2415,7 @@ class Database:
             with self.engine.connect() as conn:
                 rows = conn.execute(
                     text("""
-                        SELECT version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed
+                        SELECT version_id, detected_at, summary, diff_json, row_count_before, row_count_after, headers_json, is_dismissed, email_status, email_detail
                         FROM hub_mapping_version_history
                         ORDER BY detected_at DESC
                         LIMIT :limit
@@ -2331,6 +2439,8 @@ class Database:
                         "row_count_after": r[5],
                         "headers": json.loads(r[6]) if r[6] else [],
                         "is_dismissed": bool(r[7]),
+                        "email_status": r[8] or "pending",
+                        "email_detail": r[9] or "",
                     })
                 return results
         except Exception:
@@ -2373,6 +2483,98 @@ class Database:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Failed to dismiss hub mapping alerts in DB")
+
+    def update_hub_mapping_email_status(
+        self,
+        version_id: str,
+        status: str,
+        detail: str = "",
+    ) -> None:
+        """Write back email outcome (sent / skipped / failed) for a Hub_Mapping change version."""
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        UPDATE hub_mapping_version_history
+                        SET email_status = :status, email_detail = :detail
+                        WHERE version_id = :version_id
+                    """),
+                    {"status": status, "detail": detail or "", "version_id": version_id},
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to update email status for hub mapping version %s", version_id
+            )
+
+    def log_watcher_poll(
+        self,
+        *,
+        watcher_type: str,
+        polled_at: str,
+        elapsed_ms: int,
+        rows_fetched: int,
+        change_detected: bool,
+        error: str = "",
+    ) -> None:
+        """Record one watcher health heartbeat. Table is auto-created on first use."""
+        try:
+            with self.engine.begin() as conn:
+                # Ensure table exists (lightweight DDL, runs fast after first call)
+                if self.backend == "postgresql":
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS watcher_poll_log (
+                            id BIGSERIAL PRIMARY KEY,
+                            watcher_type TEXT NOT NULL,
+                            polled_at TIMESTAMPTZ NOT NULL,
+                            elapsed_ms INTEGER,
+                            rows_fetched INTEGER,
+                            change_detected BOOLEAN DEFAULT FALSE,
+                            error TEXT DEFAULT ''
+                        )
+                    """))
+                else:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS watcher_poll_log (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            watcher_type TEXT NOT NULL,
+                            polled_at TIMESTAMP NOT NULL,
+                            elapsed_ms INTEGER,
+                            rows_fetched INTEGER,
+                            change_detected INTEGER DEFAULT 0,
+                            error TEXT DEFAULT ''
+                        )
+                    """))
+                conn.execute(
+                    text("""
+                        INSERT INTO watcher_poll_log
+                            (watcher_type, polled_at, elapsed_ms, rows_fetched, change_detected, error)
+                        VALUES
+                            (:watcher_type, :polled_at, :elapsed_ms, :rows_fetched, :change_detected, :error)
+                    """),
+                    {
+                        "watcher_type": watcher_type,
+                        "polled_at": polled_at,
+                        "elapsed_ms": elapsed_ms,
+                        "rows_fetched": rows_fetched,
+                        "change_detected": True if change_detected else False
+                        if self.backend == "postgresql" else (1 if change_detected else 0),
+                        "error": error or "",
+                    },
+                )
+                # Trim to last 500 rows (SQLite) to prevent unbounded growth
+                if self.backend != "postgresql":
+                    conn.execute(text("""
+                        DELETE FROM watcher_poll_log
+                        WHERE id NOT IN (
+                            SELECT id FROM watcher_poll_log ORDER BY id DESC LIMIT 500
+                        )
+                    """))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "[WatcherPollLog] Failed to log poll for %s", watcher_type
+            )
 
 _SQLITE_SCHEMA = [
     """

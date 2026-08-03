@@ -2,14 +2,18 @@
 FF Input Sheet Change Watcher
 ==============================
 Runs as a daemon thread on FastAPI startup. Polls the 'FF Input' tab of the
-New Hub Launch Google Sheet every N seconds (default 45). On any change it:
+New Hub Launch Google Sheet every N seconds (default 60). On any change it:
 
   1. Computes a structured diff (added / removed / modified rows with cell-level detail).
   2. Appends a VersionEntry to the rolling change_history (max 20 kept in memory).
-  3. Fires an email immediately via workflow_notifications.notify_ff_input_changed().
-  4. Sets change_detected = True so the frontend poll endpoint can surface it instantly.
+  3. Persists the version entry to the DB (hub_launch_version_history) — survives restarts.
+  4. Fires an email immediately via workflow_notifications.notify_ff_input_changed().
+  5. Writes the email outcome (sent / skipped / failed + detail) back to the DB row.
+  6. Logs every poll heartbeat to watcher_poll_log for health monitoring.
+  7. Sets change_detected = True so the frontend poll endpoint can surface it instantly.
 
 The diff engine uses `hub_name + "|" + source_hub` as a composite row key.
+All of this runs server-side — the browser does NOT need to be open.
 """
 from __future__ import annotations
 
@@ -211,9 +215,35 @@ def dismiss_changes() -> None:
 
 # ── Background poll loop ───────────────────────────────────────────────────────
 
+def _log_poll_to_db(
+    watcher_type: str,
+    elapsed_ms: int,
+    rows_fetched: int,
+    change_detected: bool,
+    error: str = "",
+) -> None:
+    """Fire-and-forget: log a single poll heartbeat to watcher_poll_log in DB."""
+    try:
+        from core.database.engine import get_shared_database
+        polled_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        get_shared_database().log_watcher_poll(
+            watcher_type=watcher_type,
+            polled_at=polled_at,
+            elapsed_ms=elapsed_ms,
+            rows_fetched=rows_fetched,
+            change_detected=change_detected,
+            error=error,
+        )
+    except Exception as exc:
+        logger.debug("[WatcherPollLog] Failed to write poll log: %s", exc)
+
+
 def _poll_once() -> None:
     """Single poll: fetch FF Input, compare hash, emit diff + email on change."""
     t0 = time.perf_counter()
+    rows_fetched = 0
+    poll_error = ""
+    change_detected_this_poll = False
     try:
         from core.shared.sheets_session import get_sheets_manager
 
@@ -242,6 +272,7 @@ def _poll_once() -> None:
         headers = list(ff_df.columns)
         new_rows: list[dict] = ff_df.where(ff_df.notna(), "").to_dict(orient="records")
         new_hash = _rows_hash(new_rows)
+        rows_fetched = len(new_rows)
 
         elapsed = round((time.perf_counter() - t0) * 1000)
         _state["last_checked_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -251,13 +282,16 @@ def _poll_once() -> None:
             _state["last_known_hash"] = new_hash
             _state["last_known_rows"] = new_rows
             logger.info("[FFWatcher] Baseline snapshot stored — %d rows (%dms)", len(new_rows), elapsed)
+            _log_poll_to_db("ff_input", elapsed, rows_fetched, False)
             return
 
         if new_hash == _state["last_known_hash"]:
             logger.debug("[FFWatcher] No change detected (%dms)", elapsed)
+            _log_poll_to_db("ff_input", elapsed, rows_fetched, False)
             return
 
         # ── Change detected ────────────────────────────────────────────────────
+        change_detected_this_poll = True
         diff = compute_diff(_state["last_known_rows"], new_rows, headers)
         summary = _diff_summary(diff)
         detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -309,19 +343,45 @@ def _poll_once() -> None:
             name="ff-watcher-email",
         ).start()
 
+        _log_poll_to_db("ff_input", elapsed, rows_fetched, True)
+
     except Exception as exc:
         elapsed = round((time.perf_counter() - t0) * 1000)
+        poll_error = str(exc)
         logger.warning("[FFWatcher] Poll failed in %dms: %s", elapsed, exc)
+        _log_poll_to_db("ff_input", elapsed, rows_fetched, False, error=poll_error)
 
 
 def _send_change_email(version_entry: dict) -> None:
-    """Fire email notification for a detected FF Input change."""
+    """Fire email notification for a detected FF Input change and persist the outcome to DB."""
+    version_id = version_entry.get("version_id", "")
     try:
         from core.shared.workflow_notifications import notify_ff_input_changed
 
-        notify_ff_input_changed(version_entry)
+        result = notify_ff_input_changed(version_entry)
+        if result.sent:
+            email_status = "sent"
+        elif result.skipped:
+            email_status = "skipped"
+        else:
+            email_status = "failed"
+        email_detail = result.detail or ""
+        logger.info(
+            "[FFWatcher] Email outcome for %s: %s — %s",
+            version_id, email_status, email_detail or "(no detail)",
+        )
     except Exception as exc:
-        logger.error("[FFWatcher] Email send failed: %s", exc)
+        email_status = "failed"
+        email_detail = str(exc)
+        logger.error("[FFWatcher] Email send raised exception for %s: %s", version_id, exc)
+
+    # Always write outcome back to DB
+    if version_id:
+        try:
+            from core.database.engine import get_shared_database
+            get_shared_database().update_hub_launch_email_status(version_id, email_status, email_detail)
+        except Exception as db_exc:
+            logger.error("[FFWatcher] Failed to persist email outcome for %s: %s", version_id, db_exc)
 
 
 def _poll_loop(interval_seconds: int) -> None:
@@ -391,6 +451,9 @@ def dismiss_hub_mapping_changes() -> None:
 def _poll_hub_mapping_once() -> None:
     """Single poll: fetch FF Automation Hub_Mapping, compare hash, emit diff + email on change."""
     t0 = time.perf_counter()
+    rows_fetched = 0
+    poll_error = ""
+    change_detected_this_poll = False
     try:
         from features.product_launch.ff_masters import fetch_hub_mapping_snapshot
 
@@ -400,6 +463,7 @@ def _poll_hub_mapping_once() -> None:
             logger.debug("[HubMappingWatcher] Hub_Mapping sheet is empty or unreadable — skipping diff")
             return
 
+        rows_fetched = len(new_rows)
         new_hash = _rows_hash(new_rows)
 
         elapsed = round((time.perf_counter() - t0) * 1000)
@@ -409,12 +473,15 @@ def _poll_hub_mapping_once() -> None:
             _hub_mapping_state["last_known_hash"] = new_hash
             _hub_mapping_state["last_known_rows"] = new_rows
             logger.info("[HubMappingWatcher] Baseline snapshot stored — %d rows (%dms)", len(new_rows), elapsed)
+            _log_poll_to_db("hub_mapping", elapsed, rows_fetched, False)
             return
 
         if new_hash == _hub_mapping_state["last_known_hash"]:
             logger.debug("[HubMappingWatcher] No change detected (%dms)", elapsed)
+            _log_poll_to_db("hub_mapping", elapsed, rows_fetched, False)
             return
 
+        change_detected_this_poll = True
         diff = compute_diff(
             _hub_mapping_state["last_known_rows"],
             new_rows,
@@ -468,19 +535,45 @@ def _poll_hub_mapping_once() -> None:
             name="hub-mapping-watcher-email",
         ).start()
 
+        _log_poll_to_db("hub_mapping", elapsed, rows_fetched, True)
+
     except Exception as exc:
         elapsed = round((time.perf_counter() - t0) * 1000)
+        poll_error = str(exc)
         logger.warning("[HubMappingWatcher] Poll failed in %dms: %s", elapsed, exc)
+        _log_poll_to_db("hub_mapping", elapsed, rows_fetched, False, error=poll_error)
 
 
 def _send_hub_mapping_change_email(version_entry: dict) -> None:
-    """Fire email notification for a detected Hub_Mapping change."""
+    """Fire email notification for a detected Hub_Mapping change and persist the outcome to DB."""
+    version_id = version_entry.get("version_id", "")
     try:
         from core.shared.workflow_notifications import notify_hub_mapping_changed
 
-        notify_hub_mapping_changed(version_entry)
+        result = notify_hub_mapping_changed(version_entry)
+        if result.sent:
+            email_status = "sent"
+        elif result.skipped:
+            email_status = "skipped"
+        else:
+            email_status = "failed"
+        email_detail = result.detail or ""
+        logger.info(
+            "[HubMappingWatcher] Email outcome for %s: %s — %s",
+            version_id, email_status, email_detail or "(no detail)",
+        )
     except Exception as exc:
-        logger.error("[HubMappingWatcher] Email send failed: %s", exc)
+        email_status = "failed"
+        email_detail = str(exc)
+        logger.error("[HubMappingWatcher] Email send raised exception for %s: %s", version_id, exc)
+
+    # Always write outcome back to DB
+    if version_id:
+        try:
+            from core.database.engine import get_shared_database
+            get_shared_database().update_hub_mapping_email_status(version_id, email_status, email_detail)
+        except Exception as db_exc:
+            logger.error("[HubMappingWatcher] Failed to persist email outcome for %s: %s", version_id, db_exc)
 
 
 def _poll_hub_mapping_loop(interval_seconds: int) -> None:
