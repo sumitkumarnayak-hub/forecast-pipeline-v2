@@ -51,6 +51,12 @@ _hub_mapping_state: dict[str, Any] = {
 _MAX_HISTORY = 20
 _KEY_COLS = ("hub_name", "source_hub", "Hub_name", "Source_Hub")  # case-insensitive fallback
 
+# Log a no-change/no-error heartbeat only every Nth poll to reduce DB row growth.
+# Change events and errors are always logged unconditionally.
+_LOG_EVERY_N_POLLS = 10
+_ff_input_poll_count = 0
+_hub_mapping_poll_count = 0
+
 # ── Row key resolution ─────────────────────────────────────────────────────────
 
 def _row_key(row: dict, headers: list[str]) -> str:
@@ -240,6 +246,8 @@ def _log_poll_to_db(
 
 def _poll_once() -> None:
     """Single poll: fetch FF Input, compare hash, emit diff + email on change."""
+    global _ff_input_poll_count
+    _ff_input_poll_count += 1
     t0 = time.perf_counter()
     rows_fetched = 0
     poll_error = ""
@@ -287,7 +295,10 @@ def _poll_once() -> None:
 
         if new_hash == _state["last_known_hash"]:
             logger.debug("[FFWatcher] No change detected (%dms)", elapsed)
-            _log_poll_to_db("ff_input", elapsed, rows_fetched, False)
+            # Only write a sampled heartbeat every N polls to limit DB row growth.
+            # Change events are always logged unconditionally below.
+            if _ff_input_poll_count % _LOG_EVERY_N_POLLS == 0:
+                _log_poll_to_db("ff_input", elapsed, rows_fetched, False)
             return
 
         # ── Change detected ────────────────────────────────────────────────────
@@ -450,6 +461,8 @@ def dismiss_hub_mapping_changes() -> None:
 
 def _poll_hub_mapping_once() -> None:
     """Single poll: fetch FF Automation Hub_Mapping, compare hash, emit diff + email on change."""
+    global _hub_mapping_poll_count
+    _hub_mapping_poll_count += 1
     t0 = time.perf_counter()
     rows_fetched = 0
     poll_error = ""
@@ -478,7 +491,9 @@ def _poll_hub_mapping_once() -> None:
 
         if new_hash == _hub_mapping_state["last_known_hash"]:
             logger.debug("[HubMappingWatcher] No change detected (%dms)", elapsed)
-            _log_poll_to_db("hub_mapping", elapsed, rows_fetched, False)
+            # Only write a sampled heartbeat every N polls to limit DB row growth.
+            if _hub_mapping_poll_count % _LOG_EVERY_N_POLLS == 0:
+                _log_poll_to_db("hub_mapping", elapsed, rows_fetched, False)
             return
 
         change_detected_this_poll = True

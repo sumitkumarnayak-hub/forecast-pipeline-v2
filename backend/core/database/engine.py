@@ -2562,8 +2562,19 @@ class Database:
                         "error": error or "",
                     },
                 )
-                # Trim to last 500 rows (SQLite) to prevent unbounded growth
-                if self.backend != "postgresql":
+                # Prune old rows to prevent unbounded growth.
+                # PostgreSQL (Supabase): keep last 3 days per watcher type.
+                # SQLite: keep last 500 rows total.
+                if self.backend == "postgresql":
+                    conn.execute(
+                        text("""
+                            DELETE FROM watcher_poll_log
+                            WHERE watcher_type = :wt
+                              AND polled_at < NOW() - INTERVAL '3 days'
+                        """),
+                        {"wt": watcher_type},
+                    )
+                else:
                     conn.execute(text("""
                         DELETE FROM watcher_poll_log
                         WHERE id NOT IN (
