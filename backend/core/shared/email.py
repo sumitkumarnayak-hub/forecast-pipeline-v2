@@ -413,6 +413,9 @@ def send_to_addresses(
     Returns {"ok": bool, "status": str, "recipients": list, "log_id": int|None, "error": str}
     """
     db = db or Database()
+    import os
+    if os.getenv("APP_ENV", "").strip().lower() == "development":
+        recipients = ["sumitkumar.nayak@licious.com"]
     clean = list(dict.fromkeys(
         e.strip().lower() for e in recipients if e and "@" in str(e).strip()
     ))

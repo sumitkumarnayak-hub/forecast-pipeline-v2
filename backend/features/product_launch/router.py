@@ -1211,7 +1211,13 @@ def wizard_preview_sync(
             city_rows = []
 
         if body.sub_type == "Replacement":
-            target_worksheets = ["product_replacement"]
+            if body.plan_level == "city":
+                target_worksheets = ["product_replacement", "City_Plan", "Hub_Plan"]
+            elif body.plan_level == "hub":
+                target_worksheets = ["product_replacement", "Hub_Plan"]
+            else:
+                has_hubs = any(str(r.get("hub_name", "")).strip() for r in hub_rows)
+                target_worksheets = ["product_replacement", "Hub_Plan"] if has_hubs else ["product_replacement", "City_Plan"]
         elif body.plan_level == "city":
             target_worksheets = ["City_Plan", "Hub_Plan"]
         elif body.plan_level == "hub":
@@ -1242,7 +1248,7 @@ def wizard_preview_sync(
 
         hub_plan_rows: list[dict] = []
         hub_plan_columns: list[str] = []
-        if len(target_worksheets) > 1 and target_worksheets[1] == "Hub_Plan":
+        if "Hub_Plan" in target_worksheets and target_worksheets[0] != "Hub_Plan":
             _, hub_plan_columns, hub_plan_rows, _ = _prepare_plan_worksheet_rows(
                 "Hub_Plan",
                 hub_rows,
@@ -1325,7 +1331,13 @@ def wizard_submit(
 
         # 1.2 Append to City_Plan / Hub_Plan (city plan → both sheets with salience split)
         if body.sub_type == "Replacement":
-            target_worksheets = ["product_replacement"]
+            if body.plan_level == "city":
+                target_worksheets = ["product_replacement", "City_Plan", "Hub_Plan"]
+            elif body.plan_level == "hub":
+                target_worksheets = ["product_replacement", "Hub_Plan"]
+            else:
+                has_hubs = any(str(r.get("hub_name", "")).strip() for r in hub_rows)
+                target_worksheets = ["product_replacement", "Hub_Plan"] if has_hubs else ["product_replacement", "City_Plan"]
         elif body.plan_level == "city":
             target_worksheets = ["City_Plan", "Hub_Plan"]
         elif body.plan_level == "hub":
@@ -1377,9 +1389,9 @@ def wizard_submit(
                     worksheet,
                 )
 
-                # Mirror the exact same Hub_Plan rows into NPL(Forecast), melted
+                # Mirror the exact same Hub_Plan / product_replacement rows into NPL(Forecast), melted
                 # into long format (one row per city/hub/product/day).
-                if worksheet == "Hub_Plan":
+                if worksheet in ("Hub_Plan", "product_replacement"):
                     try:
                         from features.product_launch.core import append_npl_forecast_rows
 
@@ -1389,7 +1401,7 @@ def wizard_submit(
                             forecast_rows_written,
                         )
                     except Exception:
-                        logger.exception("[NPL] Failed to mirror Hub_Plan rows to NPL(Forecast)")
+                        logger.exception("[NPL] Failed to mirror Hub_Plan / product_replacement rows to NPL(Forecast)")
 
         # 1.3 Submission already written as Approved — no full-sheet status rewrite needed
 
@@ -2391,6 +2403,12 @@ def _build_city_plan_row_dynamic(source: dict, headers: list[str], update_date: 
             row.append(source.get("Timestamp", ""))
         elif h_norm == "submitted by":
             row.append(source.get("Submitted_By", ""))
+        elif h_norm == "old product id":
+            row.append(source.get("old_product_id", ""))
+        elif h_norm == "old product name":
+            row.append(source.get("old_product_name", ""))
+        elif h_norm == "replacement percentage":
+            row.append(source.get("replacement_percentage", ""))
         else:
             row.append("")
     return row
@@ -2652,6 +2670,12 @@ def _build_hub_plan_row_dynamic(source: dict, headers: list[str], update_date: s
             row.append(source.get("Timestamp", ""))
         elif h_norm == "submitted by":
             row.append(source.get("Submitted_By", ""))
+        elif h_norm == "old product id":
+            row.append(source.get("old_product_id", ""))
+        elif h_norm == "old product name":
+            row.append(source.get("old_product_name", ""))
+        elif h_norm == "replacement percentage":
+            row.append(source.get("replacement_percentage", ""))
         else:
             row.append("")
     return row

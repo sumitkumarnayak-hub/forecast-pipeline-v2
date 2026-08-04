@@ -1236,6 +1236,8 @@ def build_city_template(cities: list, category: str,
                 row[col] = replacement_percentage
             elif col in WEEKDAYS:
                 row[col] = 0
+            elif col in ["Meat Ratio", "Meat Ratio (for VA)"] and sub_type == "Replacement":
+                row[col] = "NA"
             else:
                 row[col] = ""
         rows.append(row)
@@ -1286,6 +1288,8 @@ def build_hub_template(cities_hubs: dict, category: str,
                     row[col] = replacement_percentage
                 elif col in WEEKDAYS:
                     row[col] = 0
+                elif col in ["Meat Ratio", "Meat Ratio (for VA)"] and sub_type == "Replacement":
+                    row[col] = "NA"
                 else:
                     row[col] = ""
             rows.append(row)
@@ -2245,6 +2249,15 @@ def build_npl_forecast_rows(hub_rows: list[dict]) -> pd.DataFrame:
     for col in id_cols:
         if col not in df.columns:
             df[col] = ""
+
+    # Ensure Anchor ID is filled
+    if "Anchor ID" in df.columns and "Product_id" in df.columns:
+        df["Anchor ID"] = df["Anchor ID"].fillna("").astype(str).str.strip()
+        # If Anchor ID is empty, fallback to Product_id
+        df["Anchor ID"] = df.apply(
+            lambda r: str(r["Anchor ID"]) if str(r["Anchor ID"]) else str(r["Product_id"]).strip(),
+            axis=1
+        )
 
     day_cols = [d for d in WEEKDAYS if d in df.columns]
     if not day_cols:
