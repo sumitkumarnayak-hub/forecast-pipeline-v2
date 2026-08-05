@@ -252,50 +252,75 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
     ? headers
     : ['city_name', 'Type', 'Hub_name', 'Hub_id', 'Source_Hub', 'Percentage', 'Start_date', 'End_date'];
 
-  const [form, setForm] = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {};
-    finalHeaders.forEach(h => {
-      if (h.toLowerCase() === "type") {
-        init[h] = "New Hub Launch";
-      } else {
-        init[h] = "";
-      }
-    });
-    return init;
+  const cityKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "cityname") || "city_name";
+  const typeKey = finalHeaders.find(h => h.toLowerCase() === "type") || "Type";
+  const pctKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "percentage") || "Percentage";
+  const startDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "startdate") || "Start_date";
+  const endDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "enddate") || "End_date";
+
+  const hubNameKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "hubname") || "Hub_name";
+  const hubIdKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "hubid") || "Hub_id";
+  const sourceHubKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "sourcehub") || "Source_Hub";
+
+  // Filter out the hub-specific fields from commonHeaders
+  const commonHeaders = finalHeaders.filter(h => {
+    const norm = h.toLowerCase().replace(/[\s_]/g, "");
+    return !["hubname", "hubid", "sourcehub"].includes(norm);
   });
+
+  const [form, setForm] = useState<Record<string, string>>(() => {
+    return {
+      [cityKey]: "",
+      [typeKey]: "New Hub",
+      [pctKey]: "",
+      [startDateKey]: "",
+      [endDateKey]: "",
+    };
+  });
+
+  const [hubs, setHubs] = useState<Array<Record<string, string>>>(() => [
+    {
+      [hubNameKey]: "",
+      [hubIdKey]: "",
+      [sourceHubKey]: "",
+    }
+  ]);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const startDateVal = form[startDateKey]?.trim() ?? "";
+  const endDateVal = form[endDateKey]?.trim() ?? "";
+  const isDatesEqual = startDateVal && endDateVal && startDateVal === endDateVal;
+  const areDatesDifferent = startDateVal && endDateVal && startDateVal !== endDateVal;
+
+  // Auto-truncate back to 1 hub configuration if dates are no longer equal
+  useEffect(() => {
+    if (!isDatesEqual && hubs.length > 1) {
+      setHubs(prev => prev.slice(0, 1));
+    }
+  }, [isDatesEqual, hubs.length]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Basic client-side validation
-    for (const h of finalHeaders) {
+    // 1. Validate common fields
+    for (const h of commonHeaders) {
       const val = form[h]?.trim() ?? "";
       const hLower = h.toLowerCase();
       if (!val) {
         setError(`"${h}" is required.`);
         return;
       }
-      if (hLower === "percentage") {
+      if (hLower === "percentage" || hLower === "percent") {
         const pct = parseFloat(val);
         if (isNaN(pct) || pct < 0 || pct > 1) {
           setError('"Percentage" must be a number between 0 and 1 (e.g. 0.5 or 0.001).');
           return;
         }
       }
-      if (hLower === "hub_id" || hLower === "hubid" || hLower === "hub id") {
-        if (!/^\d+$/.test(val)) {
-          setError('Hub ID must contain numbers only.');
-          return;
-        }
-      }
     }
 
-    const startDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "startdate") || "";
-    const endDateKey = finalHeaders.find(h => h.toLowerCase().replace(/[\s_]/g, "") === "enddate") || "";
-    const startDateVal = form[startDateKey]?.trim() ?? "";
-    const endDateVal = form[endDateKey]?.trim() ?? "";
     if (startDateVal && endDateVal) {
       if (new Date(startDateVal) > new Date(endDateVal)) {
         setError("Start Date must be less than or equal to End Date.");
@@ -303,15 +328,59 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
       }
     }
 
+    // 2. Validate hubs list
+    for (let i = 0; i < hubs.length; i++) {
+      const hub = hubs[i];
+      const hName = hub[hubNameKey]?.trim() ?? "";
+      const hId = hub[hubIdKey]?.trim() ?? "";
+      const sHub = hub[sourceHubKey]?.trim() ?? "";
+
+      if (!hName) {
+        setError(`Hub Name is required (entry ${i + 1}).`);
+        return;
+      }
+      if (!hId) {
+        setError(`Hub ID is required (entry ${i + 1}).`);
+        return;
+      }
+      if (!/^\d+$/.test(hId)) {
+        setError(`Hub ID must contain numbers only (entry ${i + 1}).`);
+        return;
+      }
+      if (!sHub) {
+        setError(`Source Hub is required (entry ${i + 1}).`);
+        return;
+      }
+    }
+
+    // Safeguard check
+    if (!isDatesEqual && hubs.length > 1) {
+      setError("Multiple hubs can only be added when Start Date and End Date are identical.");
+      return;
+    }
+
     setError("");
     setSubmitting(true);
     try {
-      await api.post("/api/new-product-launch/sync-new-hub/ff-input/append", { row: form });
+      // Loop over hubs and append them sequentially (1 row for each hub)
+      for (const hub of hubs) {
+        const rowData = {
+          [cityKey]: form[cityKey],
+          [typeKey]: form[typeKey],
+          [pctKey]: form[pctKey],
+          [startDateKey]: form[startDateKey],
+          [endDateKey]: form[endDateKey],
+          [hubNameKey]: hub[hubNameKey],
+          [hubIdKey]: hub[hubIdKey],
+          [sourceHubKey]: hub[sourceHubKey],
+        };
+        await api.post("/api/new-product-launch/sync-new-hub/ff-input/append", { row: rowData });
+      }
       onSuccess();
       onClose();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } } };
-      setError(e?.response?.data?.detail || "Failed to add hub. Please try again.");
+      setError(e?.response?.data?.detail || "Failed to add hub(s). Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -365,7 +434,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
           </div>
           <div style={{ flex: 1 }}>
             <h3 style={{ margin: 0, fontWeight: 600, fontSize: "0.95rem", color: "#0f172a" }}>Add New Hub Config</h3>
-            <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>Append a validated row to the FF Input sheet</p>
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>Append validated rows to the FF Input sheet</p>
           </div>
           <button
             type="button"
@@ -403,14 +472,14 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
               </div>
             )}
             
+            {/* Common Fields */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
-              {finalHeaders.map(header => {
-                const isTypeField = header.toLowerCase() === "type";
-                const isFullWidth = ["hub_name", "source_hub"].includes(header.toLowerCase());
+              {commonHeaders.map(header => {
+                const isTypeField = header === typeKey;
                 const type = getInputType(header);
                 
                 return (
-                  <div key={header} style={{ gridColumn: isFullWidth ? "span 2" : "auto" }}>
+                  <div key={header}>
                     <label style={{
                       display: "flex", alignItems: "center", gap: 4,
                       fontSize: "0.75rem", fontWeight: 600,
@@ -423,7 +492,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                     
                     {isTypeField ? (
                       <select
-                        value={form[header] ?? "New Hub Launch"}
+                        value={form[header] ?? "New Hub"}
                         onChange={e => setForm(prev => ({ ...prev, [header]: e.target.value }))}
                         className="form-input"
                         style={{
@@ -433,7 +502,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                           outline: "none"
                         }}
                       >
-                        <option value="New Hub Launch">New Hub Launch</option>
+                        <option value="New Hub">New Hub</option>
                         <option value="KML Remapping">KML Remapping</option>
                       </select>
                     ) : (
@@ -467,6 +536,178 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                 );
               })}
             </div>
+
+            {/* Hub identity list (with Add More button unlocked only when start date == end date) */}
+            <div style={{
+              borderTop: "1px dashed #cbd5e1",
+              paddingTop: "1.25rem",
+              marginTop: "0.5rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem"
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h4 style={{ margin: 0, fontSize: "0.85rem", fontWeight: 600, color: "#334155" }}>
+                  Hub Settings {hubs.length > 1 && `(${hubs.length})`}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isDatesEqual) {
+                      setError("To add multiple hubs, Start and End dates must be the same.");
+                      return;
+                    }
+                    setError("");
+                    setHubs(prev => [...prev, { [hubNameKey]: "", [hubIdKey]: "", [sourceHubKey]: "" }]);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    padding: "6px 12px",
+                    borderRadius: "6px",
+                    border: "1px solid #7c3aed",
+                    background: "rgba(124, 58, 237, 0.05)",
+                    color: "#7c3aed",
+                    cursor: "pointer",
+                    transition: "all 0.15s"
+                  }}
+                >
+                  <Plus size={12} />
+                  Add More Hubs
+                </button>
+              </div>
+
+              {areDatesDifferent && (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: "0.72rem",
+                  color: "#b45309",
+                  background: "#fffbeb",
+                  border: "1px solid #fde68a",
+                  padding: "0.5rem 0.75rem",
+                  borderRadius: "6px"
+                }}>
+                  <AlertTriangle size={14} style={{ color: "#d97706", flexShrink: 0 }} />
+                  <span>To add multiple hubs, Start and End dates must be the same.</span>
+                </div>
+              )}
+
+              {hubs.map((hub, index) => (
+                <div key={index} style={{
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                  padding: "0.75rem",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.75rem",
+                  position: "relative"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>
+                      Hub #{index + 1}
+                    </span>
+                    {hubs.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setHubs(prev => prev.filter((_, idx) => idx !== index))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "#ef4444",
+                          padding: "2px",
+                          display: "flex",
+                          alignItems: "center",
+                          borderRadius: "4px"
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#fee2e2"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                    {/* Hub Name */}
+                    <div style={{ gridColumn: "span 2" }}>
+                      <label style={{ fontSize: "0.7rem", fontWeight: 600, color: "#475569", display: "block", marginBottom: "0.25rem" }}>
+                        Hub Name <span style={{ color: "#ef4444" }}>*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hub[hubNameKey] ?? ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setHubs(prev => prev.map((h, idx) => idx === index ? { ...h, [hubNameKey]: val } : h));
+                        }}
+                        placeholder="e.g. AGC"
+                        className="form-input"
+                        style={{
+                          width: "100%", boxSizing: "border-box", fontSize: "0.8rem",
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    {/* Hub ID */}
+                    <div>
+                      <label style={{ fontSize: "0.7rem", fontWeight: 600, color: "#475569", display: "block", marginBottom: "0.25rem" }}>
+                        Hub ID <span style={{ color: "#ef4444" }}>*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={hub[hubIdKey] ?? ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setHubs(prev => prev.map((h, idx) => idx === index ? { ...h, [hubIdKey]: val } : h));
+                        }}
+                        placeholder="e.g. 2606"
+                        className="form-input"
+                        style={{
+                          width: "100%", boxSizing: "border-box", fontSize: "0.8rem",
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    {/* Source Hub */}
+                    <div>
+                      <label style={{ fontSize: "0.7rem", fontWeight: 600, color: "#475569", display: "block", marginBottom: "0.25rem" }}>
+                        Source Hub <span style={{ color: "#ef4444" }}>*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hub[sourceHubKey] ?? ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setHubs(prev => prev.map((h, idx) => idx === index ? { ...h, [sourceHubKey]: val } : h));
+                        }}
+                        placeholder="e.g. NGC"
+                        className="form-input"
+                        style={{
+                          width: "100%", boxSizing: "border-box", fontSize: "0.8rem",
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
           </div>
 
           {/* Footer */}
