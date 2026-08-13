@@ -303,6 +303,15 @@ def _poll_once() -> None:
 
         # ── Change detected ────────────────────────────────────────────────────
         change_detected_this_poll = True
+        try:
+            from core.shared import sheets_cache as _sheets_cache
+            cache_path = _sheets_cache.cache_path_for_category("new_hub_launch", "ff_input", "A:H")
+            if cache_path.exists():
+                cache_path.unlink()
+                logger.info("[FFWatcher] Stale cache path unlinked successfully.")
+        except Exception as e:
+            logger.warning("[FFWatcher] Failed to delete cache file on change: %s", e)
+
         diff = compute_diff(_state["last_known_rows"], new_rows, headers)
         summary = _diff_summary(diff)
         detected_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -497,6 +506,13 @@ def _poll_hub_mapping_once() -> None:
             return
 
         change_detected_this_poll = True
+        try:
+            from features.product_launch.ff_masters import invalidate_hub_mapping_cache
+            invalidate_hub_mapping_cache()
+            logger.info("[HubMappingWatcher] Stale Hub_Mapping cache path unlinked successfully.")
+        except Exception as e:
+            logger.warning("[HubMappingWatcher] Failed to delete cache file on change: %s", e)
+
         diff = compute_diff(
             _hub_mapping_state["last_known_rows"],
             new_rows,

@@ -96,12 +96,12 @@ export const SIDEBAR_NAV: NavEntry[] = [
     roles: ["admin", "planner"],
   },
   {
-    type: "group",
-    id: "manual-baseline",
-    label: "Manual Baseline",
-    caption: "Follow steps 1 → 4",
+    type: "link",
+    id: "configure",
+    label: "Configure Parameters",
+    href: "/baseline/configure",
+    icon: SlidersHorizontal,
     roles: ["admin", "planner"],
-    children: MANUAL_BASELINE_STEPS,
   },
   {
     type: "link",

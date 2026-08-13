@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import BaselineStepShell from "@/components/baseline/BaselineStepShell";
+import AppShell from "@/components/layout/AppShell";
 import SectionCard from "@/components/baseline/SectionCard";
 import api from "@/lib/api";
 import { useCachedQuery } from "@/hooks/useCachedQuery";
@@ -317,15 +317,9 @@ function BaseSheetsSection() {
    CONFIGURE PARAMETERS — main content
    ════════════════════════════════════════════════════════════════════════════ */
 
-const CONFIGURE_TABS = [
-  { id: "params", label: "Pipeline Parameters" },
-  { id: "base-sheets", label: "Base Sheet Sync" },
-] as const;
-type ConfigTab = typeof CONFIGURE_TABS[number]["id"];
 
 function ConfigureContent() {
   const { readOnly } = useAuth();
-  const [activeTab, setActiveTab] = useState<ConfigTab>("params");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -509,66 +503,33 @@ function ConfigureContent() {
 
   if (!mounted) {
     return (
-      <BaselineStepShell
-        stepId="configure"
+      <AppShell
+        title="Configure Parameters"
+        subtitle="Base sheet sync, pipeline toggles and DP Logics worksheet sync"
         actions={
           <button type="button" className="btn btn-secondary btn-sm" disabled>
             <RefreshCw size={13} /> Refresh
           </button>
         }
       >
-        <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl mb-5 w-fit">
-          {CONFIGURE_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all duration-150
-                ${activeTab === tab.id
-                  ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
-                  : "text-slate-500 dark:text-slate-400"
-                }`}
-              disabled
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
         <SectionCard title="Edit Parameters" description="Saved to Pipeline Params Google Sheet.">
           <span className="spinner" />
         </SectionCard>
-      </BaselineStepShell>
+      </AppShell>
     );
   }
 
   return (
-    <BaselineStepShell
-      stepId="configure"
+    <AppShell
+      title="Configure Parameters"
+      subtitle="Base sheet sync, pipeline toggles and DP Logics worksheet sync"
       actions={
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => load(true)} disabled={loading || refreshing}>
           <RefreshCw size={13} className={loading || refreshing ? "animate-spin" : ""} /> Refresh
         </button>
       }
     >
-      {/* Tab switcher */}
-      <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl mb-5 w-fit">
-        {CONFIGURE_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-all duration-150
-              ${activeTab === tab.id
-                ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm"
-                : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
-              }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
       {/* ── Pipeline Parameters tab ───────────────────────────────────────── */}
-      {activeTab === "params" && (
         <>
           {msg.text && <div className={`alert alert-${msg.type} mb-4`}>{msg.text}</div>}
 
@@ -821,12 +782,8 @@ function ConfigureContent() {
             )}
           </SectionCard>
         </>
-      )}
-
-      {/* ── Base Sheet Sync tab ───────────────────────────────────────────── */}
-      {activeTab === "base-sheets" && <BaseSheetsSection />}
-    </BaselineStepShell>
-  );
+      </AppShell>
+    );
 }
 
 export default function ConfigurePage() {

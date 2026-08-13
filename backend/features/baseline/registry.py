@@ -64,12 +64,6 @@ CONFIG_MASTERS_GROUPS: dict[str, list[dict]] = {
             "url": "https://docs.google.com/spreadsheets/d/1KtX8cxaBjc4tq6Gz1_BxSBS1FyIAc43ZRbFwlfHtQ4k/edit?gid=1177650883#gid=1177650883",
             "tab_name": "Percentile",
         },
-        {
-            "key": "Avl_Flag",
-            "label": "Availability Loss Flag",
-            "url": "https://docs.google.com/spreadsheets/d/19-s1HaHtiJj7Ko65A88yxxS9SMpZGecfw9dSfXk-jqA/edit?gid=1946014559#gid=1946014559",
-            "tab_name": "P Master",
-        },
     ]
 }
 # =============================================================================

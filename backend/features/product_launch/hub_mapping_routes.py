@@ -159,7 +159,7 @@ def portal_sheet_last_update(
     sheet_key: str,
     fetch_actual_drive_last_update,
 ) -> dict:
-    """Return last update; portal append audit log (logged-in user) takes precedence over Drive metadata."""
+    """Return last update; portal append audit log (logged-in user) takes precedence over Drive metadata if newer."""
     from core.database.engine import get_shared_database
 
     db = get_shared_database()
@@ -172,14 +172,36 @@ def portal_sheet_last_update(
                 .first()
             )
 
-        if db_entry and db_entry.user_id:
+        drive = fetch_actual_drive_last_update(sheet_key)
+
+        db_ts = db_entry.ts if (db_entry and db_entry.ts) else None
+        drive_ts = None
+        if drive.get("ts"):
+            try:
+                dt_str = drive["ts"].replace("Z", "+00:00")
+                drive_ts = datetime.fromisoformat(dt_str)
+            except Exception:
+                pass
+
+        if db_ts and drive_ts:
+            if db_ts.tzinfo is not None and drive_ts.tzinfo is None:
+                drive_ts = drive_ts.replace(tzinfo=db_ts.tzinfo)
+            elif db_ts.tzinfo is None and drive_ts.tzinfo is not None:
+                db_ts = db_ts.replace(tzinfo=drive_ts.tzinfo)
+
+            if db_ts >= drive_ts:
+                return {
+                    "ts": db_entry.ts.isoformat() if db_entry.ts else None,
+                    "user_id": db_entry.user_id,
+                }
+            else:
+                return drive
+        elif db_entry and db_entry.user_id:
             return {
                 "ts": db_entry.ts.isoformat() if db_entry.ts else None,
                 "user_id": db_entry.user_id,
             }
-
-        drive = fetch_actual_drive_last_update(sheet_key)
-        if drive.get("ts") or drive.get("user_id"):
+        elif drive.get("ts") or drive.get("user_id"):
             return drive
         return {"ts": None, "user_id": None}
     except Exception as exc:
