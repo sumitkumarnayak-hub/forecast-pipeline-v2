@@ -17,7 +17,7 @@ from app.config import (
 from core.shared.google_credentials import load_service_account_credentials
 from features.baseline.io import write_dp_logics_parquet_sidecar
 
-from core.utils.dataframe import clean_sheet_df
+from core.utils.dataframe import clean_sheet_df, split_adhoc_adjustment
 
 
 from features.baseline.registry import DP_LOGICS_WORKSHEETS_DICT as DP_LOGICS_WORKSHEETS
@@ -267,16 +267,37 @@ class GoogleSheetsManager:
             if not data or len(data) < 2:
                 missing.append(ws_name)
                 continue
-            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
-            if df.empty:
-                missing.append(ws_name)
-                continue
-            self._persist_dp_logics_table(df, save_path)
-            results[ws_name] = {
-                "status": "synced",
-                "rows": len(df),
-                "source": "google_sheets_batch",
-            }
+            
+            if ws_name == "Adhoc_adjustment":
+                df_raw = pd.DataFrame(data[1:], columns=data[0])
+                df_ad, df_hk = split_adhoc_adjustment(df_raw)
+                if df_ad.empty:
+                    missing.append(ws_name)
+                    continue
+
+                save_path_ad = os.path.join(output_folder, "Adhoc_adjustment.xlsx")
+                self._persist_dp_logics_table(df_ad, save_path_ad)
+
+                if not df_hk.empty:
+                    save_path_hk = os.path.join(output_folder, "Adhoc_adjustment_City_Product.xlsx")
+                    self._persist_dp_logics_table(df_hk, save_path_hk)
+
+                results[ws_name] = {
+                    "status": "synced",
+                    "rows": len(df_ad) + len(df_hk),
+                    "source": "google_sheets_batch",
+                }
+            else:
+                df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                if df.empty:
+                    missing.append(ws_name)
+                    continue
+                self._persist_dp_logics_table(df, save_path)
+                results[ws_name] = {
+                    "status": "synced",
+                    "rows": len(df),
+                    "source": "google_sheets_batch",
+                }
 
         for ws_name in worksheet_names:
             if ws_name in results:
@@ -326,33 +347,76 @@ class GoogleSheetsManager:
             save_path = os.path.join(output_folder, f"{ws_name}.xlsx")
             synced = False
 
-            mapping = DP_LOGICS_WORKSHEETS.get(ws_name)
-            if mapping:
-                category, key = mapping
-                df = self.read_worksheet_uncached(category, key)
-                if df is not None and not df.empty:
-                    self._persist_dp_logics_table(df, save_path)
-                    results[ws_name] = {
-                        "status": "synced",
-                        "rows": len(df),
-                        "source": "google_sheets",
-                    }
-                    synced = True
+            if ws_name == "Adhoc_adjustment":
+                mapping = DP_LOGICS_WORKSHEETS.get(ws_name)
+                if mapping:
+                    category, key = mapping
+                    df_raw = self.read_worksheet_uncached(category, key)
+                    if df_raw is not None and not df_raw.empty:
+                        df_ad, df_hk = split_adhoc_adjustment(df_raw)
+                        if not df_ad.empty:
+                            save_path_ad = os.path.join(output_folder, "Adhoc_adjustment.xlsx")
+                            self._persist_dp_logics_table(df_ad, save_path_ad)
+                            if not df_hk.empty:
+                                save_path_hk = os.path.join(output_folder, "Adhoc_adjustment_City_Product.xlsx")
+                                self._persist_dp_logics_table(df_hk, save_path_hk)
+                            
+                            results[ws_name] = {
+                                "status": "synced",
+                                "rows": len(df_ad) + len(df_hk),
+                                "source": "google_sheets",
+                            }
+                            synced = True
 
-            if not synced:
-                try:
-                    ws = self.gc.open_by_url(DP_LOGICS_SHEET_URL).worksheet(ws_name)
-                    df = self._worksheet_data_to_df(ws)
+                if not synced:
+                    try:
+                        ws = self.gc.open_by_url(DP_LOGICS_SHEET_URL).worksheet(ws_name)
+                        df_raw = self._worksheet_data_to_df(ws)
+                        if df_raw is not None and not df_raw.empty:
+                            df_ad, df_hk = split_adhoc_adjustment(df_raw)
+                            if not df_ad.empty:
+                                save_path_ad = os.path.join(output_folder, "Adhoc_adjustment.xlsx")
+                                self._persist_dp_logics_table(df_ad, save_path_ad)
+                                if not df_hk.empty:
+                                    save_path_hk = os.path.join(output_folder, "Adhoc_adjustment_City_Product.xlsx")
+                                    self._persist_dp_logics_table(df_hk, save_path_hk)
+                                
+                                results[ws_name] = {
+                                    "status": "synced",
+                                    "rows": len(df_ad) + len(df_hk),
+                                    "source": "dp_logics_url",
+                                }
+                                synced = True
+                    except Exception:
+                        pass
+            else:
+                mapping = DP_LOGICS_WORKSHEETS.get(ws_name)
+                if mapping:
+                    category, key = mapping
+                    df = self.read_worksheet_uncached(category, key)
                     if df is not None and not df.empty:
                         self._persist_dp_logics_table(df, save_path)
                         results[ws_name] = {
                             "status": "synced",
                             "rows": len(df),
-                            "source": "dp_logics_url",
+                            "source": "google_sheets",
                         }
                         synced = True
-                except Exception:
-                    pass
+
+                if not synced:
+                    try:
+                        ws = self.gc.open_by_url(DP_LOGICS_SHEET_URL).worksheet(ws_name)
+                        df = self._worksheet_data_to_df(ws)
+                        if df is not None and not df.empty:
+                            self._persist_dp_logics_table(df, save_path)
+                            results[ws_name] = {
+                                "status": "synced",
+                                "rows": len(df),
+                                "source": "dp_logics_url",
+                            }
+                            synced = True
+                    except Exception:
+                        pass
 
             if not synced and allow_local_fallback and os.path.exists(save_path):
                 try:

@@ -32,6 +32,11 @@ def registered_artifacts() -> list[tuple[str, str]]:
         specs.append((f"dp_logics/{ws}.xlsx", str((Path(cfg.DP_LOGICS_FOLDER) / f"{ws}.xlsx").resolve())))
         specs.append((f"dp_logics/{ws}.parquet", str((Path(cfg.DP_LOGICS_FOLDER) / f"{ws}.parquet").resolve())))
 
+    # Register the split Adhoc adjustment city-product files since they are synced as a sub-table
+    specs.append(("dp_logics/Adhoc_adjustment_City_Product.xlsx", str((Path(cfg.DP_LOGICS_FOLDER) / "Adhoc_adjustment_City_Product.xlsx").resolve())))
+    specs.append(("dp_logics/Adhoc_adjustment_City_Product.parquet", str((Path(cfg.DP_LOGICS_FOLDER) / "Adhoc_adjustment_City_Product.parquet").resolve())))
+
+
     for name in (
         "active_dataset.parquet",
         "active_dataset_meta.json",

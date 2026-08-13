@@ -64,6 +64,12 @@ CONFIG_MASTERS_GROUPS: dict[str, list[dict]] = {
             "url": "https://docs.google.com/spreadsheets/d/1KtX8cxaBjc4tq6Gz1_BxSBS1FyIAc43ZRbFwlfHtQ4k/edit?gid=1177650883#gid=1177650883",
             "tab_name": "Percentile",
         },
+        {
+            "key": "Adhoc_adjustment",
+            "label": "Adhoc Adjustment",
+            "url": "https://docs.google.com/spreadsheets/d/1KtX8cxaBjc4tq6Gz1_BxSBS1FyIAc43ZRbFwlfHtQ4k/edit?gid=185650784#gid=185650784",
+            "tab_name": "Adhoc Adjustment",
+        },
     ]
 }
 # =============================================================================

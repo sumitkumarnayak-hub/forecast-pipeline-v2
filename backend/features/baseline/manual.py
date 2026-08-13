@@ -26,7 +26,7 @@ from app.config import (
     PROJECT_ROOT,
     RAW_ACTUALS_FOLDER,
 )
-from core.utils.dataframe import df_to_records, sanitize_for_json, clean_sheet_df
+from core.utils.dataframe import df_to_records, sanitize_for_json, clean_sheet_df, split_adhoc_adjustment
 
 from core.database.engine import Database
 
@@ -509,25 +509,52 @@ def sync_dp_logics(user_id: int) -> dict[str, Any]:
             data = ws.get_all_values()
             if not data or len(data) < 2:
                 continue
-            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
-            if df.empty:
-                continue
             
-            save_path = os.path.join(DP_LOGICS_FOLDER, f"{ws_name}.xlsx")
-            gsm._persist_dp_logics_table(df, save_path)
+            if ws_name == "Adhoc_adjustment":
+                df_raw = pd.DataFrame(data[1:], columns=data[0])
+                df_ad, df_hk = split_adhoc_adjustment(df_raw)
+                if df_ad.empty:
+                    continue
 
-            # Upload dated parquet to Google Drive (exactly like base sheets)
-            drive_key = _upload_parquet_to_drive(ws_name, df)
+                save_path_ad = os.path.join(DP_LOGICS_FOLDER, "Adhoc_adjustment.xlsx")
+                gsm._persist_dp_logics_table(df_ad, save_path_ad)
+                drive_key_ad = _upload_parquet_to_drive("Adhoc_adjustment", df_ad)
 
-            sync_results[ws_name] = {
-                "status": "synced",
-                "rows": len(df),
-                "source": "google_sheets_registry_url",
-                "drive_uploaded": True,
-                "drive_key": drive_key
-            }
-            # Create successful audit log
-            _create_config_master_audit_log(ws_name, user_id, len(df), "success")
+                drive_key_hk = None
+                if not df_hk.empty:
+                    save_path_hk = os.path.join(DP_LOGICS_FOLDER, "Adhoc_adjustment_City_Product.xlsx")
+                    gsm._persist_dp_logics_table(df_hk, save_path_hk)
+                    drive_key_hk = _upload_parquet_to_drive("Adhoc_adjustment_City_Product", df_hk)
+
+                sync_results[ws_name] = {
+                    "status": "synced",
+                    "rows": len(df_ad) + len(df_hk),
+                    "source": "google_sheets_registry_url",
+                    "drive_uploaded": True,
+                    "drive_key": drive_key_ad,
+                    "drive_key_city_product": drive_key_hk
+                }
+                _create_config_master_audit_log(ws_name, user_id, len(df_ad) + len(df_hk), "success")
+            else:
+                df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                if df.empty:
+                    continue
+                
+                save_path = os.path.join(DP_LOGICS_FOLDER, f"{ws_name}.xlsx")
+                gsm._persist_dp_logics_table(df, save_path)
+
+                # Upload dated parquet to Google Drive (exactly like base sheets)
+                drive_key = _upload_parquet_to_drive(ws_name, df)
+
+                sync_results[ws_name] = {
+                    "status": "synced",
+                    "rows": len(df),
+                    "source": "google_sheets_registry_url",
+                    "drive_uploaded": True,
+                    "drive_key": drive_key
+                }
+                # Create successful audit log
+                _create_config_master_audit_log(ws_name, user_id, len(df), "success")
         except Exception as exc:
             logger.warning("Failed to sync configuration master '%s': %s", ws_name, exc)
             # Create failed audit log
@@ -573,31 +600,65 @@ def sync_single_dp_logic(worksheet_name: str, user_id: int) -> dict[str, Any]:
         if not data or len(data) < 2:
             raise ValueError(f"Worksheet '{info['label']}' is empty or invalid")
 
-        df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
-        if df.empty:
-            raise ValueError(f"Worksheet '{info['label']}' resolved to empty DataFrame")
+        if worksheet_name == "Adhoc_adjustment":
+            df_raw = pd.DataFrame(data[1:], columns=data[0])
+            df_ad, df_hk = split_adhoc_adjustment(df_raw)
+            if df_ad.empty:
+                raise ValueError(f"Worksheet '{info['label']}' A:D range resolved to empty DataFrame")
 
-        save_path = os.path.join(DP_LOGICS_FOLDER, f"{worksheet_name}.xlsx")
-        gsm._persist_dp_logics_table(df, save_path)
+            save_path_ad = os.path.join(DP_LOGICS_FOLDER, "Adhoc_adjustment.xlsx")
+            gsm._persist_dp_logics_table(df_ad, save_path_ad)
+            drive_key_ad = _upload_parquet_to_drive("Adhoc_adjustment", df_ad)
 
-        # Upload dated parquet to Google Drive (exactly like base sheets)
-        drive_key = _upload_parquet_to_drive(worksheet_name, df)
+            drive_key_hk = None
+            if not df_hk.empty:
+                save_path_hk = os.path.join(DP_LOGICS_FOLDER, "Adhoc_adjustment_City_Product.xlsx")
+                gsm._persist_dp_logics_table(df_hk, save_path_hk)
+                drive_key_hk = _upload_parquet_to_drive("Adhoc_adjustment_City_Product", df_hk)
 
-        sidecars = refresh_all_engine_sidecars(DP_LOGICS_FOLDER, FF_MASTERS_XLSX)
-        
-        _create_config_master_audit_log(worksheet_name, user_id, len(df), "success")
-        return sanitize_for_json({
-            "sync_results": {
-                worksheet_name: {
-                    "status": "synced",
-                    "rows": len(df),
-                    "source": "google_sheets_registry_url",
-                    "drive_uploaded": True,
-                    "drive_key": drive_key
-                }
-            },
-            "sidecars": sidecars
-        })
+            sidecars = refresh_all_engine_sidecars(DP_LOGICS_FOLDER, FF_MASTERS_XLSX)
+            
+            _create_config_master_audit_log(worksheet_name, user_id, len(df_ad) + len(df_hk), "success")
+            return sanitize_for_json({
+                "sync_results": {
+                    worksheet_name: {
+                        "status": "synced",
+                        "rows": len(df_ad),
+                        "rows_city_product": len(df_hk),
+                        "source": "google_sheets_registry_url",
+                        "drive_uploaded": True,
+                        "drive_key": drive_key_ad,
+                        "drive_key_city_product": drive_key_hk
+                    }
+                },
+                "sidecars": sidecars
+            })
+        else:
+            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            if df.empty:
+                raise ValueError(f"Worksheet '{info['label']}' resolved to empty DataFrame")
+
+            save_path = os.path.join(DP_LOGICS_FOLDER, f"{worksheet_name}.xlsx")
+            gsm._persist_dp_logics_table(df, save_path)
+
+            # Upload dated parquet to Google Drive (exactly like base sheets)
+            drive_key = _upload_parquet_to_drive(worksheet_name, df)
+
+            sidecars = refresh_all_engine_sidecars(DP_LOGICS_FOLDER, FF_MASTERS_XLSX)
+            
+            _create_config_master_audit_log(worksheet_name, user_id, len(df), "success")
+            return sanitize_for_json({
+                "sync_results": {
+                    worksheet_name: {
+                        "status": "synced",
+                        "rows": len(df),
+                        "source": "google_sheets_registry_url",
+                        "drive_uploaded": True,
+                        "drive_key": drive_key
+                    }
+                },
+                "sidecars": sidecars
+            })
     except Exception as exc:
         _create_config_master_audit_log(worksheet_name, user_id, 0, "failed")
         raise exc

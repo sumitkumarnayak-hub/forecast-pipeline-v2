@@ -104,3 +104,23 @@ def clean_sheet_df(df: pd.DataFrame, *, drop_blank_rows: bool = True) -> pd.Data
 
     df.attrs["blank_rows_removed"] = blank_rows_removed
     return df
+
+
+def split_adhoc_adjustment(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split the combined Adhoc Adjustment raw dataframe into:
+    - A:D (index 0:4) city x subcat x date level adhoc adjustment
+    - H:K (index 7:11) city x product_id x date level adhoc adjustment
+    Both are cleaned and blank rows are dropped.
+    """
+    # Slice 1: A:D (columns 0 to 4)
+    df_ad_raw = df_raw.iloc[:, 0:4].copy()
+    df_ad = clean_sheet_df(df_ad_raw)
+
+    # Slice 2: H:K (columns 7 to 11)
+    df_hk = pd.DataFrame()
+    if df_raw.shape[1] >= 11:
+        df_hk_raw = df_raw.iloc[:, 7:11].copy()
+        df_hk = clean_sheet_df(df_hk_raw)
+
+    return df_ad, df_hk
