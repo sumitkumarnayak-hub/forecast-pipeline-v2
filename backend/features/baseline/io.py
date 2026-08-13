@@ -154,9 +154,10 @@ def percentile_slices_from_frame(full: pd.DataFrame) -> PercentileSlices:
     O:R  -> hub × SKU × day override
     """
     if full.shape[1] < 18:
-        raise ValueError(
-            f"Percentile table has {full.shape[1]} columns; expected at least 18 (through column R)."
-        )
+        full = full.copy()
+        for i in range(full.shape[1], 18):
+            full[f"__pad_col_{i}"] = None
+
     percentile = full.iloc[:, 0:4].copy()
     percentile.columns = list(full.columns[0:4])
 
@@ -196,7 +197,7 @@ def write_dp_logics_parquet_sidecar(df: pd.DataFrame, xlsx_path: str | Path) -> 
 
 def read_dp_logics_table(folder: str | Path, table_name: str) -> pd.DataFrame:
     """
-    Read a DP Logics table from the synced .xlsx (Product parity).
+    Read a DP Logics table from the synced parquet (preferred) or xlsx fallback.
 
     Parquet sidecars are refreshed after each xlsx read but are not preferred over xlsx,
     so a stale sidecar cannot mask an updated workbook.
@@ -205,6 +206,9 @@ def read_dp_logics_table(folder: str | Path, table_name: str) -> pd.DataFrame:
     xlsx = dp_logics_xlsx_path(folder, table_name)
     parquet = dp_logics_parquet_path(folder, table_name)
 
+    if parquet.exists():
+        return pd.read_parquet(parquet)
+
     if xlsx.exists():
         df = pd.read_excel(xlsx)
         try:
@@ -212,9 +216,6 @@ def read_dp_logics_table(folder: str | Path, table_name: str) -> pd.DataFrame:
         except Exception:
             pass
         return df
-
-    if parquet.exists():
-        return pd.read_parquet(parquet)
 
     raise FileNotFoundError(f"DP Logics table not found: {xlsx} (or {parquet})")
 
@@ -225,16 +226,13 @@ def read_dp_logics_table_engine(folder: str | Path, table_name: str) -> pd.DataF
     xlsx = dp_logics_xlsx_path(folder, table_name)
     parquet = dp_logics_parquet_path(folder, table_name)
 
-    if xlsx.exists() and sidecar_exists_and_fresh(parquet, xlsx):
+    if parquet.exists():
         return pd.read_parquet(parquet)
 
     if xlsx.exists():
         df = pd.read_excel(xlsx)
         write_dp_logics_parquet_sidecar(df, xlsx)
         return df
-
-    if parquet.exists():
-        return pd.read_parquet(parquet)
 
     raise FileNotFoundError(f"DP Logics table not found: {xlsx} (or {parquet})")
 

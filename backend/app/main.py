@@ -66,6 +66,7 @@ from features.insights import router as insights
 from features.settings import router as settings
 from features.validation import router as validation
 from features.shared import demo_filter_router as demo_filter
+from features.base_sheets import router as base_sheets
 
 
 
@@ -159,11 +160,13 @@ async def lifespan(app: FastAPI):
         from core.database.engine import get_shared_database
         from core.queue.worker import QueueWorker
         from features.product_launch.tasks import register_npl_tasks
+        from features.base_sheets.tasks import register_base_sheets_tasks
 
         db = get_shared_database()
         queue_worker_stop_event = threading.Event()
         worker = QueueWorker(engine=db.engine, sleep_interval=2.0)
         register_npl_tasks(worker)
+        register_base_sheets_tasks(worker)
         
         queue_thread = threading.Thread(
             target=worker.run,
@@ -252,6 +255,7 @@ app.include_router(insights.router,           prefix="/api/insights",           
 app.include_router(settings.router,           prefix="/api/settings",           tags=["Settings"])
 app.include_router(validation.router,         prefix="/api/validation",         tags=["Validation"])
 app.include_router(demo_filter.router,        prefix="/api/demo-filter",        tags=["Demo Filter"])
+app.include_router(base_sheets.router,        prefix="/api/base-sheets",        tags=["Base Sheets"])
 
 
 @app.get("/api/health")

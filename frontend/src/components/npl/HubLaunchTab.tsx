@@ -265,14 +265,13 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
   // Filter out the hub-specific fields from commonHeaders
   const commonHeaders = finalHeaders.filter(h => {
     const norm = h.toLowerCase().replace(/[\s_]/g, "");
-    return !["hubname", "hubid", "sourcehub"].includes(norm);
+    return !["hubname", "hubid", "sourcehub", "percentage", "percent"].includes(norm);
   });
 
   const [form, setForm] = useState<Record<string, string>>(() => {
     return {
       [cityKey]: "",
       [typeKey]: "New Hub",
-      [pctKey]: "",
       [startDateKey]: "",
       [endDateKey]: "",
     };
@@ -283,6 +282,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
       [hubNameKey]: "",
       [hubIdKey]: "",
       [sourceHubKey]: "",
+      [pctKey]: "",
     }
   ]);
 
@@ -334,6 +334,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
       const hName = hub[hubNameKey]?.trim() ?? "";
       const hId = hub[hubIdKey]?.trim() ?? "";
       const sHub = hub[sourceHubKey]?.trim() ?? "";
+      const pct = hub[pctKey]?.trim() ?? "";
 
       if (!hName) {
         setError(`Hub Name is required (entry ${i + 1}).`);
@@ -349,6 +350,15 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
       }
       if (!sHub) {
         setError(`Source Hub is required (entry ${i + 1}).`);
+        return;
+      }
+      if (!pct) {
+        setError(`Percentage is required (entry ${i + 1}).`);
+        return;
+      }
+      const pctVal = parseFloat(pct);
+      if (isNaN(pctVal) || pctVal < 0 || pctVal > 1) {
+        setError(`"Percentage" must be a number between 0 and 1 (e.g. 0.5 or 0.001) (entry ${i + 1}).`);
         return;
       }
     }
@@ -367,7 +377,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
         const rowData = {
           [cityKey]: form[cityKey],
           [typeKey]: form[typeKey],
-          [pctKey]: form[pctKey],
+          [pctKey]: hub[pctKey],
           [startDateKey]: form[startDateKey],
           [endDateKey]: form[endDateKey],
           [hubNameKey]: hub[hubNameKey],
@@ -558,7 +568,7 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                       return;
                     }
                     setError("");
-                    setHubs(prev => [...prev, { [hubNameKey]: "", [hubIdKey]: "", [sourceHubKey]: "" }]);
+                    setHubs(prev => [...prev, { [hubNameKey]: "", [hubIdKey]: "", [sourceHubKey]: "", [pctKey]: "" }]);
                   }}
                   style={{
                     display: "flex",
@@ -694,6 +704,32 @@ function AddHubModal({ headers, onClose, onSuccess }: AddHubModalProps) {
                           setHubs(prev => prev.map((h, idx) => idx === index ? { ...h, [sourceHubKey]: val } : h));
                         }}
                         placeholder="e.g. NGC"
+                        className="form-input"
+                        style={{
+                          width: "100%", boxSizing: "border-box", fontSize: "0.8rem",
+                          background: "#ffffff", border: "1px solid #cbd5e1",
+                          borderRadius: "6px", color: "#0f172a", padding: "0.4rem 0.6rem",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    {/* Percentage */}
+                    <div style={{ gridColumn: "span 2" }}>
+                      <label style={{ fontSize: "0.7rem", fontWeight: 600, color: "#475569", display: "block", marginBottom: "0.25rem" }}>
+                        Percentage <span style={{ color: "#ef4444" }}>*</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        max="1"
+                        value={hub[pctKey] ?? ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setHubs(prev => prev.map((h, idx) => idx === index ? { ...h, [pctKey]: val } : h));
+                        }}
+                        placeholder="Between 0.0 and 1.0 (e.g. 0.001)"
                         className="form-input"
                         style={{
                           width: "100%", boxSizing: "border-box", fontSize: "0.8rem",

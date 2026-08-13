@@ -18,6 +18,7 @@ import {
   ClipboardList,
   // ShieldCheck,
   BookOpen,
+  FileSpreadsheet,
 } from "lucide-react";
 
 export interface NavLink {
@@ -44,16 +45,8 @@ export type NavEntry = NavLink | NavGroup;
 export const MANUAL_BASELINE_STEPS: NavLink[] = [
   {
     type: "link",
-    id: "load-raw",
-    label: "1. Load Raw Data",
-    href: "/baseline/load-raw",
-    icon: Download,
-    roles: ["admin", "planner"],
-  },
-  {
-    type: "link",
     id: "configure",
-    label: "2. Configure Parameters",
+    label: "1. Configure Parameters",
     href: "/baseline/configure",
     icon: SlidersHorizontal,
     roles: ["admin", "planner"],
@@ -61,7 +54,7 @@ export const MANUAL_BASELINE_STEPS: NavLink[] = [
   {
     type: "link",
     id: "generate",
-    label: "3. Generate Baseline",
+    label: "2. Generate Baseline",
     href: "/baseline/generate",
     icon: PlayCircle,
     roles: ["admin", "planner"],
@@ -69,7 +62,7 @@ export const MANUAL_BASELINE_STEPS: NavLink[] = [
   {
     type: "link",
     id: "review",
-    label: "4. Review & Validate",
+    label: "3. Review & Validate",
     href: "/baseline/review",
     icon: SearchCheck,
     roles: ["admin", "planner"],
@@ -77,7 +70,7 @@ export const MANUAL_BASELINE_STEPS: NavLink[] = [
   {
     type: "link",
     id: "approve",
-    label: "5. Approve Baseline",
+    label: "4. Approve Baseline",
     href: "/baseline/approve",
     icon: BadgeCheck,
     roles: ["admin", "planner"],
@@ -106,7 +99,7 @@ export const SIDEBAR_NAV: NavEntry[] = [
     type: "group",
     id: "manual-baseline",
     label: "Manual Baseline",
-    caption: "Follow steps 1 → 5",
+    caption: "Follow steps 1 → 4",
     roles: ["admin", "planner"],
     children: MANUAL_BASELINE_STEPS,
   },
@@ -132,13 +125,15 @@ export const SIDEBAR_NAV: NavEntry[] = [
     label: "Hub Launch",
     href: "/hub-launch",
     icon: Zap,
-    roles: ["admin", "planner","product"],
+    roles: ["admin", "planner", "product"],
   },
+  // Base Sheets is now embedded in Configure Parameters
+  // (removed standalone /base-sheets nav entry)
   {
     type: "link",
     id: "final-plan",
     label: "Final Plan",
-    href: "/final-plan",  
+    href: "/final-plan",
     icon: ClipboardList,
     roles: ["admin", "planner"],
     lockUntilBaselineApproved: true,
@@ -186,31 +181,31 @@ export const BASELINE_STEP_META: Record<
     title: "Load Raw Data",
     subtitle: "Fetch weekly actuals from RDS and build the active dataset",
     nextHref: "/baseline/configure",
-    nextLabel: "2. Configure Parameters",
+    nextLabel: "1. Configure Parameters",
   },
   configure: {
-    step: 2,
+    step: 1,
     title: "Configure Parameters",
-    subtitle: "Pipeline toggles and DP Logics worksheet sync",
+    subtitle: "Base sheet sync, pipeline toggles and DP Logics worksheet sync",
     nextHref: "/baseline/generate",
-    nextLabel: "3. Generate Baseline",
+    nextLabel: "2. Generate Baseline",
   },
   generate: {
-    step: 3,
+    step: 2,
     title: "Generate Baseline",
     subtitle: "Run the baseline engine and write Summary output",
     nextHref: "/baseline/review",
-    nextLabel: "4. Review & Validate",
+    nextLabel: "3. Review & Validate",
   },
   review: {
-    step: 4,
+    step: 3,
     title: "Review & Validate",
     subtitle: "Inspect summary output and base-plan comparison",
     nextHref: "/baseline/approve",
-    nextLabel: "5. Approve Baseline",
+    nextLabel: "4. Approve Baseline",
   },
   approve: {
-    step: 5,
+    step: 4,
     title: "Approve Baseline",
     subtitle: "Lock the baseline and unlock Final Plan (admin approval)",
     nextHref: null,

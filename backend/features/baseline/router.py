@@ -258,9 +258,27 @@ def save_params(
 @router.post("/sync-dp-logics")
 def sync_dp_logics(current_user: dict = Depends(require_write)):
     try:
-        result = manual.sync_dp_logics()
+        user_id = int(current_user["sub"])
+        result = manual.sync_dp_logics(user_id=user_id)
         _invalidate_baseline_cache()
         return {"detail": "DP Logics worksheets synced", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/sync-dp-logics/{worksheet_name}")
+def sync_single_dp_logic_endpoint(
+    worksheet_name: str,
+    current_user: dict = Depends(require_write),
+):
+    try:
+        from features.baseline.registry import CONFIG_MASTERS_REGISTRY
+        if worksheet_name not in CONFIG_MASTERS_REGISTRY:
+            raise HTTPException(status_code=404, detail=f"Worksheet '{worksheet_name}' not found in registry")
+        user_id = int(current_user["sub"])
+        result = manual.sync_single_dp_logic(worksheet_name, user_id=user_id)
+        _invalidate_baseline_cache()
+        return {"detail": f"Worksheet '{worksheet_name}' synced successfully", **result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

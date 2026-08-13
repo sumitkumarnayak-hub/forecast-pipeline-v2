@@ -301,6 +301,9 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
     pathname === "/" ||
     pathname.startsWith("/new-product-launch") ||
     pathname.startsWith("/hub-launch") ||
+    pathname.startsWith("/baseline") ||
+    pathname.startsWith("/base-sheets") ||
+    pathname.startsWith("/master-data") ||
     pathname.startsWith("/settings");
 
   return (

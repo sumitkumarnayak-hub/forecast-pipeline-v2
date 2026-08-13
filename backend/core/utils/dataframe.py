@@ -62,7 +62,8 @@ def clean_sheet_df(df: pd.DataFrame, *, drop_blank_rows: bool = True) -> pd.Data
     Clean a DataFrame loaded from Google Sheets:
     - Reset index so Polars conversion is safe
     - Strip whitespace from column headers
-    - Drop columns with empty/blank headers (trailing empty columns from Sheets)
+    - Drop columns with empty/blank headers ONLY if they are also completely blank in data rows
+    - Assign Unnamed_ prefix to remaining columns with empty headers
     - Deduplicate column names by appending _2, _3, ... suffixes
     - Drop completely blank rows (optional, on by default)
     """
@@ -71,7 +72,20 @@ def clean_sheet_df(df: pd.DataFrame, *, drop_blank_rows: bool = True) -> pd.Data
 
     df = df.reset_index(drop=True)
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.loc[:, df.columns != ""]
+
+    # Drop columns with empty headers ONLY if they are also completely blank in data rows
+    keep_cols = []
+    for i, col in enumerate(df.columns):
+        if col != "":
+            keep_cols.append(True)
+        else:
+            col_series = df.iloc[:, i]
+            has_data = col_series.fillna("").astype(str).str.strip().ne("").any()
+            keep_cols.append(has_data)
+    df = df.loc[:, keep_cols]
+
+    # Assign safe Unnamed names to remaining blank header columns
+    df.columns = [c if c != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
 
     seen: dict[str, int] = {}
     new_cols: list[str] = []

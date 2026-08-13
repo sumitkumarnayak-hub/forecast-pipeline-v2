@@ -77,6 +77,19 @@ HUB_SKU_MASTER_SHEET_URL = os.getenv("HUB_SKU_MASTER_SHEET_URL", "").strip()
 PIPELINE_PARAMS_VARIABLES_TAB = os.getenv("PIPELINE_PARAMS_VARIABLES_TAB", "Variables").strip() or "Variables"
 PIPELINE_PARAMS_HUB_CHANGES_TAB = os.getenv("PIPELINE_PARAMS_HUB_CHANGES_TAB", "Hub_Changes").strip() or "Hub_Changes"
 
+
+# Base Sheets — all configuration lives in one dedicated file:
+#   features/base_sheets/registry.py  ← edit there to add/rename/remove sheets
+from features.base_sheets.registry import BASE_SHEETS_REGISTRY  # noqa: E402
+
+# Backward-compatible URL aliases (used elsewhere in this codebase — do not remove)
+BASE_SHEET_AVL_URL_1      = BASE_SHEETS_REGISTRY.get("avl_1",      {}).get("url", "")
+BASE_SHEET_AVL_URL_2      = BASE_SHEETS_REGISTRY.get("avl_2",      {}).get("url", "")
+BASE_SHEET_HUB_VOL_URL    = BASE_SHEETS_REGISTRY.get("hub_vol",    {}).get("url", "")
+BASE_SHEET_CLUSTER_URL    = BASE_SHEETS_REGISTRY.get("cluster",    {}).get("url", "")
+BASE_SHEET_FF_SS_URL      = BASE_SHEETS_REGISTRY.get("ff_ss",      {}).get("url", "")
+BASE_SHEET_VALIDATION_URL = BASE_SHEETS_REGISTRY.get("validation", {}).get("url", "")
+
 # Hub changes columns schema (from Master Data UI settings)
 HUB_CHANGES_COLUMNS = [
     "city_name",

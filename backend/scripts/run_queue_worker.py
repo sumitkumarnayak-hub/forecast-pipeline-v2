@@ -18,7 +18,10 @@ def start_worker():
     
     # Register handlers here. We will import them lazily or directly.
     from features.product_launch.tasks import register_npl_tasks
+    from features.base_sheets.tasks import register_base_sheets_tasks
+    
     register_npl_tasks(worker)
+    register_base_sheets_tasks(worker)
     
     logger.info("Starting up the queue worker daemon...")
     worker.run()

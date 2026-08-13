@@ -20,13 +20,7 @@ from features.baseline.io import write_dp_logics_parquet_sidecar
 from core.utils.dataframe import clean_sheet_df
 
 
-DP_LOGICS_WORKSHEETS = {
-    "City_Cat": ("hub_level_planning", "outlier"),
-    "SellThroughFactor": ("hub_level_planning", "sell_through"),
-    "City_drops": ("hub_level_planning", "city_drops"),
-    "Percentile": ("hub_level_planning", "percentile"),
-    "Avl_Flag": ("hub_level_planning", "avl_flag"),
-}
+from features.baseline.registry import DP_LOGICS_WORKSHEETS_DICT as DP_LOGICS_WORKSHEETS
 
 
 def _normalize_header(text: str) -> str:

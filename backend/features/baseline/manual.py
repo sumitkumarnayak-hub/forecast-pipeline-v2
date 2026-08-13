@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import glob
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 
@@ -23,7 +26,7 @@ from app.config import (
     PROJECT_ROOT,
     RAW_ACTUALS_FOLDER,
 )
-from core.utils.dataframe import df_to_records, sanitize_for_json
+from core.utils.dataframe import df_to_records, sanitize_for_json, clean_sheet_df
 
 from core.database.engine import Database
 
@@ -62,13 +65,7 @@ FINAL_COLS = [
     "simple_group_instances_when_SP_0",
 ]
 
-DP_LOGICS_WORKSHEETS = [
-    "City_Cat",
-    "SellThroughFactor",
-    "City_drops",
-    "Percentile",
-    "Avl_Flag",
-]
+from features.baseline.registry import DP_LOGICS_WORKSHEETS_LIST as DP_LOGICS_WORKSHEETS
 
 ACTIVE_DATASET_META = OUTPUT_PATH / "active_dataset_meta.json"
 
@@ -415,6 +412,7 @@ def load_weeks_into_active_dataset(weeks: list[int]) -> dict[str, Any]:
 
 
 def get_pipeline_params() -> dict[str, Any]:
+    from features.baseline.registry import CONFIG_MASTERS_REGISTRY
     gsm = get_sheets_manager()
     params = gsm.read_pipeline_params()
     active = get_active_dataset_status()
@@ -422,11 +420,45 @@ def get_pipeline_params() -> dict[str, Any]:
     os.makedirs(DP_LOGICS_FOLDER, exist_ok=True)
     for ws in DP_LOGICS_WORKSHEETS:
         fpath = os.path.join(DP_LOGICS_FOLDER, f"{ws}.xlsx")
-        if os.path.exists(fpath):
-            mtime = pd.Timestamp(os.path.getmtime(fpath), unit="s").strftime("%Y-%m-%d %H:%M")
-            dp_status.append({"worksheet": ws, "status": "saved", "last_updated": mtime})
+        reg_info = CONFIG_MASTERS_REGISTRY.get(ws, {})
+        label = reg_info.get("label", ws)
+        group = reg_info.get("group", "Configuration Masters")
+        url = reg_info.get("url", "")
+        
+        last_sync = get_config_master_sync_history(ws)
+        if last_sync:
+            dp_status.append({
+                "worksheet": ws,
+                "label": label,
+                "group": group,
+                "url": url,
+                "status": last_sync["status"],
+                "last_updated": last_sync["started_at"],
+                "last_sync": last_sync
+            })
+        elif os.path.exists(fpath):
+            # Convert mtime to ISO format for frontend parsing consistency
+            mtime_ts = os.path.getmtime(fpath)
+            mtime = pd.Timestamp(mtime_ts, unit="s").isoformat()
+            dp_status.append({
+                "worksheet": ws,
+                "label": label,
+                "group": group,
+                "url": url,
+                "status": "saved",
+                "last_updated": mtime,
+                "last_sync": None
+            })
         else:
-            dp_status.append({"worksheet": ws, "status": "not_synced", "last_updated": None})
+            dp_status.append({
+                "worksheet": ws,
+                "label": label,
+                "group": group,
+                "url": url,
+                "status": "not_synced",
+                "last_updated": None,
+                "last_sync": None
+            })
 
     return sanitize_for_json(
         {
@@ -445,19 +477,224 @@ def save_pipeline_params(updates: dict[str, Any]) -> dict[str, Any]:
     return gsm.read_pipeline_params()
 
 
-def sync_dp_logics() -> dict[str, Any]:
+def sync_dp_logics(user_id: int) -> dict[str, Any]:
     from features.baseline.io import refresh_all_engine_sidecars
-
+    from features.baseline.registry import CONFIG_MASTERS_REGISTRY
 
     gsm = get_sheets_manager()
     os.makedirs(DP_LOGICS_FOLDER, exist_ok=True)
-    sync_results = gsm.sync_dp_logics_worksheets_to_folder(
-        DP_LOGICS_FOLDER,
-        DP_LOGICS_WORKSHEETS,
-        allow_local_fallback=False,
-    )
+    
+    client = gsm.gc
+    if not client:
+        raise RuntimeError("Google Sheets client not initialized")
+
+    sync_results = {}
+    for ws_name, info in CONFIG_MASTERS_REGISTRY.items():
+        try:
+            logger.info("Bulk syncing master config sheet '%s' from URL...", ws_name)
+            spreadsheet = client.open_by_url(info["url"])
+            ws = None
+            gid = info.get("gid")
+            if gid is not None:
+                for w in spreadsheet.worksheets():
+                    if w.id == gid:
+                        ws = w
+                        break
+            if ws is None:
+                try:
+                    ws = spreadsheet.worksheet(info.get("tab_name") or ws_name)
+                except Exception:
+                    ws = spreadsheet.sheet1
+            
+            data = ws.get_all_values()
+            if not data or len(data) < 2:
+                continue
+            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            if df.empty:
+                continue
+            
+            save_path = os.path.join(DP_LOGICS_FOLDER, f"{ws_name}.xlsx")
+            gsm._persist_dp_logics_table(df, save_path)
+
+            # Upload dated parquet to Google Drive (exactly like base sheets)
+            drive_key = _upload_parquet_to_drive(ws_name, df)
+
+            sync_results[ws_name] = {
+                "status": "synced",
+                "rows": len(df),
+                "source": "google_sheets_registry_url",
+                "drive_uploaded": True,
+                "drive_key": drive_key
+            }
+            # Create successful audit log
+            _create_config_master_audit_log(ws_name, user_id, len(df), "success")
+        except Exception as exc:
+            logger.warning("Failed to sync configuration master '%s': %s", ws_name, exc)
+            # Create failed audit log
+            _create_config_master_audit_log(ws_name, user_id, 0, "failed")
+
     sidecars = refresh_all_engine_sidecars(DP_LOGICS_FOLDER, FF_MASTERS_XLSX)
     return sanitize_for_json({"sync_results": sync_results, "sidecars": sidecars})
+
+
+def sync_single_dp_logic(worksheet_name: str, user_id: int) -> dict[str, Any]:
+    from features.baseline.io import refresh_all_engine_sidecars
+    from features.baseline.registry import CONFIG_MASTERS_REGISTRY
+
+    info = CONFIG_MASTERS_REGISTRY.get(worksheet_name)
+    if not info:
+        raise ValueError(f"Worksheet '{worksheet_name}' not configured in registry")
+
+    gsm = get_sheets_manager()
+    os.makedirs(DP_LOGICS_FOLDER, exist_ok=True)
+
+    client = gsm.gc
+    if not client:
+        raise RuntimeError("Google Sheets client not initialized")
+
+    try:
+        logger.info("Syncing master configuration sheet: %s from %s", worksheet_name, info["url"])
+        spreadsheet = client.open_by_url(info["url"])
+        
+        ws = None
+        gid = info.get("gid")
+        if gid is not None:
+            for w in spreadsheet.worksheets():
+                if w.id == gid:
+                    ws = w
+                    break
+        if ws is None:
+            try:
+                ws = spreadsheet.worksheet(info.get("tab_name") or worksheet_name)
+            except Exception:
+                ws = spreadsheet.sheet1
+
+        data = ws.get_all_values()
+        if not data or len(data) < 2:
+            raise ValueError(f"Worksheet '{info['label']}' is empty or invalid")
+
+        df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+        if df.empty:
+            raise ValueError(f"Worksheet '{info['label']}' resolved to empty DataFrame")
+
+        save_path = os.path.join(DP_LOGICS_FOLDER, f"{worksheet_name}.xlsx")
+        gsm._persist_dp_logics_table(df, save_path)
+
+        # Upload dated parquet to Google Drive (exactly like base sheets)
+        drive_key = _upload_parquet_to_drive(worksheet_name, df)
+
+        sidecars = refresh_all_engine_sidecars(DP_LOGICS_FOLDER, FF_MASTERS_XLSX)
+        
+        _create_config_master_audit_log(worksheet_name, user_id, len(df), "success")
+        return sanitize_for_json({
+            "sync_results": {
+                worksheet_name: {
+                    "status": "synced",
+                    "rows": len(df),
+                    "source": "google_sheets_registry_url",
+                    "drive_uploaded": True,
+                    "drive_key": drive_key
+                }
+            },
+            "sidecars": sidecars
+        })
+    except Exception as exc:
+        _create_config_master_audit_log(worksheet_name, user_id, 0, "failed")
+        raise exc
+
+
+def _upload_parquet_to_drive(worksheet_name: str, df: pd.DataFrame) -> str:
+    """Stream dataframe as parquet to Google Drive (exactly like base sheets)."""
+    import io
+    import app.config as cfg
+    from core.storage.drive import DriveStorageBackend
+    from features.base_sheets.service import DRIVE_STORAGE_CONFIG
+
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    parquet_bytes = buf.getvalue()
+
+    _cfg = DRIVE_STORAGE_CONFIG
+    storage = DriveStorageBackend(
+        root_folder_id=_cfg["DRIVE_FOLDER_ID"],
+        credentials_path=cfg.GOOGLE_CREDENTIALS_PATH,
+        impersonate_email=cfg.get_google_drive_impersonate_email(),
+    )
+    date_str = datetime.now().strftime("%Y%m%d")
+    filename = _cfg["DRIVE_FILENAME_TEMPLATE"].format(sheet_key=worksheet_name, date=date_str)
+    subfolder = _cfg["DRIVE_SUBFOLDER"]
+    drive_key = f"{subfolder}/{filename}" if subfolder else filename
+    storage.write_bytes(drive_key, parquet_bytes, content_type="application/octet-stream")
+    logger.info("Uploaded config master '%s' to Drive: %s", worksheet_name, drive_key)
+    return drive_key
+
+
+def _create_config_master_audit_log(
+    worksheet_name: str,
+    user_id: int,
+    row_count: int,
+    status: str = "success",
+) -> str | None:
+    """Create an audit log entry for a configuration master sync in Supabase sync_run."""
+    try:
+        from core.shared.sync_versioning import SyncVersioning
+        from core.database.engine import get_shared_database
+        from features.baseline.registry import CONFIG_MASTERS_REGISTRY
+
+        db = get_shared_database()
+        versioning = SyncVersioning(db)
+
+        info = CONFIG_MASTERS_REGISTRY[worksheet_name]
+        run_id = versioning.start_run(
+            step_name=f"config_master_sync:{worksheet_name}",
+            triggered_by=str(user_id),
+        )
+        versioning.audit(
+            run_id,
+            "sync",
+            status,
+            sheet_name=info["label"],
+            rows_affected=row_count,
+            user_id=str(user_id),
+        )
+        versioning.finish_run(run_id, status)
+        logger.info("Audit log created for config master '%s' sync: run_id=%s", info["label"], run_id)
+        return run_id
+    except Exception as exc:
+        logger.warning("Failed to create audit log for config master sync: %s", exc)
+        return None
+
+
+def get_config_master_sync_history(worksheet_name: str) -> dict[str, Any] | None:
+    """Fetch the latest successful/failed sync run details for a configuration master sheet."""
+    from sqlalchemy import text
+    from core.database.engine import get_shared_database
+
+    db = get_shared_database()
+    step_name = f"config_master_sync:{worksheet_name}"
+
+    query = """
+        SELECT r.started_at, r.status, u.full_name, u.email
+        FROM sync_run r
+        LEFT JOIN users u ON CAST(u.id AS TEXT) = r.triggered_by
+        WHERE r.step_name = :step_name
+        ORDER BY r.started_at DESC
+        LIMIT 1
+    """
+    try:
+        with db.engine.connect() as conn:
+            res = conn.execute(text(query), {"step_name": step_name})
+            row = res.mappings().first()
+            if row:
+                return {
+                    "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+                    "status": row["status"],
+                    "full_name": row["full_name"] or "System",
+                    "email": row["email"] or "",
+                }
+    except Exception as exc:
+        logger.warning("Failed to query config master sync history: %s", exc)
+    return None
 
 
 def list_summary_files() -> list[dict[str, str]]:
