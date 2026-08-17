@@ -202,7 +202,7 @@ def _load_masters_from_local_excel(excel_path: str | Path) -> tuple[pd.DataFrame
 
 
 def _fresh_masters_skip_hours() -> float | None:
-    raw = os.getenv("AUTOPILOT_SKIP_FRESH_MASTERS_HOURS", "").strip()
+    raw = os.getenv("SKIP_FRESH_MASTERS_HOURS", "").strip()
     if not raw:
         return None
     try:
@@ -228,7 +228,7 @@ def run_master_data_excel_sync(
     """
     _ensure_project_cwd()
     excel_path = str(excel_path or FF_MASTERS_XLSX)
-    user_id = user_id if user_id is not None else int(os.getenv("AUTOPILOT_USER_ID", "1"))
+    user_id = user_id if user_id is not None else int(os.getenv("DEFAULT_USER_ID", "1"))
     db = db or get_shared_database()
     result = MasterSyncResult(success=False, excel_path=excel_path)
     sync_run_id: str | None = None

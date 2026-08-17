@@ -138,7 +138,6 @@ class Database:
             migrations = [
                 self._migrate_auth_sessions,
                 self._migrate_session_id_columns,
-                self._migrate_pipeline_run_log_lines,
                 self._migrate_users_is_active,
                 self._migrate_users_remove_username,
                 self._migrate_npl_submissions_table,
@@ -236,8 +235,6 @@ class Database:
         ("baseline_runs", "approval_session_id"),
         ("final_plan_runs", "session_id"),
         ("master_sync_log", "session_id"),
-        ("pipeline_runs", "session_id"),
-        ("pipeline_step_logs", "session_id"),
     )
 
     def _migrate_session_id_columns(self, conn) -> None:
@@ -260,35 +257,7 @@ class Database:
                     text(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
                 )
 
-    def _migrate_pipeline_run_log_lines(self, conn) -> None:
-        """Ensure append-only pipeline run log table exists (autopilot + CLI)."""
-        if self.backend == "postgresql":
-            conn.execute(
-                text("""
-                    CREATE TABLE IF NOT EXISTS pipeline_run_log_lines (
-                        id BIGSERIAL PRIMARY KEY,
-                        run_id TEXT NOT NULL,
-                        level TEXT,
-                        message TEXT NOT NULL,
-                        logged_at TIMESTAMPTZ DEFAULT NOW(),
-                        FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
-                    )
-                """)
-            )
-            return
 
-        conn.execute(
-            text("""
-                CREATE TABLE IF NOT EXISTS pipeline_run_log_lines (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    level TEXT,
-                    message TEXT NOT NULL,
-                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
-                )
-            """)
-        )
 
     def _migrate_users_is_active(self, conn) -> None:
         """Add is_active flag for account deactivation."""
@@ -1239,229 +1208,6 @@ class Database:
                 params={"limit": limit},
             )
 
-    # ── Auto-Pilot runs (pipeline_runs + pipeline_step_logs + pipeline_run_log_lines) ──
-
-    @staticmethod
-    def _autopilot_run_filter_sql() -> str:
-        return "pr.run_id LIKE 'AUTOPILOT%'"
-
-    def ensure_autopilot_run(
-        self,
-        run_id: str,
-        user_id: int,
-        *,
-        run_name: str,
-        source: str = "ui",
-    ) -> None:
-        """Create pipeline_runs row on first start if missing."""
-        with self.engine.connect() as conn:
-            exists = conn.execute(
-                text("SELECT 1 FROM pipeline_runs WHERE run_id = :run_id"),
-                {"run_id": run_id},
-            ).fetchone()
-        if exists:
-            return
-        self.create_pipeline_run(run_id, user_id)
-        self.update_pipeline_run(
-            run_id,
-            status="running",
-            current_step="0",
-            summary_stats={
-                "run_type": "autopilot",
-                "run_name": run_name,
-                "source": source,
-                "success": False,
-                "completed_steps": [],
-                "failed_step": None,
-                "error": "",
-                "logs": {},
-            },
-        )
-
-    def save_autopilot_snapshot(
-        self,
-        *,
-        run_id: str,
-        user_id: int,
-        run_name: str,
-        source: str,
-        success: bool,
-        completed_steps: list[int],
-        failed_step: int | None = None,
-        error: str = "",
-        logs: dict | None = None,
-    ) -> None:
-        """Persist autopilot progress to pipeline_runs.summary_stats."""
-        self.ensure_autopilot_run(run_id, user_id, run_name=run_name, source=source)
-        logs = logs or {}
-        status = "completed" if success else (
-            "failed" if failed_step is not None else "running"
-        )
-        summary = {
-            "run_type": "autopilot",
-            "run_name": run_name,
-            "source": source,
-            "success": success,
-            "completed_steps": completed_steps,
-            "failed_step": failed_step,
-            "error": error,
-            "logs": {str(k): v for k, v in logs.items()},
-        }
-        fields: dict = {
-            "status": status,
-            "current_step": str(failed_step if failed_step is not None else len(completed_steps)),
-            "summary_stats": summary,
-        }
-        if success or failed_step is not None:
-            fields["completed_at"] = datetime.now()
-        self.update_pipeline_run(run_id, **fields)
-
-    def append_pipeline_run_log(
-        self,
-        run_id: str,
-        message: str,
-        *,
-        level: str = "INFO",
-    ) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(
-                text("""
-                    INSERT INTO pipeline_run_log_lines (run_id, level, message, logged_at)
-                    VALUES (:run_id, :level, :message, :logged_at)
-                """),
-                {
-                    "run_id": run_id,
-                    "level": level,
-                    "message": message,
-                    "logged_at": datetime.now(),
-                },
-            )
-
-    def get_pipeline_run_log_text(self, run_id: str, *, max_lines: int = 400) -> str:
-        limit = max(1, int(max_lines))
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text("""
-                    SELECT level, message, logged_at
-                    FROM pipeline_run_log_lines
-                    WHERE run_id = :run_id
-                    ORDER BY logged_at ASC, id ASC
-                """),
-                {"run_id": run_id},
-            ).fetchall()
-        if not rows:
-            return ""
-        tail = rows[-limit:]
-        lines = []
-        for level, message, logged_at in tail:
-            ts = logged_at.strftime("%Y-%m-%d %H:%M:%S") if logged_at else ""
-            lines.append(f"{ts} [{level}] {message}")
-        return "\n".join(lines)
-
-    def _row_to_autopilot_state(self, row) -> dict:
-        summary = row[6]
-        if summary and isinstance(summary, str):
-            try:
-                summary = json.loads(summary)
-            except Exception:
-                summary = {}
-        if not isinstance(summary, dict):
-            summary = {}
-        updated = row[5] or row[4]
-        if hasattr(updated, "isoformat"):
-            updated_at = updated.isoformat(timespec="seconds")
-        else:
-            updated_at = str(updated) if updated else ""
-        return {
-            "updated_at": updated_at,
-            "source": summary.get("source", "ui"),
-            "run_id": row[0],
-            "run_name": summary.get("run_name", "Auto-Pilot"),
-            "success": bool(summary.get("success")),
-            "completed_steps": summary.get("completed_steps") or [],
-            "failed_step": summary.get("failed_step"),
-            "error": summary.get("error", ""),
-            "logs": summary.get("logs") or {},
-            "status": row[2],
-            "started_at": row[4],
-            "completed_at": row[5],
-            "email": row[8],
-        }
-
-    def get_latest_autopilot_run(self) -> dict | None:
-        filt = self._autopilot_run_filter_sql()
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text(f"""
-                    SELECT pr.run_id, pr.user_id, pr.status, pr.current_step,
-                           pr.started_at, pr.completed_at, pr.summary_stats,
-                           pr.session_id, u.email
-                    FROM pipeline_runs pr
-                    LEFT JOIN users u ON u.id = pr.user_id
-                    WHERE {filt}
-                    ORDER BY pr.started_at DESC
-                    LIMIT 1
-                """)
-            ).fetchone()
-        if not row:
-            return None
-        return self._row_to_autopilot_state(row)
-
-    def get_autopilot_run(self, run_id: str) -> dict | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("""
-                    SELECT pr.run_id, pr.user_id, pr.status, pr.current_step,
-                           pr.started_at, pr.completed_at, pr.summary_stats,
-                           pr.session_id, u.email
-                    FROM pipeline_runs pr
-                    LEFT JOIN users u ON u.id = pr.user_id
-                    WHERE pr.run_id = :run_id
-                """),
-                {"run_id": run_id},
-            ).fetchone()
-        if not row:
-            return None
-        state = self._row_to_autopilot_state(row)
-        state["step_logs"] = self.get_pipeline_steps(run_id)
-        state["log_text"] = self.get_pipeline_run_log_text(run_id)
-        return state
-
-    def get_autopilot_run_history(self, limit: int = 25) -> pd.DataFrame:
-        limit = max(1, int(limit))
-        filt = self._autopilot_run_filter_sql()
-        with self.engine.connect() as conn:
-            df = pd.read_sql_query(
-                text(f"""
-                    SELECT pr.run_id, pr.status, pr.started_at, pr.completed_at,
-                           pr.summary_stats, u.email
-                    FROM pipeline_runs pr
-                    LEFT JOIN users u ON u.id = pr.user_id
-                    WHERE {filt}
-                    ORDER BY pr.started_at DESC
-                    LIMIT :limit
-                """),
-                conn,
-                params={"limit": limit},
-            )
-        if df.empty:
-            return df
-        run_names = []
-        sources = []
-        steps_done = []
-        for raw in df["summary_stats"].fillna(""):
-            try:
-                s = json.loads(raw) if isinstance(raw, str) and raw else {}
-            except Exception:
-                s = {}
-            run_names.append(s.get("run_name", "Auto-Pilot"))
-            sources.append(s.get("source", "—"))
-            steps_done.append(len(s.get("completed_steps") or []))
-        df = df.drop(columns=["summary_stats"])
-        df.insert(1, "run_name", run_names)
-        df.insert(2, "source", sources)
-        df["steps_done"] = steps_done
-        return df
 
     def log_master_sync(self, sync_data):
         """Log master data sync."""
@@ -2702,16 +2448,7 @@ _SQLITE_SCHEMA = [
         FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS pipeline_run_log_lines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id TEXT NOT NULL,
-        level TEXT,
-        message TEXT NOT NULL,
-        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
-    )
-    """,
+
     """
     CREATE TABLE IF NOT EXISTS email_notification_recipients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2924,16 +2661,7 @@ _POSTGRES_SCHEMA = [
         FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS pipeline_run_log_lines (
-        id BIGSERIAL PRIMARY KEY,
-        run_id TEXT NOT NULL,
-        level TEXT,
-        message TEXT NOT NULL,
-        logged_at TIMESTAMPTZ DEFAULT NOW(),
-        FOREIGN KEY (run_id) REFERENCES pipeline_runs (run_id)
-    )
-    """,
+
     """
     CREATE TABLE IF NOT EXISTS email_notification_recipients (
         id BIGSERIAL PRIMARY KEY,

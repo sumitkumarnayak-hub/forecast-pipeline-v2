@@ -149,7 +149,6 @@ const DEFAULT_CITIES_COUNT = 3;
 const DASHBOARD_BOOTSTRAP_KEY = "dashboard:bootstrap";
 
 type DashboardBootstrap = {
-  pipeline_card: { has_run: boolean; run_name?: string; status?: string };
   weeks: { weeks?: string[]; default_week?: string };
   analytics: Record<string, unknown>;
   revenue_trends: Record<string, unknown>;
@@ -159,7 +158,6 @@ type DashboardBootstrap = {
 function applyBootstrapPayload(
   data: DashboardBootstrap,
   setters: {
-    setPipelineCard: (v: DashboardBootstrap["pipeline_card"]) => void;
     setWeeks: (v: string[]) => void;
     setSelectedWeek: (v: string) => void;
     setAnalytics: (v: Record<string, unknown>) => void;
@@ -171,7 +169,6 @@ function applyBootstrapPayload(
   },
 ) {
   const wkList = data.weeks?.weeks || [];
-  setters.setPipelineCard(data.pipeline_card);
   setters.setWeeks(wkList);
   setters.setSelectedWeek(data.weeks?.default_week || wkList[wkList.length - 1] || "");
   setters.setAnalytics(data.analytics);
@@ -189,7 +186,6 @@ function applyBootstrapPayload(
 
 export default function DashboardPage() {
   const { user, hydrated, role } = useAuth();
-  const [pipelineCard, setPipelineCard] = useState<{ has_run: boolean; run_name?: string; status?: string } | null>(null);
   const [weeks, setWeeks] = useState<string[]>([]);
   const [selectedWeek, setSelectedWeek] = useState<string>("");
   const [analytics, setAnalytics] = useState<any>(null);
@@ -215,7 +211,6 @@ export default function DashboardPage() {
 
   const bootstrapSetters = useMemo(
     () => ({
-      setPipelineCard,
       setWeeks,
       setSelectedWeek,
       setAnalytics,
@@ -289,7 +284,6 @@ export default function DashboardPage() {
       
       // Load empty skeleton defaults to avoid loading dashboard data from backend
       const dummyBootstrap: DashboardBootstrap = {
-        pipeline_card: { has_run: false },
         weeks: { weeks: [], default_week: "" },
         analytics: { empty: true },
         revenue_trends: { empty: true, filters: { all_cities: [] } }
@@ -357,22 +351,31 @@ export default function DashboardPage() {
   ] : [], [analytics]);
 
   const showAnalytics = analytics && !analytics.empty;
-  const pipelineStatusClass = pipelineCard?.status === "Success"
-    ? "status-success"
-    : pipelineCard?.status === "Failed"
-      ? "status-failed"
-      : pipelineCard?.status === "In progress"
-        ? "status-running"
-        : "";
 
   return (
     <AppShell
       title="Dashboard"
       subtitle="Weekly planning analytics & revenue trends"
       actions={
-        <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={shellLoading || analyticsLoading}>
-          <RefreshCw size={13} className={shellLoading || analyticsLoading ? "animate-spin" : ""} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {weeks.length > 0 && (
+            <div className="flex items-center gap-1 mr-2">
+              <span className="text-xs text-muted mr-1 font-medium">View week</span>
+              <select
+                className="input py-1 text-xs"
+                value={selectedWeek}
+                onChange={e => handleWeekChange(e.target.value)}
+                disabled={analyticsLoading}
+                style={{ width: "auto", minWidth: 120, height: 28 }}
+              >
+                {weeks.map(w => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </div>
+          )}
+          <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={shellLoading || analyticsLoading}>
+            <RefreshCw size={13} className={shellLoading || analyticsLoading ? "animate-spin" : ""} /> Refresh
+          </button>
+        </div>
       }
     >
       {hydrated && user && (
@@ -382,40 +385,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="dashboard-pipeline-card card">
-        <div className="dashboard-pipeline-top">
-          <div>
-            <div className="stat-label">Pipeline</div>
-            <div className="dashboard-pipeline-title">
-              {pipelineCard?.has_run ? pipelineCard.run_name : "No pipeline run yet"}
-            </div>
-          </div>
-          <Link href="/autopilot" className="btn btn-primary btn-sm">
-            <ExternalLink size={13} /> Open Auto-Pilot
-          </Link>
-        </div>
-        <div className="dashboard-pipeline-meta">
-          <div>
-            <span className="text-xs text-muted">Status</span>
-            <div className={`dashboard-status-pill ${pipelineStatusClass}`}>
-              {pipelineCard?.has_run ? pipelineCard.status : "—"}
-            </div>
-          </div>
-          {weeks.length > 0 && (
-            <div className="dashboard-week-picker">
-              <label className="text-xs text-muted">View week</label>
-              <select
-                className="input"
-                value={selectedWeek}
-                onChange={e => handleWeekChange(e.target.value)}
-                disabled={analyticsLoading}
-              >
-                {weeks.map(w => <option key={w} value={w}>{w}</option>)}
-              </select>
-            </div>
-          )}
-        </div>
-      </div>
+
 
       {dataWarning && (
         <div className="alert alert-warning dashboard-error" style={{ whiteSpace: "pre-wrap" }}>

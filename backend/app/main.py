@@ -59,7 +59,6 @@ from features.auth import router as auth
 from features.dashboard import router as dashboard
 from features.master_data import router as master_data
 from features.baseline import router as baseline
-from features.autopilot import router as autopilot
 from features.final_plan import router as final_plan
 from features.product_launch import router as new_product_launch
 from features.insights import router as insights
@@ -248,7 +247,6 @@ app.include_router(auth.router,               prefix="/api/auth",               
 app.include_router(dashboard.router,          prefix="/api/dashboard",          tags=["Dashboard"])
 app.include_router(master_data.router,        prefix="/api/master-data",        tags=["Master Data"])
 app.include_router(baseline.router,           prefix="/api/baseline",           tags=["Baseline"])
-app.include_router(autopilot.router,          prefix="/api/autopilot",          tags=["Auto-Pilot"])
 app.include_router(final_plan.router,         prefix="/api/final-plan",         tags=["Final Plan"])
 app.include_router(new_product_launch.router, prefix="/api/new-product-launch", tags=["Product Launch"])
 app.include_router(insights.router,           prefix="/api/insights",           tags=["Insights"])

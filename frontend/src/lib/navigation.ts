@@ -89,14 +89,6 @@ export const SIDEBAR_NAV: NavEntry[] = [
   },
   {
     type: "link",
-    id: "autopilot",
-    label: "Auto-Pilot",
-    href: "/autopilot",
-    icon: Zap,
-    roles: ["admin", "planner"],
-  },
-  {
-    type: "link",
     id: "configure",
     label: "Configure Parameters",
     href: "/baseline/configure",

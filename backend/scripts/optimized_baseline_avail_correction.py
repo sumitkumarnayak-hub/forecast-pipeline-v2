@@ -2,25 +2,27 @@
 import sys
 import os
 import re
+import datetime
 from functools import reduce
 from datetime import datetime as _datetime
-import os as _os
 
-# Force UTF-8 output on Windows — reconfigure can fail on a captured pipe, so wrap safely
+# Force UTF-8 output on Windows
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
+
 import pyreadr
 import pandas as pd
 import numpy as np
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import set_with_dataframe
-
-# %%
-# =============================================================================
-# LOAD RAW ACTUALS — Read directly from parquet repository (built by Streamlit app)
-# =============================================================================
+import glob as _glob
+import io
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -41,48 +43,92 @@ from app.config import (
     FF_MASTERS_XLSX,
     DP_LOGICS_FOLDER,
     BASELINE_OUTPUTS_FOLDER,
+    GOOGLE_CREDENTIALS_PATH,
 )
 from core.shared.google_sheets import GoogleSheetsManager
 
-from core.shared.helpers import normalize_base_plan_columns
+JSON_KEYFILE_PATH = GOOGLE_CREDENTIALS_PATH
 
-from features.baseline.io import (
-    avl_flag_subcat_cat_df,
-    load_percentile_slices_engine,
-    load_product_masters_sheets_engine,
-    read_dp_logics_table_engine,
-)
+# Check for standalone fallback keypath
+if not os.path.exists(JSON_KEYFILE_PATH):
+    JSON_KEYFILE_PATH = os.path.join(PROJECT_ROOT, "causal-flame-452312-q9-1b4341ee87db.json")
 
-REPOSITORY_FOLDER = RAW_ACTUALS_FOLDER
-ACTIVE_DATASET_PATH = os.environ.get(
-    "BASELINE_ACTIVE_DATASET_PATH",
-    os.path.join(PROJECT_ROOT, "outputs", "active_dataset.parquet")
-)
+def load_latest_parquet_from_drive(sheet_key: str) -> pd.DataFrame:
+    """
+    Connects to Google Drive, searches the 'base_sheet_baseline' folder (ID: 1ZqSz5MYpBOKTffpTczE5SD7EjNvZE3PU)
+    for files matching '{sheet_key}_*.parquet', sorts them by name descending to find the latest date suffix,
+    downloads it in-memory, and returns a pandas DataFrame.
+    """
+    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEYFILE_PATH, scopes)
+    service = build('drive', 'v3', credentials=creds)
+    
+    folder_id = "1ZqSz5MYpBOKTffpTczE5SD7EjNvZE3PU"
+    query = f"'{folder_id}' in parents and name contains '{sheet_key}' and name contains '.parquet' and trashed = false"
+    
+    results = service.files().list(
+        q=query,
+        pageSize=100,
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
+    files = results.get('files', [])
+    
+    if not files:
+        raise FileNotFoundError(f"No parquet files found for key: {sheet_key} in folder {folder_id}")
+    
+    # Sort descending by name to get the latest YYYYMMDD suffix
+    files_sorted = sorted(files, key=lambda x: x['name'], reverse=True)
+    target_file = files_sorted[0]
+    print(f"[Drive Parquet Loader] Loading latest file: {target_file['name']} ({target_file['id']})")
+    
+    request = service.files().get_media(fileId=target_file['id'])
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while done is False:
+        _, done = downloader.next_chunk()
+    
+    fh.seek(0)
+    return pd.read_parquet(fh)
+
+# %% Load Raw Actuals
 USE_ACTIVE_ONLY = os.environ.get("BASELINE_USE_ACTIVE_DATASET", "0") == "1"
-
-# %%
-# In app mode, consume only UI-selected weeks from active_dataset.parquet.
-# In standalone mode, keep legacy behavior (load all repository week files).
 if USE_ACTIVE_ONLY:
-    if not os.path.exists(ACTIVE_DATASET_PATH):
-        raise FileNotFoundError(
-            f"BASELINE_USE_ACTIVE_DATASET=1 but active dataset not found: {ACTIVE_DATASET_PATH}"
-        )
+    ACTIVE_DATASET_PATH = os.environ.get(
+        "BASELINE_ACTIVE_DATASET_PATH",
+        os.path.join(PROJECT_ROOT, "outputs", "active_dataset.parquet")
+    )
     main_df = pd.read_parquet(ACTIVE_DATASET_PATH)
-    all_week_files = [f"active_dataset.parquet ({ACTIVE_DATASET_PATH})"]
-    print(f"[INFO] Using UI-selected weeks only from: {ACTIVE_DATASET_PATH}")
+    print(f"[INFO] Using UI-selected weeks from active dataset: {ACTIVE_DATASET_PATH}")
+    
+    # Map/rename columns to match baseline expected names
+    col_map = {
+        'Sub-category': 'sub category',
+        'Sub-Category': 'sub category',
+        'sub-category': 'sub category',
+        'week': 'Week',
+        'sku class prod': 'SKU Class Prod',
+        'sku_class_prod': 'SKU Class Prod',
+        'final_sales': 'Sales (qty)',
+        'sales': 'Sales (qty)',
+        'final_sales_withoutclusterv2': 'Sales_withoutclusterv2 (qty)',
+        'sales_withoutclusterv2': 'Sales_withoutclusterv2 (qty)'
+    }
+    main_df = main_df.rename(columns={k: v for k, v in col_map.items() if k in main_df.columns})
 else:
-    # Load all parquet week files and combine (fall back to xlsx if no parquet)
-    parquet_files = sorted([f for f in os.listdir(REPOSITORY_FOLDER) if f.startswith("Raw_Actuals_Wk") and f.endswith(".parquet")])
-    xlsx_files    = sorted([f for f in os.listdir(REPOSITORY_FOLDER) if f.startswith("Raw_Actuals_Wk") and f.endswith(".xlsx")])
+    # Standalone mode: load all raw actuals in RAW_ACTUALS_FOLDER
+    parquet_files = sorted([f for f in os.listdir(RAW_ACTUALS_FOLDER) if f.startswith("Raw_Actuals_Wk") and f.endswith(".parquet")])
+    xlsx_files    = sorted([f for f in os.listdir(RAW_ACTUALS_FOLDER) if f.startswith("Raw_Actuals_Wk") and f.endswith(".xlsx")])
     parquet_weeks = {int(f.replace("Raw_Actuals_Wk","").replace(".parquet","")) for f in parquet_files}
     all_week_files = parquet_files + [f for f in xlsx_files if int(f.replace("Raw_Actuals_Wk","").replace(".xlsx","")) not in parquet_weeks]
 
     if not all_week_files:
-        raise FileNotFoundError(f"No week files found in: {REPOSITORY_FOLDER}")
+        raise FileNotFoundError(f"No week files found in: {RAW_ACTUALS_FOLDER}")
 
     def _load_week_file(f):
-        fpath = os.path.join(REPOSITORY_FOLDER, f)
+        fpath = os.path.join(RAW_ACTUALS_FOLDER, f)
         return pd.read_parquet(fpath) if f.endswith(".parquet") else pd.read_excel(fpath)
 
     from concurrent.futures import ThreadPoolExecutor
@@ -90,163 +136,244 @@ else:
         all_dfs = list(_exe.map(_load_week_file, all_week_files))
 
     main_df = pd.concat(all_dfs, ignore_index=True)
+    main_df = main_df.rename(columns={
+        'Sub-category':                  'sub category',
+        'week':                          'Week',
+        'sku class prod':                'SKU Class Prod',
+        'final_sales':                   'Sales (qty)',
+        'final_sales_withoutclusterv2':  'Sales_withoutclusterv2 (qty)',
+    })
 
-# %%
-# Drop rows where product_id is blank (only what's available before P Master mapping)
-before = len(main_df)
-main_df = main_df[main_df["product_id"].notna() & (main_df["product_id"].astype(str).str.strip() != "")]
-print(f"Rows dropped (blank product_id): {before - len(main_df)}")
+# Rename all columns: _grp_ → _group_  (e.g. simple_grp_flag → simple_group_flag)
+main_df.columns = main_df.columns.str.replace('_grp_', '_group_', regex=False)
 
-# Deduplicate immediately after raw load at hub × product_id × process_dt level.
-_raw_dedup_keys = [c for c in ["hub_name", "product_id", "process_dt"] if c in main_df.columns]
-if len(_raw_dedup_keys) == 3:
-    main_df["process_dt"] = pd.to_datetime(main_df["process_dt"], errors="coerce")
-    _before_raw_dedup = len(main_df)
-    main_df = main_df.drop_duplicates(subset=_raw_dedup_keys, keep="first").reset_index(drop=True)
-    _removed_raw_dupes = _before_raw_dedup - len(main_df)
-    print(f"Rows dropped (raw duplicates hub×product_id×process_dt): {_removed_raw_dupes}")
-else:
-    print(f"[WARN] Raw dedup skipped — missing keys: {[k for k in ['hub_name', 'product_id', 'process_dt'] if k not in main_df.columns]}")
+# Load P Master mapping (try local first, fallback to Drive)
+p_master_loaded = False
+if os.path.exists(FF_MASTERS_XLSX):
+    try:
+        from features.baseline.io import load_product_masters_sheets_engine
+        _p_master_raw, _ph_master_raw = load_product_masters_sheets_engine(FF_MASTERS_XLSX)
+        p_master_df = _p_master_raw.copy()
+        p_master_df.columns = [str(c).strip() for c in p_master_df.columns]
+        p_master_loaded = True
+        print("[INFO] Loaded P Master from local Product_Masters.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local P Master: {e}. Falling back to Google Drive...")
 
-# %%
-# =============================================================================
-# MAP Sub-category FROM P MASTER (source of truth)
-# Sub-category and sku class prod come from here, so map BEFORE filtering blanks
-# =============================================================================
-_P_MASTER_PATH = FF_MASTERS_XLSX
-_p_master_raw, _ph_master_raw = load_product_masters_sheets_engine(_P_MASTER_PATH)
-print(f"Product_Masters.xlsx columns: {_p_master_raw.columns.tolist()}")
+if not p_master_loaded:
+    p_master_df = load_latest_parquet_from_drive("p_master")
 
-# Detect column names flexibly
-_id_col  = next((c for c in _p_master_raw.columns if c.strip().lower() == "product id"), None)
-_cat_col = next((c for c in _p_master_raw.columns if "sub" in c.lower() and "cat" in c.lower()), None)
-_sku_col = next((c for c in _p_master_raw.columns if "sku" in c.lower()), None)
+# Detect columns
+_id_col  = next((c for c in p_master_df.columns if c.strip().lower() == "product id"), "Product id")
+_cat_col = next((c for c in p_master_df.columns if "sub" in c.lower() and "cat" in c.lower()), "Sub-category")
+_avl_col = next((c for c in p_master_df.columns if "avl" in c.lower() and "flag" in c.lower()), "Avl Flag")
 
-print(f"Detected — id: '{_id_col}' | sub-category: '{_cat_col}' | sku: '{_sku_col}'")
+p_master_map = (
+    p_master_df[[_id_col, _cat_col]]
+    .drop_duplicates(subset=_id_col)
+    .set_index(_id_col)[_cat_col]
+)
+main_df["sub category"] = (
+    main_df["product_id"].astype(str).map(p_master_map).fillna(main_df["sub category"])
+)
 
-_p_master = _p_master_raw[[c for c in [_id_col, _cat_col, _sku_col] if c]].copy()
-_p_master = _p_master.rename(columns={_id_col: "product_id", _cat_col: "_pmaster_subcat", _sku_col: "_pmaster_sku"})
-_p_master = _p_master.dropna(subset=["product_id"]).drop_duplicates(subset=["product_id"])
+# Extract Avl Flag
+avl_flag_df = p_master_df[[_id_col, _avl_col]].copy()
+avl_flag_df = avl_flag_df.rename(columns={_id_col: "product_id", _avl_col: "Avl Flag"})
 
-main_df = main_df.merge(_p_master, on="product_id", how="left")
-_mapped = main_df["_pmaster_subcat"].notna().sum()
-_not_mapped = main_df["_pmaster_subcat"].isna().sum()
+# Load Hub Changes (try local synced sheets / pipeline config first, fallback to Drive)
+hub_changes_loaded = False
+try:
+    from features.hub_launch.sync import load_hub_changes_for_baseline
+    sheets_manager = GoogleSheetsManager()
+    hub_changes_df = load_hub_changes_for_baseline(sheets_manager)
+    hub_changes_loaded = True
+    print("[INFO] Loaded Hub Changes from pipeline config")
+except Exception as e:
+    print(f"[WARN] Failed to load local Hub Changes: {e}. Falling back to Google Drive...")
 
-# Override Sub-category and sku class prod with P Master values
-main_df["Sub-category"] = main_df["_pmaster_subcat"].fillna(main_df.get("Sub-category", pd.NA))
-main_df["sku class prod"] = main_df["_pmaster_sku"].fillna(main_df.get("sku class prod", pd.NA))
-main_df.drop(columns=["_pmaster_subcat", "_pmaster_sku"], inplace=True)
-print(f"Sub-category mapped from P Master: {_mapped} rows | Not found in P Master: {_not_mapped} rows")
+if not hub_changes_loaded:
+    hub_changes_df = load_latest_parquet_from_drive("ff_input")
 
-# %%
-# Now filter blank Sub-category and sku class prod (after P Master mapping)
-before2 = len(main_df)
-main_df = main_df[main_df["Sub-category"].notna() & (main_df["Sub-category"].astype(str).str.strip() != "")]
-main_df = main_df[main_df["sku class prod"].notna() & (main_df["sku class prod"].astype(str).str.strip() != "")]
-print(f"Rows dropped (blank Sub-category / sku class prod after mapping): {before2 - len(main_df)}")
+# Load Cluster Mapping (try local synced first, fallback to Drive)
+cluster_mapping_loaded = False
+cluster_path = os.path.join(PROJECT_ROOT, "inv_logic", "Cluster phase 2.xlsx")
+if os.path.exists(cluster_path):
+    try:
+        cluster_mapping_df = pd.read_excel(cluster_path)
+        cluster_mapping_df.columns = [str(c).strip() for c in cluster_mapping_df.columns]
+        cluster_mapping_loaded = True
+        print("[INFO] Loaded Cluster mapping from local Cluster phase 2.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local Cluster mapping: {e}")
 
-# Reset index after all filtering — prevents NaN/index-mismatch errors in all
-# subsequent merge, transform, and loc operations throughout this script
-main_df = main_df.reset_index(drop=True)
+if not cluster_mapping_loaded:
+    cluster_mapping_df = load_latest_parquet_from_drive("cluster_v2")
 
-print(f"main_df columns: {main_df.columns.tolist()}")
+# Load preorder (try local synced first, fallback to Drive)
+preorder_loaded = False
+preorder_path = os.path.join(DP_LOGICS_FOLDER, "pure_preorder.xlsx")
+if os.path.exists(preorder_path):
+    try:
+        preorder_raw_df = pd.read_excel(preorder_path)
+        preorder_raw_df.columns = [str(c).strip() for c in preorder_raw_df.columns]
+        preorder_loaded = True
+        print("[INFO] Loaded Preorder from local pure_preorder.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local Preorder: {e}")
 
-# Derive 'week' from process_dt if not already present
-if "week" not in main_df.columns:
-    main_df["process_dt"] = pd.to_datetime(main_df["process_dt"], errors="coerce")
-    main_df["week"] = main_df["process_dt"].dt.isocalendar().week.astype(int)
-    print("'week' column derived from process_dt")
+if not preorder_loaded:
+    preorder_raw_df = load_latest_parquet_from_drive("pure_preorder")
 
-if "day" not in main_df.columns:
-    main_df["process_dt"] = pd.to_datetime(main_df["process_dt"], errors="coerce")
-    main_df["day"] = main_df["process_dt"].dt.strftime("%a")
-    print("'day' column derived from process_dt")
+# Load Consistent issues logics
+df_logic = load_latest_parquet_from_drive("Consistent_issues_logics")
 
-# %%
-# Derive simple_flag / simple_instances columns if missing (bulk-pulled parquet files
-# contain raw RDS columns: flag, instances, group_flag, group_instances, r7_inv)
-_REQUIRED_FLAGS = [
-    "simple_flag_when_SP_0", "simple_instances_when_SP_0",
-    "simple_grp_flag_when_SP_0", "simple_grp_instances_when_SP_0"
-]
+# Load Outliers (try local synced first, fallback to Drive)
+outlier_loaded = False
+outlier_path = os.path.join(DP_LOGICS_FOLDER, "City_Cat.xlsx")
+if os.path.exists(outlier_path):
+    try:
+        outlier_df = pd.read_excel(outlier_path)
+        outlier_df.columns = [str(c).strip() for c in outlier_df.columns]
+        outlier_loaded = True
+        print("[INFO] Loaded Outliers from local City_Cat.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local Outliers: {e}")
 
-if "simple_flag_when_SP_0" not in main_df.columns:
-    if all(c in main_df.columns for c in ["flag", "instances", "group_flag", "group_instances", "r7_inv"]):
-        # Derive from raw RDS columns
-        main_df["plan_sum"] = main_df.groupby(
-            ["hub_name", "process_dt", "product_id"]
-        )["r7_inv"].transform("sum")
-        main_df["simple_flag_when_SP_0"]          = np.where(main_df["plan_sum"] == 0, main_df["group_flag"],      main_df["flag"])
-        main_df["simple_instances_when_SP_0"]     = np.where(main_df["plan_sum"] == 0, main_df["group_instances"], main_df["instances"])
-        main_df["simple_grp_flag_when_SP_0"]      = main_df["group_flag"]
-        main_df["simple_grp_instances_when_SP_0"] = main_df["group_instances"]
-        main_df.drop(columns=["plan_sum"], inplace=True)
-        print("Derived simple_flag / simple_instances from raw RDS columns")
-    elif all(c in main_df.columns for c in ["simple_flag_when_SP_0",
-                                             "simple_instances_when_SP_0",
-                                             "simple_group_flag_when_SP_0",
-                                             "simple_group_instances_when_SP_0"]):
-        pass  # already present with group naming — rename block below handles it
-    else:
-        # Parquet files are missing these columns entirely — print available columns and zero-fill
-        print(f"WARNING: simple_flag columns not found. Available columns: {main_df.columns.tolist()}")
-        print("Zero-filling simple_flag / simple_instances columns. Re-pull raw data for accurate values.")
-        for _col in _REQUIRED_FLAGS:
-            if _col not in main_df.columns:
-                main_df[_col] = 0
+if not outlier_loaded:
+    outlier_df = load_latest_parquet_from_drive("City_Cat")
 
-# Rename columns from parquet/P-Master naming -> Baseline script naming convention
-# Product baseline uses raw sales; Auto-Pilot may supply liquidation-adjusted final_sales.
-if "final_sales" in main_df.columns:
-    main_df["sales"] = main_df["final_sales"]
-    print("[INFO] Using final_sales (liquidation-adjusted) as Sales (qty) for baseline calculation.")
-elif "sales" in main_df.columns:
-    print("[INFO] Using sales column as Sales (qty) (Product-style raw actuals).")
-else:
-    main_df["sales"] = 0
-    print("[WARN] No sales/final_sales column — defaulting Sales (qty) to 0.")
+# Load STF (try local synced first, fallback to Drive)
+stf_loaded = False
+stf_path = os.path.join(DP_LOGICS_FOLDER, "SellThroughFactor.xlsx")
+if os.path.exists(stf_path):
+    try:
+        stf_df = pd.read_excel(stf_path)
+        stf_df.columns = [str(c).strip() for c in stf_df.columns]
+        stf_loaded = True
+        print("[INFO] Loaded STF from local SellThroughFactor.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local STF: {e}")
 
-_col_renames = {
-    "sales":                              "Sales (qty)",
-    "Sub-category":                       "sub category",
-    "sku class prod":                     "SKU Class Prod",
-    "week":                               "Week",
-    "simple_group_flag_when_SP_0":        "simple_grp_flag_when_SP_0",
-    "simple_group_instances_when_SP_0":   "simple_grp_instances_when_SP_0",
+if not stf_loaded:
+    stf_df = load_latest_parquet_from_drive("SellThroughFactor")
+
+# Load STF Hub (try local synced first, fallback to Drive)
+stf_hub_loaded = False
+stf_hub_path = os.path.join(DP_LOGICS_FOLDER, "stf_hub.xlsx")
+if os.path.exists(stf_hub_path):
+    try:
+        stf_hub_df = pd.read_excel(stf_hub_path)
+        stf_hub_df.columns = [str(c).strip() for c in stf_hub_df.columns]
+        stf_hub_loaded = True
+        print("[INFO] Loaded STF Hub from local stf_hub.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local STF Hub: {e}")
+
+if not stf_hub_loaded:
+    stf_hub_df = load_latest_parquet_from_drive("stf_hub")
+
+# Load City Drops (try local synced first, fallback to Drive)
+city_drops_loaded = False
+city_drops_path = os.path.join(DP_LOGICS_FOLDER, "City_drops.xlsx")
+if os.path.exists(city_drops_path):
+    try:
+        City_drops = pd.read_excel(city_drops_path)
+        City_drops.columns = [str(c).strip() for c in City_drops.columns]
+        city_drops_loaded = True
+        print("[INFO] Loaded City Drops from local City_drops.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local City Drops: {e}")
+
+if not city_drops_loaded:
+    City_drops = load_latest_parquet_from_drive("City_drops")
+
+# Load Percentile (try local synced first, fallback to Drive)
+percentile_loaded = False
+percentile_path = os.path.join(DP_LOGICS_FOLDER, "Percentile.xlsx")
+if os.path.exists(percentile_path):
+    try:
+        df_pct = pd.read_excel(percentile_path)
+        df_pct.columns = [str(c).strip() for c in df_pct.columns]
+        percentile_loaded = True
+        print("[INFO] Loaded Percentile from local Percentile.xlsx")
+    except Exception as e:
+        print(f"[WARN] Failed to load local Percentile: {e}")
+
+if not percentile_loaded:
+    df_pct = load_latest_parquet_from_drive("Percentile")
+
+
+CLUSTER_CUTOFF_DATE = pd.Timestamp("2026-05-18")
+
+# Build set of all cluster (product_id, hub_name) pairs — both child hubs and mother hubs
+_cluster_child_pairs = set(
+    zip(
+        cluster_mapping_df["product_id"].astype(str),
+        cluster_mapping_df["childHub_name"].astype(str),
+    )
+)
+_cluster_mother_pairs = set(
+    zip(
+        cluster_mapping_df["product_id"].astype(str),
+        cluster_mapping_df["MotherHub_name"].astype(str),
+    )
+)
+_all_cluster_pairs = _cluster_child_pairs | _cluster_mother_pairs
+
+# Ensure process_dt is datetime for the date comparison
+main_df["process_dt"] = pd.to_datetime(main_df["process_dt"], errors="coerce")
+
+# Mask 1: rows on or after the cutoff date
+_after_cutoff_mask = main_df["process_dt"] >= CLUSTER_CUTOFF_DATE
+
+# Mask 2: rows whose (product_id, hub_name) pair is a cluster member
+_is_cluster_mask = pd.Series(
+    [
+        (str(pid), str(hub)) in _all_cluster_pairs
+        for pid, hub in zip(main_df["product_id"], main_df["hub_name"])
+    ],
+    index=main_df.index,
+    dtype=bool,
+)
+
+# Rows that should keep original values in the unified column:
+# either before the cutoff OR a cluster member
+_fill_from_original_mask = ~_after_cutoff_mask | _is_cluster_mask
+
+# Column mapping: original column → unified _withoutclusterv2 column
+_wc_col_map = {
+    "Sales (qty)":                    "Sales_withoutclusterv2 (qty)",
+    "simple_flag_when_SP_0":          "simple_flag_when_SP_0_withoutclusterv2",
+    "simple_instances_when_SP_0":     "simple_instances_when_SP_0_withoutclusterv2",
+    "simple_group_flag_when_SP_0":      "simple_group_flag_when_SP_0_withoutclusterv2",
+    "simple_group_instances_when_SP_0": "simple_group_instances_when_SP_0_withoutclusterv2",
 }
-main_df.rename(columns={k: v for k, v in _col_renames.items() if k in main_df.columns}, inplace=True)
-print(f"Columns after rename: {main_df.columns.tolist()}")
 
-weeks_available = sorted(main_df["Week"].unique().tolist())
-print(f"Files loaded: {all_week_files}")
-print(f"Weeks available: {weeks_available} | Total rows: {len(main_df)}")
+for _std_col, _wc_col in _wc_col_map.items():
+    # Create the column if it doesn't exist yet (rows from file_path / file_path_1)
+    if _wc_col not in main_df.columns:
+        main_df[_wc_col] = np.nan
+    # For before-cutoff rows and cluster rows: fill the unified column from the original
+    main_df.loc[_fill_from_original_mask, _wc_col] = main_df.loc[_fill_from_original_mask, _std_col]
+    # For non-cluster rows on/after cutoff: keep existing _withoutclusterv2 values where available.
+    # If still NaN (row came from a file without _withoutclusterv2 columns e.g. file_path_1),
+    # fall back to the original column value.
+    _nan_fallback_mask = ~_fill_from_original_mask & main_df[_wc_col].isna()
+    main_df.loc[_nan_fallback_mask, _wc_col] = main_df.loc[_nan_fallback_mask, _std_col]
 
-
-# %%
-sheets_manager = GoogleSheetsManager()
-spreadsheet = sheets_manager.gc.open_by_url(CLUSTER_MASTER_SHEET_URL)
-
-# Select the specific sheet/tab by its name
-worksheet = spreadsheet.worksheet("Cluster phase 2")
-
-# Get all values from
-data = worksheet.get("A:H")
-
-
-# %%
-cluster_mapping_df = pd.DataFrame(data[1:], columns=data[0])
-
-# %%
-cluster_mapping_df["Cluster_Flag"] = cluster_mapping_df["Cluster_Flag"].astype(int)
-cluster_mapping_df = cluster_mapping_df[cluster_mapping_df["Cluster_Flag"] == 1]
-
+print(
+    f"[WC unified columns] Before cutoff (original): {(~_after_cutoff_mask).sum()}, "
+    f"Cluster on/after cutoff (original): {(_after_cutoff_mask & _is_cluster_mask).sum()}, "
+    f"Non-cluster on/after cutoff (withoutclusterv2 or fallback to original if NaN): {(_after_cutoff_mask & ~_is_cluster_mask).sum()}"
+)
 
 
 # %%
 agg_cols = [
-    "Sales (qty)",
-    "simple_flag_when_SP_0", "simple_instances_when_SP_0",
-    "simple_grp_flag_when_SP_0", "simple_grp_instances_when_SP_0"
+    "Sales_withoutclusterv2 (qty)",
+    "simple_flag_when_SP_0_withoutclusterv2", "simple_instances_when_SP_0_withoutclusterv2",
+    "simple_group_flag_when_SP_0_withoutclusterv2", "simple_group_instances_when_SP_0_withoutclusterv2"
 ]
 
 # %%
@@ -262,24 +389,24 @@ child_rows = df[~df["MotherHub_name"].isna()].copy()
 
 # %%
 cols_to_multiply = [
-    "simple_flag_when_SP_0",
-    "simple_instances_when_SP_0",
-    "simple_grp_flag_when_SP_0",
-    "simple_grp_instances_when_SP_0"
+    "simple_flag_when_SP_0_withoutclusterv2",
+    "simple_instances_when_SP_0_withoutclusterv2",
+    "simple_group_flag_when_SP_0_withoutclusterv2",
+    "simple_group_instances_when_SP_0_withoutclusterv2"
 ]
 
 for col in cols_to_multiply:
-    valid_mask = child_rows[col].notna() & child_rows["Sales (qty)"].notna()
+    valid_mask = child_rows[col].notna() & child_rows["Sales_withoutclusterv2 (qty)"].notna()
 
-    # Case 1: Sales > 0 -> multiply by Sales
-    mask_sales_pos = valid_mask & (child_rows["Sales (qty)"] > 0)
+    # Case 1: Sales > 0 → multiply by Sales
+    mask_sales_pos = valid_mask & (child_rows["Sales_withoutclusterv2 (qty)"] > 0)
     child_rows.loc[mask_sales_pos, col] = (
-        child_rows.loc[mask_sales_pos, col] * child_rows.loc[mask_sales_pos, "Sales (qty)"]
+        child_rows.loc[mask_sales_pos, col] * child_rows.loc[mask_sales_pos, "Sales_withoutclusterv2 (qty)"]
     )
 
-    # Case 2: Sales == 0 -> multiply by 1 only for specific columns
-    if col in ["simple_grp_instances_when_SP_0", "simple_instances_when_SP_0"]:
-        mask_sales_zero = valid_mask & (child_rows["Sales (qty)"] == 0)
+    # Case 2: Sales == 0 → multiply by 1 only for specific columns
+    if col in ["simple_group_instances_when_SP_0_withoutclusterv2", "simple_instances_when_SP_0_withoutclusterv2"]:
+        mask_sales_zero = valid_mask & (child_rows["Sales_withoutclusterv2 (qty)"] == 0)
         child_rows.loc[mask_sales_zero, col] = (
             child_rows.loc[mask_sales_zero, col] * 1
         )
@@ -301,11 +428,11 @@ mother_agg_subset = mother_agg.rename(columns={
 
 # %%
 mother_agg_subset = mother_agg_subset.rename(columns={
-    "Sales (qty)": "Agg_sale_mother_hub",
-    "simple_flag_when_SP_0": "Agg_simple_flag",
-    "simple_instances_when_SP_0": "Agg_simple_instances",
-    "simple_grp_flag_when_SP_0": "Agg_simple_grp_flag",
-    "simple_grp_instances_when_SP_0": "Agg_simple_grp_instances"
+    "Sales_withoutclusterv2 (qty)": "Agg_sale_mother_hub",
+    "simple_flag_when_SP_0_withoutclusterv2": "Agg_simple_flag",
+    "simple_instances_when_SP_0_withoutclusterv2": "Agg_simple_instances",
+    "simple_group_flag_when_SP_0_withoutclusterv2": "Agg_simple_grp_flag",
+    "simple_group_instances_when_SP_0_withoutclusterv2": "Agg_simple_grp_instances"
 })
 
 # %%
@@ -313,11 +440,11 @@ key_cols = ["process_dt", "hub_name", "product_id"]
 
 # Create an indicator to mark rows that exist in child_rows
 main_df["is_child"] = main_df[key_cols].merge(
-    child_rows[key_cols].drop_duplicates(),
-    on=key_cols,
-    how="left",
+    child_rows[key_cols].drop_duplicates(), 
+    on=key_cols, 
+    how="left", 
     indicator=True
-)["_merge"].eq("both").fillna(False).values
+)["_merge"].eq("both")
 
 # Now set 0 only for those true child rows
 main_df.loc[main_df["is_child"], agg_cols] = 0
@@ -340,24 +467,24 @@ final_df = main_df.merge(
 mask = final_df["Agg_sale_mother_hub"].notna()
 
 cols_to_multiply = [
-    "simple_flag_when_SP_0",
-    "simple_instances_when_SP_0",
-    "simple_grp_flag_when_SP_0",
-    "simple_grp_instances_when_SP_0"
+    "simple_flag_when_SP_0_withoutclusterv2",
+    "simple_instances_when_SP_0_withoutclusterv2",
+    "simple_group_flag_when_SP_0_withoutclusterv2",
+    "simple_group_instances_when_SP_0_withoutclusterv2"
 ]
 
 for col in cols_to_multiply:
-    valid_mask = mask & final_df[col].notna() & final_df["Sales (qty)"].notna()
+    valid_mask = mask & final_df[col].notna() & final_df["Sales_withoutclusterv2 (qty)"].notna()
 
-    # Case 1: Sales > 0 -> multiply by actual sales
-    mask_sales_pos = valid_mask & (final_df["Sales (qty)"] > 0)
+    # Case 1: Sales > 0 → multiply by actual sales
+    mask_sales_pos = valid_mask & (final_df["Sales_withoutclusterv2 (qty)"] > 0)
     final_df.loc[mask_sales_pos, col] = (
-        final_df.loc[mask_sales_pos, col] * final_df.loc[mask_sales_pos, "Sales (qty)"]
+        final_df.loc[mask_sales_pos, col] * final_df.loc[mask_sales_pos, "Sales_withoutclusterv2 (qty)"]
     )
 
-    # Case 2: Sales == 0 -> multiply by 1 for simple_flag and simple_instances only
-    if col in ["simple_grp_instances_when_SP_0", "simple_instances_when_SP_0"]:
-        mask_sales_zero = valid_mask & (final_df["Sales (qty)"] == 0)
+    # Case 2: Sales == 0 → multiply by 1 for simple_flag and simple_instances only
+    if col in ["simple_group_instances_when_SP_0_withoutclusterv2", "simple_instances_when_SP_0_withoutclusterv2"]:
+        mask_sales_zero = valid_mask & (final_df["Sales_withoutclusterv2 (qty)"] == 0)
         final_df.loc[mask_sales_zero, col] = (
             final_df.loc[mask_sales_zero, col] * 1
         )
@@ -370,11 +497,11 @@ for col in ["Agg_sale_mother_hub", "Agg_simple_flag", "Agg_simple_instances",
 
 
 # %%
-final_df["Sales (qty)"] += final_df["Agg_sale_mother_hub"]
-final_df["simple_flag_when_SP_0"] += final_df["Agg_simple_flag"]
-final_df["simple_instances_when_SP_0"] += final_df["Agg_simple_instances"]
-final_df["simple_grp_flag_when_SP_0"] += final_df["Agg_simple_grp_flag"]
-final_df["simple_grp_instances_when_SP_0"] += final_df["Agg_simple_grp_instances"]
+final_df["Sales_withoutclusterv2 (qty)"] += final_df["Agg_sale_mother_hub"]
+final_df["simple_flag_when_SP_0_withoutclusterv2"] += final_df["Agg_simple_flag"]
+final_df["simple_instances_when_SP_0_withoutclusterv2"] += final_df["Agg_simple_instances"]
+final_df["simple_group_flag_when_SP_0_withoutclusterv2"] += final_df["Agg_simple_grp_flag"]
+final_df["simple_group_instances_when_SP_0_withoutclusterv2"] += final_df["Agg_simple_grp_instances"]
 
 # # Drop helper columns
 # final_df = final_df.drop(columns=[
@@ -387,22 +514,12 @@ final_df["simple_grp_instances_when_SP_0"] += final_df["Agg_simple_grp_instances
 # Drop helper columns
 final_df = final_df.drop(columns=[
     "Agg_sale_mother_hub", "Agg_simple_flag", "Agg_simple_instances",
-    "Agg_simple_grp_flag", "Agg_simple_grp_instances",
+    "Agg_simple_grp_flag", "Agg_simple6w_grp_instances",
     "Unnamed: 19", "Unnamed: 20"
 ], errors="ignore")
 
-# reuse existing client (no need to re-authorize)
-spreadsheet = sheets_manager.gc.open_by_url(HUB_LEVEL_PLANNING_SHEET_URL)
-
-# Select the specific sheet/tab by its name
-worksheet = spreadsheet.worksheet("Avl_Flag")
-
-# Get all values from
-data = worksheet.get("A:F")
-
-
 # %%
-avl_flag_df = pd.DataFrame(data[1:], columns=data[0])
+# Reuse already loaded avl_flag_df from the top of the file
 
 # %%
 merged_df = final_df.merge(
@@ -412,15 +529,29 @@ merged_df = final_df.merge(
 )
 
 #%%
-# merged_df.to_clipboard()  # disabled for speed
+
 
 # %%
-merged_df['Avl Flag'] = merged_df['Avl Flag'].astype(int)
+# Drop rows where sub category is blank/NaN — these have no Avl Flag and can't be processed
+merged_df = merged_df[merged_df['sub category'].notna() & (merged_df['sub category'].astype(str).str.strip() != '')]
 
 # %%
-_avl1 = merged_df['Avl Flag'] == 1
-merged_df['simple_avail_num'] = np.where(_avl1, merged_df['simple_flag_when_SP_0'],     merged_df['simple_grp_flag_when_SP_0'])
-merged_df['simple_avail_den'] = np.where(_avl1, merged_df['simple_instances_when_SP_0'], merged_df['simple_grp_instances_when_SP_0'])
+# Avl Flag comes in as string from Google Sheets — cast to int before comparisons
+merged_df['Avl Flag'] = pd.to_numeric(merged_df['Avl Flag'], errors='coerce').fillna(0).astype(int)
+
+# %%
+merged_df['simple_avail_num'] = np.where(
+    merged_df['Avl Flag'] == 1,
+    merged_df['simple_flag_when_SP_0_withoutclusterv2'],
+    merged_df['simple_group_flag_when_SP_0_withoutclusterv2']
+)
+
+# %%
+merged_df['simple_avail_den'] = np.where(
+    merged_df['Avl Flag'] == 1,
+    merged_df['simple_instances_when_SP_0_withoutclusterv2'],
+    merged_df['simple_group_instances_when_SP_0_withoutclusterv2']
+)
 
 
 # %%
@@ -430,11 +561,14 @@ merged_df['simple_avail_num'] = merged_df['simple_avail_num'].fillna(0)
 merged_df['simple_avail_den'] = merged_df['simple_avail_den'].fillna(0)
 
 # %%
-merged_df['simple_availability'] = (
-    merged_df['simple_avail_num']
-    .div(merged_df['simple_avail_den'].replace(0, np.nan))
-    .fillna(0)
-    * 100
+merged_df['simple_availability'] = np.where(
+    (merged_df['simple_avail_num'] == 0) & (merged_df['simple_avail_den'] == 0),
+    0,
+    np.where(
+        (merged_df['simple_avail_num'] == 0) | (merged_df['simple_avail_den'] == 0),
+        0,
+        (merged_df['simple_avail_num'] / merged_df['simple_avail_den']) * 100
+    )
 )
 
 
@@ -442,7 +576,7 @@ merged_df['simple_availability'] = (
 merged_df['simple_availability'] = merged_df['simple_availability'].fillna(0)
 
 # %%
-# merged_df.to_csv("Hub_level_plan.csv", index=False)  # disabled for speed
+merged_df.to_csv(HUB_LEVEL_PLAN_CSV_PATH, index=False)
 
 
 # %%
@@ -471,28 +605,20 @@ Date Logic:
 """
 
 # -----------------------------------------------------------------------------
-# Load Hub Changes Data (pipeline params Hub_Changes tab; legacy FF Input fallback)
+# Load Hub Changes Data from parquet source only
 # -----------------------------------------------------------------------------
-required_cols = ['city_name','Type', 'Hub_name', 'Source_Hub', 'Hub_id', 'Percentage', 'Start_date', 'End_date']
-_apply_hub = os.getenv("BASELINE_APPLY_HUB_CHANGES", "1").strip().lower() not in ("0", "false", "no", "n")
+# This script already loads the Drive parquet source earlier in the file:
+#   hub_changes_df = load_latest_parquet_from_drive("ff_input")
+# We intentionally do not read Google Sheets here anymore.
 
-if _apply_hub:
-    from features.hub_launch.sync import load_hub_changes_for_baseline
-
-    hub_changes_df = load_hub_changes_for_baseline(sheets_manager)
-    print(f"Hub changes source: pipeline params ({PIPELINE_PARAMS_HUB_CHANGES_TAB})")
-else:
-    hub_changes_df = pd.DataFrame(columns=required_cols)
-    print("Hub changes skipped (BASELINE_APPLY_HUB_CHANGES=0)")
+hub_changes_df = hub_changes_df.copy()
 
 # Display the data
 print("Hub Changes Data:")
 print(hub_changes_df)
-# hub_changes_df.to_clipboard()  # disabled for speed
-
-
 
 # %%
+required_cols = ['city_name','Type', 'Hub_name', 'Source_Hub', 'Hub_id', 'Percentage', 'Start_date', 'End_date']
 missing_cols = [col for col in required_cols if col not in hub_changes_df.columns]
 
 
@@ -500,7 +626,7 @@ if missing_cols:
     raise ValueError(f"Missing required columns in Hub_Changes sheet: {missing_cols}")
 
 # Convert all numeric-looking columns in merged_df
-num_cols = ["Sales (qty)", "simple_avail_num", "simple_avail_den"]
+num_cols = ["Sales_withoutclusterv2 (qty)", "simple_avail_num", "simple_avail_den"]
 
 for col in num_cols:
     if col in merged_df.columns:
@@ -539,7 +665,7 @@ print(f"KML Remapping records: {len(kml_remapping_changes)}")
 # PROCESS NEW HUB LAUNCHES
 # =============================================================================
 
-virtual_history_list = []
+
 
 # -----------------------------------------------------------------------------
 # VALIDATION: Check New Hubs and handle existing data
@@ -560,12 +686,12 @@ for hub in new_hub_names:
         post_launch_records = existing_records[existing_records['process_dt'] >= launch_date]
         
         if len(pre_launch_records) > 0:
-            pre_launch_volume = pre_launch_records['Sales (qty)'].sum()
+            pre_launch_volume = pre_launch_records['Sales_withoutclusterv2 (qty)'].sum()
             
             # Ignore pre-launch data - remove it from merged_df
-            print(f"  ⚠️ {hub} has {len(pre_launch_records):,} records BEFORE launch date {launch_date.date()}")
+            print(f"  [!] {hub} has {len(pre_launch_records):,} records BEFORE launch date {launch_date.date()}")
             print(f"     Pre-launch volume: {pre_launch_volume:.2f}")
-            print(f"     ➜ Ignoring pre-launch data (will be replaced with virtual history)")
+            print(f"     [->] Ignoring pre-launch data (will be replaced with virtual history)")
             
             # Remove pre-launch records for this hub from merged_df
             merged_df = merged_df[~((merged_df['hub_name'] == hub) & (merged_df['process_dt'] < launch_date))]
@@ -585,6 +711,8 @@ print()
 # -----------------------------------------------------------------------------
 # Create Virtual History for New Hubs
 # -----------------------------------------------------------------------------
+virtual_history_list = []
+
 # Group by target hub (Hub_name) to handle multiple source hubs
 for target_hub, group in new_hub_changes.groupby('Hub_name'):
     print(f"\nProcessing New Hub: {target_hub}")
@@ -620,11 +748,11 @@ for target_hub, group in new_hub_changes.groupby('Hub_name'):
         ].copy()
         
         if source_data.empty:
-            print(f"    ⚠️  Warning: No data found for source hub {source_hub}")
+            print(f"    [!]  Warning: No data found for source hub {source_hub}")
             continue
         
         # Show source hub details
-        source_volume_before = source_data['Sales (qty)'].sum()
+        source_volume_before = source_data['Sales_withoutclusterv2 (qty)'].sum()
         source_records = len(source_data)
         print(f"    Source data: {source_records:,} records, Volume: {source_volume_before:.2f}")
         
@@ -636,13 +764,13 @@ for target_hub, group in new_hub_changes.groupby('Hub_name'):
             virtual_history_hub = source_data.copy()
             
             # Scale volumes by percentage
-            volume_before_scaling = virtual_history_hub['Sales (qty)'].sum()
-            scale_cols = ["Sales (qty)"]
+            volume_before_scaling = virtual_history_hub['Sales_withoutclusterv2 (qty)'].sum()
+            scale_cols = ["Sales_withoutclusterv2 (qty)"]
             for col in scale_cols:
                 if col in virtual_history_hub.columns:
                     virtual_history_hub[col] = virtual_history_hub[col] * percentage
             
-            volume_after_scaling = virtual_history_hub['Sales (qty)'].sum()
+            volume_after_scaling = virtual_history_hub['Sales_withoutclusterv2 (qty)'].sum()
             
             # Update hub_name to target hub
             virtual_history_hub['hub_name'] = target_hub
@@ -668,14 +796,14 @@ for target_hub, group in new_hub_changes.groupby('Hub_name'):
                 ].copy()
                 
                 if not matching_source_data.empty:
-                    volume_before_scaling = matching_source_data['Sales (qty)'].sum()
+                    volume_before_scaling = matching_source_data['Sales_withoutclusterv2 (qty)'].sum()
                     
                     # Scale volumes
-                    for col in ["Sales (qty)"]:
+                    for col in ["Sales_withoutclusterv2 (qty)"]:
                         if col in matching_source_data.columns:
                             matching_source_data[col] = matching_source_data[col] * percentage
                     
-                    volume_after_scaling = matching_source_data['Sales (qty)'].sum()
+                    volume_after_scaling = matching_source_data['Sales_withoutclusterv2 (qty)'].sum()
                     
                     # Update hub_name
                     matching_source_data['hub_name'] = target_hub
@@ -685,7 +813,7 @@ for target_hub, group in new_hub_changes.groupby('Hub_name'):
                     print(f"      Volume calculation: {volume_before_scaling:.2f} × {percentage} = {volume_after_scaling:.2f}")
                     print(f"    [OK] Volume transferred to {target_hub}: {volume_after_scaling:.2f}")
                 else:
-                    print(f"    ℹ️  No matching products found between {source_hub} and {target_hub}")
+                    print(f"    [i]  No matching products found between {source_hub} and {target_hub}")
         
         # ---------------------------------------------------------------------
         # Reduce Source Hub Volumes
@@ -693,14 +821,14 @@ for target_hub, group in new_hub_changes.groupby('Hub_name'):
         source_mask = (merged_df['hub_name'] == source_hub) & date_mask
         
         # Get volume before reduction
-        volume_before_reduction = merged_df.loc[source_mask, 'Sales (qty)'].sum()
+        volume_before_reduction = merged_df.loc[source_mask, 'Sales_withoutclusterv2 (qty)'].sum()
         
-        for col in ["Sales (qty)"]:
+        for col in ["Sales_withoutclusterv2 (qty)"]:
             if col in merged_df.columns:
                 merged_df.loc[source_mask, col] = merged_df.loc[source_mask, col] * (1 - percentage)
         
         # Get volume after reduction
-        volume_after_reduction = merged_df.loc[source_mask, 'Sales (qty)'].sum()
+        volume_after_reduction = merged_df.loc[source_mask, 'Sales_withoutclusterv2 (qty)'].sum()
         volume_reduced = volume_before_reduction - volume_after_reduction
         
         print(f"    [OK] Reduced source hub {source_hub} by {percentage*100:.1f}%")
@@ -715,17 +843,15 @@ if virtual_history_list:
     virtual_history = pd.concat(virtual_history_list, ignore_index=True)
     
     # Group and aggregate to combine volumes from multiple sources
-    # Use only columns that actually exist in virtual_history
-    _candidate_group_cols = [
-        "process_dt", "Sub-category", "week", "day", "product_id", "product_name",
-        "sku class prod", "city_name", "hub_name",
-        "simple_flag_when_SP_0", "simple_instances_when_SP_0",
-        "simple_grp_flag_when_SP_0", "simple_grp_instances_when_SP_0",
-        "Avl Flag", "simple_avail_num", "simple_avail_den", "simple_availability"
+    group_cols = [
+        "process_dt", "sub category", "Week", "day", "product_id", "product_name",
+        "SKU Class Prod", "city_name", "hub_name",
+        "simple_flag_when_SP_0_withoutclusterv2", "simple_instances_when_SP_0_withoutclusterv2",
+        "simple_group_flag_when_SP_0_withoutclusterv2", "simple_group_instances_when_SP_0_withoutclusterv2",
+        "Avl Flag"
     ]
-    group_cols = [c for c in _candidate_group_cols if c in virtual_history.columns]
     
-    agg_dict = {"Sales (qty)": "sum"}
+    agg_dict = {"Sales_withoutclusterv2 (qty)": "sum"}
     if "simple_avail_num" in virtual_history.columns:
         agg_dict["simple_avail_num"] = "sum"
     if "simple_avail_den" in virtual_history.columns:
@@ -736,9 +862,7 @@ if virtual_history_list:
     # Recalculate availability
     if "simple_avail_num" in virtual_history.columns and "simple_avail_den" in virtual_history.columns:
         virtual_history["simple_availability"] = (
-            virtual_history["simple_avail_num"]
-            .div(virtual_history["simple_avail_den"].replace(0, np.nan))
-            .fillna(0)
+            virtual_history["simple_avail_num"] / virtual_history["simple_avail_den"]
         )
     
     # Align columns with merged_df
@@ -750,96 +874,111 @@ else:
     print("\nNo virtual history created")
 
 # %%
+merged_df = pd.concat([merged_df, virtual_history_aligned], ignore_index=True)
 # =============================================================================
 # PROCESS KML REMAPPING
 # =============================================================================
+# Group rows by (Source_Hub, Start_date, End_date) so that when multiple
+# target hubs draw from the same source on the same dates, all percentages
+# are applied against the ORIGINAL source volume (not the progressively
+# reduced one). Within each group we:
+#   1. Snapshot the original source volumes once.
+#   2. Transfer each target's share from the snapshot.
+#   3. Write back the fully-reduced source volume once at the end.
 
-for idx, row in kml_remapping_changes.iterrows():
-    target_hub = row['Hub_name']
-    source_hub = row['Source_Hub']
-    percentage = row['Percentage']
-    start_date = row['Start_date']
-    end_date = row['End_date']
-    
-    print(f"\nProcessing KML Remapping: {source_hub} -> {target_hub} ({percentage*100:.1f}%, decimal: {percentage})")
-    
-    # Determine date filter
+def _build_date_mask(df, start_date, end_date):
     if pd.notna(start_date) and pd.notna(end_date):
         if start_date == end_date:
-            # Modify all sales BEFORE end_date
-            date_mask = merged_df['process_dt'] < end_date
+            return df['process_dt'] < end_date
         else:
-            # Modify sales BETWEEN start_date and end_date
-            date_mask = (merged_df['process_dt'] >= start_date) & (merged_df['process_dt'] <= end_date)
-    else:
-        date_mask = merged_df['process_dt'].notna()
-    
-    # ---------------------------------------------------------------------
-    # Transfer volumes (VECTORIZED - much faster!)
-    # ---------------------------------------------------------------------
-    # Step 1: Extract source hub data
+            return (df['process_dt'] >= start_date) & (df['process_dt'] <= end_date)
+    return df['process_dt'].notna()
+
+for (source_hub, start_date, end_date), group in kml_remapping_changes.groupby(
+    ['Source_Hub', 'Start_date', 'End_date'], dropna=False
+):
+    date_mask = _build_date_mask(merged_df, start_date, end_date)
     source_mask = (merged_df['hub_name'] == source_hub) & date_mask
-    source_data = merged_df[source_mask].copy()
-    
-    if source_data.empty:
-        print(f"  ⚠️  No source data found for {source_hub}")
+
+    # Snapshot original source volumes ONCE for the entire group
+    original_source = merged_df[source_mask].copy()
+
+    if original_source.empty:
+        for _, row in group.iterrows():
+            print(f"\nProcessing KML Remapping: {source_hub} -> {row['Hub_name']} ({row['Percentage']*100:.1f}%)")
+            print(f"  [!]  No source data found for {source_hub}")
         continue
-    
-    # Step 2: Calculate transfer amounts
-    source_data['transfer_amount'] = source_data['Sales (qty)'] * percentage
-    total_source_volume = source_data['Sales (qty)'].sum()
-    total_transfer_amount = source_data['transfer_amount'].sum()
-    
-    # Step 3: Reduce source hub volumes (VECTORIZED)
-    merged_df.loc[source_mask, 'Sales (qty)'] = merged_df.loc[source_mask, 'Sales (qty)'] * (1 - percentage)
-    
-    # Step 4: Find matching records in target hub
-    target_mask = (merged_df['hub_name'] == target_hub) & date_mask
-    target_data = merged_df[target_mask].copy()
-    
-    if not target_data.empty:
-        # Create merge key for matching
-        merge_key = ['process_dt', 'product_id']
-        
-        # Get target data with index for direct updates
-        target_indexed = merged_df[target_mask].reset_index()
-        
-        # Merge to find matching records and their indices
-        transfer_map = source_data[merge_key + ['transfer_amount']].merge(
-            target_indexed[merge_key + ['index']],
-            on=merge_key,
-            how='inner'
-        )
-        
-        if not transfer_map.empty:
-            # Step 5: Add volumes to target hub (FULLY VECTORIZED - no loops!)
-            # Use the original dataframe indices to update in bulk
-            indices_to_update = transfer_map['index'].values
-            amounts_to_add = transfer_map['transfer_amount'].values
-            
-            merged_df.loc[indices_to_update, 'Sales (qty)'] += amounts_to_add
-            
-            total_transferred = transfer_map['transfer_amount'].sum()
-            records_transferred = len(transfer_map)
-            total_lost = total_transfer_amount - total_transferred
-            records_lost = len(source_data) - records_transferred
-            
-            print(f"  [OK] Completed KML remapping for {len(source_data):,} source records")
-            print(f"    Volume transferred: {total_transferred:.2f} ({records_transferred:,} records)")
-            if records_lost > 0:
-                print(f"    ⚠️  Volume lost (no target record): {total_lost:.2f} ({records_lost:,} records)")
+
+    total_percentage = group['Percentage'].sum()
+    original_source_volume = original_source['Sales_withoutclusterv2 (qty)'].sum()
+
+    print(f"\n{'='*60}")
+    print(f"KML Remapping Group: Source = {source_hub} | Dates: {start_date} to {end_date}")
+    print(f"  Original source volume : {original_source_volume:.2f}")
+    print(f"  Target hubs            : {group['Hub_name'].tolist()}")
+    print(f"  Percentages            : {group['Percentage'].tolist()} (total = {total_percentage:.2f})")
+    if total_percentage > 1.0:
+        print(f"  [!]  WARNING: Total percentage {total_percentage:.2f} > 1.0 — source will go negative!")
+
+    merge_key = ['process_dt', 'product_id']
+
+    for _, row in group.iterrows():
+        target_hub = row['Hub_name']
+        percentage = row['Percentage']
+
+        print(f"\n  Processing: {source_hub} -> {target_hub} ({percentage*100:.1f}%)")
+
+        # Transfer amount always calculated from the ORIGINAL snapshot
+        transfer_source = original_source.copy()
+        transfer_source['transfer_amount'] = transfer_source['Sales_withoutclusterv2 (qty)'] * percentage
+        total_transfer_amount = transfer_source['transfer_amount'].sum()
+
+        target_mask = (merged_df['hub_name'] == target_hub) & date_mask
+        target_data = merged_df[target_mask]
+
+        if not target_data.empty:
+            target_indexed = merged_df[target_mask].reset_index()
+
+            transfer_map = transfer_source[merge_key + ['transfer_amount']].merge(
+                target_indexed[merge_key + ['index']],
+                on=merge_key,
+                how='inner'
+            )
+
+            if not transfer_map.empty:
+                indices_to_update = transfer_map['index'].values
+                amounts_to_add = transfer_map['transfer_amount'].values
+                merged_df.loc[indices_to_update, 'Sales_withoutclusterv2 (qty)'] += amounts_to_add
+
+                total_transferred = transfer_map['transfer_amount'].sum()
+                records_transferred = len(transfer_map)
+                total_lost = total_transfer_amount - total_transferred
+                records_lost = len(transfer_source) - records_transferred
+
+                print(f"    [OK] Volume transferred to {target_hub}: {total_transferred:.2f} ({records_transferred:,} records)")
+                if records_lost > 0:
+                    print(f"    [!]  Volume lost (no matching target record): {total_lost:.2f} ({records_lost:,} records)")
+            else:
+                print(f"    [!]  No matching records found in target hub {target_hub}")
+                print(f"    Volume lost: {total_transfer_amount:.2f} ({len(transfer_source):,} records)")
         else:
-            print(f"  ⚠️  No matching records found in target hub {target_hub}")
-            print(f"    Volume lost: {total_transfer_amount:.2f} ({len(source_data):,} records)")
-    else:
-        print(f"  ⚠️  Target hub {target_hub} has no data in the specified date range")
-        print(f"    Volume lost: {total_transfer_amount:.2f} ({len(source_data):,} records)")
+            print(f"    [!]  Target hub {target_hub} has no data in the specified date range")
+            print(f"    Volume lost: {total_transfer_amount:.2f} ({len(transfer_source):,} records)")
+
+    # Reduce source ONCE using the total percentage across all targets in the group
+    merged_df.loc[source_mask, 'Sales_withoutclusterv2 (qty)'] = (
+        merged_df.loc[source_mask, 'Sales_withoutclusterv2 (qty)'] * (1 - total_percentage)
+    )
+    final_source_volume = merged_df.loc[source_mask, 'Sales_withoutclusterv2 (qty)'].sum()
+    print(f"\n  ✓ Source {source_hub} reduced by {total_percentage*100:.1f}% (total across all targets)")
+    print(f"    Original: {original_source_volume:.2f}  →  Final: {final_source_volume:.2f}")
+    print(f"{'='*60}")
 
 # %%
 # -----------------------------------------------------------------------------
 # Combine Original Data with Virtual History
 # -----------------------------------------------------------------------------
-final_df = pd.concat([merged_df, virtual_history_aligned], ignore_index=True)
+final_df = merged_df.copy()
 
 # %%
 # -----------------------------------------------------------------------------
@@ -847,6 +986,8 @@ final_df = pd.concat([merged_df, virtual_history_aligned], ignore_index=True)
 # -----------------------------------------------------------------------------
 
 print("HUB CHANGES PROCESSING COMPLETE")
+merged_df.to_csv('Pandas_Hub_Changes.csv', index=False)
+
 print("="*80)
 print(f"Final DataFrame shape: {final_df.shape}")
 print(f"Original data: {len(merged_df):,} records")
@@ -860,9 +1001,9 @@ if len(new_hub_changes) > 0:
         print(f"  - {hub}: from {', '.join(sources)}")
         
         # Show volume for this hub in final_df
-        hub_volume = final_df[final_df['hub_name'] == hub]['Sales (qty)'].sum()
+        hub_volume = final_df[final_df['hub_name'] == hub]['Sales_withoutclusterv2 (qty)'].sum()
         hub_records = len(final_df[final_df['hub_name'] == hub])
-        print(f"    -> Total volume in final_df: {hub_volume:.2f} ({hub_records:,} records)")
+        print(f"    → Total volume in final_df: {hub_volume:.2f} ({hub_records:,} records)")
 
 if len(kml_remapping_changes) > 0:
     print(f"\nKML Remappings processed: {len(kml_remapping_changes)}")
@@ -871,12 +1012,12 @@ if len(kml_remapping_changes) > 0:
         source_hub = row['Source_Hub']
         
         # Show volume for this hub in final_df
-        target_volume = final_df[final_df['hub_name'] == target_hub]['Sales (qty)'].sum()
-        source_volume = final_df[final_df['hub_name'] == source_hub]['Sales (qty)'].sum()
+        target_volume = final_df[final_df['hub_name'] == target_hub]['Sales_withoutclusterv2 (qty)'].sum()
+        source_volume = final_df[final_df['hub_name'] == source_hub]['Sales_withoutclusterv2 (qty)'].sum()
         
-        print(f"  - {source_hub} -> {target_hub} ({row['Percentage']*100:.1f}%)")
-        print(f"    -> {target_hub} final volume: {target_volume:.2f}")
-        print(f"    -> {source_hub} final volume: {source_volume:.2f}")
+        print(f"  - {source_hub} → {target_hub} ({row['Percentage']*100:.1f}%)")
+        print(f"    → {target_hub} final volume: {target_volume:.2f}")
+        print(f"    → {source_hub} final volume: {source_volume:.2f}")
 
 # -----------------------------------------------------------------------------
 # Data Quality Check
@@ -890,9 +1031,9 @@ duplicates = final_df[final_df.duplicated(subset=['hub_name', 'product_id', 'pro
 if len(duplicates) > 0:
     print(f"⚠️  WARNING: Found {len(duplicates)} duplicate hub-product-date records!")
     print("\nSample duplicates:")
-    print(duplicates[['hub_name', 'product_id', 'process_dt', 'Sales (qty)']].head(10))
+    print(duplicates[['hub_name', 'product_id', 'process_dt', 'Sales_withoutclusterv2 (qty)']].head(10))
 else:
-    print("[OK] No duplicate hub-product-date combinations found")
+    print("✓ No duplicate hub-product-date combinations found")
 
 # Check if new hubs have data from original merged_df (they shouldn't!)
 if len(new_hub_changes) > 0:
@@ -901,11 +1042,12 @@ if len(new_hub_changes) > 0:
         hub_in_merged = merged_df[merged_df['hub_name'] == hub]
         if len(hub_in_merged) > 0:
             print(f"⚠️  WARNING: New Hub {hub} still has {len(hub_in_merged)} records in merged_df!")
-            print(f"   This should be 0. Volume: {hub_in_merged['Sales (qty)'].sum():.2f}")
+            print(f"   This should be 0. Volume: {hub_in_merged['Sales_withoutclusterv2 (qty)'].sum():.2f}")
 
 print("\n" + "="*80)
 
 # %%
+
 # =============================================================================
 # DIAGNOSTIC: Check Specific Hub (GHA)
 # =============================================================================
@@ -920,18 +1062,389 @@ print("\n" + "="*80)
 # check_hub_details('NDM', final_df)
 
 #%%
-# =============================================================================
-# DP LOGICS — Read from local Excel files (synced from Google Sheet via Streamlit)
-# =============================================================================
-# DP_LOGICS_FOLDER is imported from config
+# ---- 1. Load Pure Preorder data (self-contained — preorder_df not yet set) --
+preorder_raw_df = load_latest_parquet_from_drive("pure_preorder")
+_po_raw = pd.DataFrame()
+if len(preorder_raw_df.columns) >= 2:
+    _po_raw['hub_name'] = preorder_raw_df.iloc[:, 0].astype(str).str.strip()
+    _po_raw['SKU Class Prod'] = preorder_raw_df.iloc[:, 1].astype(str).str.strip()
+else:
+    _po_raw = pd.DataFrame(columns=['hub_name', 'SKU Class Prod'])
+_po_raw['hub_name'] = _po_raw['hub_name'].astype(str).str.strip()
 
-outlier_df = read_dp_logics_table_engine(DP_LOGICS_FOLDER, "City_Cat")
+# ---- 2. Build exclusion sets ------------------------------------------------
+
+# Pure Preorder: Hub × product_id (if available) else Hub × SKU Class Prod
+if 'product_id' in _po_raw.columns:
+    _po_raw['product_id'] = _po_raw['product_id'].astype(str).str.strip()
+    _preorder_excl = set(zip(_po_raw['hub_name'], _po_raw['product_id']))
+    _preorder_excl_col = 'product_id'
+else:
+    _po_raw['SKU Class Prod'] = _po_raw['SKU Class Prod'].astype(str).str.strip()
+    _preorder_excl = set(zip(_po_raw['hub_name'], _po_raw['SKU Class Prod']))
+    _preorder_excl_col = 'SKU Class Prod'
+
+print(f"Pure Preorder exclusions: {len(_preorder_excl)} hub×{_preorder_excl_col} combinations")
+
+# Cluster v2: both Mother Hub × product_id and Child Hub × product_id
+_cluster_excl = set()
+if not cluster_mapping_df.empty:
+    _cm = cluster_mapping_df[['product_id', 'childHub_name', 'MotherHub_name']].copy()
+    _cm['product_id']     = _cm['product_id'].astype(str).str.strip()
+    _cm['childHub_name']  = _cm['childHub_name'].astype(str).str.strip()
+    _cm['MotherHub_name'] = _cm['MotherHub_name'].astype(str).str.strip()
+    _cluster_excl |= set(zip(_cm['childHub_name'],  _cm['product_id']))
+    _cluster_excl |= set(zip(_cm['MotherHub_name'], _cm['product_id']))
+
+print(f"Cluster v2 exclusions   : {len(_cluster_excl)} hub×product_id combinations")
+
+# ---- 3. Working copy of final_df (pre-outlier correction) ------------------
+
+ci_df = final_df.copy()
+ci_df['hub_name']   = ci_df['hub_name'].astype(str).str.strip()
+ci_df['product_id'] = ci_df['product_id'].astype(str).str.strip()
+
+# Exclude Pure Preorder
+_po_key = list(zip(ci_df['hub_name'], ci_df[_preorder_excl_col].astype(str).str.strip()))
+ci_df = ci_df[~pd.Series(_po_key, index=ci_df.index).isin(_preorder_excl)]
+
+# Exclude Cluster v2
+_cl_key = list(zip(ci_df['hub_name'], ci_df['product_id']))
+ci_df = ci_df[~pd.Series(_cl_key, index=ci_df.index).isin(_cluster_excl)]
+
+print(f"Records after exclusions: {len(ci_df):,}  (original final_df: {len(final_df):,})")
+
+# ---- 4. Restrict to last 4 fully completed weeks (Mon–Sun already passed) --
+
+_today_dt = pd.Timestamp.today().normalize()
+
+# For each Week, pick any date from that week and derive its Sunday
+_week_end_map = (
+    ci_df.dropna(subset=['Week', 'process_dt'])
+    .groupby('Week')['process_dt']
+    .first()
+    .reset_index()
+)
+_week_end_map['week_sunday'] = _week_end_map['process_dt'].apply(
+    lambda d: d + pd.Timedelta(days=(6 - d.weekday()))  # Mon=0 … Sun=6
+)
+
+# Max date actually present in the data for each week
+_week_max_date = (
+    ci_df.groupby('Week')['process_dt']
+    .max()
+    .reset_index()
+    .rename(columns={'process_dt': 'max_date'})
+)
+_week_end_map = _week_end_map.merge(_week_max_date, on='Week', how='left')
+
+# A week is complete only if:
+#   1. Its calendar Sunday is before today (week has ended), AND
+#   2. The data for that week reaches its Sunday (no missing tail days)
+_complete_weeks = (
+    _week_end_map.loc[
+        (_week_end_map['week_sunday'] < _today_dt) &
+        (_week_end_map['max_date']    >= _week_end_map['week_sunday']),
+        'Week'
+    ]
+    .tolist()
+)
+_last_4_weeks = sorted(_complete_weeks)[-4:]
+
+if len(_last_4_weeks) < 4:
+    print(f"⚠️  Only {len(_last_4_weeks)} complete week(s) available: {_last_4_weeks}")
+else:
+    print(f"Last 4 complete weeks   : {_last_4_weeks}")
+
+ci_df = ci_df[ci_df['Week'].isin(_last_4_weeks)].copy()
+
+# ---- 5. Row-level availability numerator/denominator -----------------------
+# Fresh Water & Sea water → group-level flags; all others → simple (non-group)
+
+_FRESH_SEA = ['Fresh Water', 'Sea water']
+_is_fw_sw = ci_df['sub category'].isin(_FRESH_SEA)
+
+ci_df['_avail_num'] = np.where(
+    _is_fw_sw,
+    pd.to_numeric(ci_df['simple_group_flag_when_SP_0_withoutclusterv2'],      errors='coerce').fillna(0),
+    pd.to_numeric(ci_df['simple_flag_when_SP_0_withoutclusterv2'],            errors='coerce').fillna(0),
+)
+ci_df['_avail_den'] = np.where(
+    _is_fw_sw,
+    pd.to_numeric(ci_df['simple_group_instances_when_SP_0_withoutclusterv2'], errors='coerce').fillna(0),
+    pd.to_numeric(ci_df['simple_instances_when_SP_0_withoutclusterv2'],       errors='coerce').fillna(0),
+)
+
+# Wastage quantity
+ci_df['_wastage_qty'] = (
+    pd.to_numeric(ci_df['wastage_qty_Quality'], errors='coerce').fillna(0) +
+    pd.to_numeric(ci_df['wastage_qty_Expiry'],  errors='coerce').fillna(0)
+)
+
+# ---- 6. Aggregate at Hub × SKU Class Prod × Week --------------------------
+
+_week_agg = ci_df.groupby(['hub_name', 'SKU Class Prod', 'Week'], as_index=False).agg(
+    vol_bucket  = ('Sales_withoutclusterv2 (qty)', 'sum'),
+    r7_plan_sum = ('r7_plan',                      'sum'),
+    avail_num   = ('_avail_num',                   'sum'),
+    avail_den   = ('_avail_den',                   'sum'),
+    wastage_qty = ('_wastage_qty',                 'sum'),
+    sales_wc    = ('Sales_withoutclusterv2 (qty)', 'sum'),
+)
+
+# ---- 7. Compute ratios -----------------------------------------------------
+
+_week_agg['attainment']   = np.where(_week_agg['r7_plan_sum'] > 0,
+                                      _week_agg['vol_bucket']  / _week_agg['r7_plan_sum'], np.nan)
+_week_agg['availability'] = np.where(_week_agg['avail_den'] > 0,
+                                      _week_agg['avail_num']   / _week_agg['avail_den'],   np.nan)
+_week_agg['wastage_pct']  = np.where(_week_agg['sales_wc']  > 0,
+                                      _week_agg['wastage_qty'] / _week_agg['sales_wc'],    np.nan)
+
+# ---- 8. Flag weeks that meet ALL conditions --------------------------------
+# Thresholds are read live from Google Sheet: "Consistent Issues Logic" tab.
+# Sheet layout:
+#   Row 3 = Rev Loss  | Cols B,C,D,E = Attainment, Availability, Wastage%, Vol Bucket
+#   Row 5 = Wastage   | Cols B,C,D,E = Attainment, Availability, Wastage%, Vol Bucket
+
+def _parse_threshold(raw: str):
+    """Parse a threshold string like '>95%' or '<=30' into (operator, float).
+    Raises ValueError if the string is empty, '-', or otherwise unparseable."""
+    s = str(raw).strip()
+    if not s or s == '-':
+        raise ValueError(
+            f"Threshold value '{raw}' in 'Consistent Issues Logic' sheet is blank or "
+            f"placeholder ('-'). Please fill in a valid threshold (e.g. '>95%')."
+        )
+    if s.startswith('>='):
+        op, num_str = '>=', s[2:]
+    elif s.startswith('<='):
+        op, num_str = '<=', s[2:]
+    elif s.startswith('>'):
+        op, num_str = '>', s[1:]
+    elif s.startswith('<'):
+        op, num_str = '<', s[1:]
+    else:
+        raise ValueError(
+            f"Cannot parse operator from threshold '{raw}'. "
+            f"Expected one of: >, <, >=, <=."
+        )
+    num_str = num_str.strip().rstrip('%')
+    try:
+        num = float(num_str)
+    except ValueError:
+        raise ValueError(
+            f"Cannot parse numeric value from threshold '{raw}'. "
+            f"Got '{num_str}' after stripping operator and '%'."
+        )
+    if '%' in s:
+        num = num / 100.0
+    return op, num
+
+def _apply_op(series, op: str, val: float):
+    """Apply a comparison operator to a pandas Series, returning a boolean mask."""
+    if op == '>':
+        return series > val
+    elif op == '<':
+        return series < val
+    elif op == '>=':
+        return series >= val
+    elif op == '<=':
+        return series <= val
+    else:
+        raise ValueError(f"Unknown operator '{op}'.")
+
+df_logic = load_latest_parquet_from_drive("Consistent_issues_logics")
+_cfg_rows = [[]] * 6
+_cfg_rows[2] = [
+    "Rev Loss",
+    df_logic.iloc[1, 1], # index 1: Attainment
+    df_logic.iloc[1, 2], # index 2: Availability
+    df_logic.iloc[1, 3], # index 3: Wastage%
+    df_logic.iloc[1, 4], # index 4: Vol Bucket
+    "", "", "", "",
+    df_logic.iloc[1, 8], # index 9: Day Attainment
+    df_logic.iloc[1, 9], # index 10: Day Availability
+    df_logic.iloc[1, 10] # index 11: Day Vol Bucket
+]
+_cfg_rows[4] = [
+    "Wastage",
+    df_logic.iloc[2, 1], # index 1: Attainment
+    df_logic.iloc[2, 2], # index 2: Availability
+    df_logic.iloc[2, 3], # index 3: Wastage%
+    df_logic.iloc[2, 4], # index 4: Vol Bucket
+    "", "", "", "",
+    df_logic.iloc[2, 8], # index 9: Day Attainment
+    df_logic.iloc[2, 9], # index 10: Day Availability
+    df_logic.iloc[2, 10] # index 11: Day Vol Bucket
+]
+
+# Row 3 (index 2) → Rev Loss | Row 5 (index 4) → Wastage
+# Cols B,C,D,E → indices 1,2,3,4
+_rl_row = _cfg_rows[2]   # Rev Loss
+_wt_row = _cfg_rows[4]   # Wastage
+
+_rl_att_op,  _rl_att_val  = _parse_threshold(_rl_row[1])   # Col B: Attainment
+_rl_avl_op,  _rl_avl_val  = _parse_threshold(_rl_row[2])   # Col C: Availability
+_rl_wst_op,  _rl_wst_val  = _parse_threshold(_rl_row[3])   # Col D: Wastage%
+_rl_vol_op,  _rl_vol_val  = _parse_threshold(_rl_row[4])   # Col E: Vol Bucket
+
+_wt_att_op,  _wt_att_val  = _parse_threshold(_wt_row[1])   # Col B: Attainment
+_wt_avl_op,  _wt_avl_val  = _parse_threshold(_wt_row[2])   # Col C: Availability
+_wt_wst_op,  _wt_wst_val  = _parse_threshold(_wt_row[3])   # Col D: Wastage%
+_wt_vol_op,  _wt_vol_val  = _parse_threshold(_wt_row[4])   # Col E: Vol Bucket
+
+print(f"[Config] Rev Loss  — Attainment {_rl_att_op}{_rl_att_val} | "
+      f"Availability {_rl_avl_op}{_rl_avl_val} | "
+      f"Wastage% {_rl_wst_op}{_rl_wst_val} | "
+      f"Vol {_rl_vol_op}{_rl_vol_val}")
+print(f"[Config] Wastage   — Attainment {_wt_att_op}{_wt_att_val} | "
+      f"Availability {_wt_avl_op}{_wt_avl_val} | "
+      f"Wastage% {_wt_wst_op}{_wt_wst_val} | "
+      f"Vol {_wt_vol_op}{_wt_vol_val}")
+
+# -- Apply flags --------------------------------------------------------------
+_week_agg['rev_loss_flag'] = (
+    _apply_op(_week_agg['attainment'],   _rl_att_op, _rl_att_val) &
+    _apply_op(_week_agg['availability'], _rl_avl_op, _rl_avl_val) &
+    _apply_op(_week_agg['wastage_pct'],  _rl_wst_op, _rl_wst_val) &
+    _apply_op(_week_agg['vol_bucket'],   _rl_vol_op, _rl_vol_val)
+)
+
+_week_agg['wastage_flag'] = (
+    _apply_op(_week_agg['attainment'],   _wt_att_op, _wt_att_val) &
+    _apply_op(_week_agg['availability'], _wt_avl_op, _wt_avl_val) &
+    _apply_op(_week_agg['wastage_pct'],  _wt_wst_op, _wt_wst_val) &
+    _apply_op(_week_agg['vol_bucket'],   _wt_vol_op, _wt_vol_val)
+)
+
+# ---- 8b. Diagnostic: check how many rows pass each individual condition ----
+print("\n[Diagnostic] _week_agg row count:", len(_week_agg))
+print("[Diagnostic] rev_loss_flag True rows :", _week_agg['rev_loss_flag'].sum())
+print("[Diagnostic] wastage_flag  True rows :", _week_agg['wastage_flag'].sum())
+
+print("\n[Diagnostic] Condition breakdown for Rev Loss:")
+print("  attainment NaN  :", _week_agg['attainment'].isna().sum())
+print("  availability NaN:", _week_agg['availability'].isna().sum())
+print("  wastage_pct NaN :", _week_agg['wastage_pct'].isna().sum())
+_rl_c1 = _apply_op(_week_agg['attainment'],   _rl_att_op, _rl_att_val).sum()
+_rl_c2 = _apply_op(_week_agg['availability'], _rl_avl_op, _rl_avl_val).sum()
+_rl_c3 = _apply_op(_week_agg['wastage_pct'],  _rl_wst_op, _rl_wst_val).sum()
+_rl_c4 = _apply_op(_week_agg['vol_bucket'],   _rl_vol_op, _rl_vol_val).sum()
+print(f"  Pass attainment   {_rl_att_op}{_rl_att_val}: {_rl_c1}")
+print(f"  Pass availability {_rl_avl_op}{_rl_avl_val}: {_rl_c2}")
+print(f"  Pass wastage_pct  {_rl_wst_op}{_rl_wst_val}: {_rl_c3}")
+print(f"  Pass vol_bucket   {_rl_vol_op}{_rl_vol_val}: {_rl_c4}")
+
+print("\n[Diagnostic] Condition breakdown for Wastage:")
+_wt_c1 = _apply_op(_week_agg['attainment'],   _wt_att_op, _wt_att_val).sum()
+_wt_c2 = _apply_op(_week_agg['availability'], _wt_avl_op, _wt_avl_val).sum()
+_wt_c3 = _apply_op(_week_agg['wastage_pct'],  _wt_wst_op, _wt_wst_val).sum()
+_wt_c4 = _apply_op(_week_agg['vol_bucket'],   _wt_vol_op, _wt_vol_val).sum()
+print(f"  Pass attainment   {_wt_att_op}{_wt_att_val}: {_wt_c1}")
+print(f"  Pass availability {_wt_avl_op}{_wt_avl_val}: {_wt_c2}")
+print(f"  Pass wastage_pct  {_wt_wst_op}{_wt_wst_val}: {_wt_c3}")
+print(f"  Pass vol_bucket   {_wt_vol_op}{_wt_vol_val}: {_wt_c4}")
+
+print("\n[Diagnostic] Rev Loss flags per week:")
+print(_week_agg.groupby('Week')['rev_loss_flag'].sum().to_string())
+print("\n[Diagnostic] Wastage flags per week:")
+print(_week_agg.groupby('Week')['wastage_flag'].sum().to_string())
+
+# How many combos are flagged in 2+ weeks (any weeks, not just consecutive)?
+_rl_any = _week_agg.groupby(['hub_name','SKU Class Prod'])['rev_loss_flag'].sum()
+_wt_any = _week_agg.groupby(['hub_name','SKU Class Prod'])['wastage_flag'].sum()
+print(f"\n[Diagnostic] Rev Loss combos flagged in ≥2 of ANY 4 weeks : {(_rl_any >= 2).sum()}")
+print(f"[Diagnostic] Wastage  combos flagged in ≥2 of ANY 4 weeks : {(_wt_any >= 2).sum()}")
+print(f"[Diagnostic] Rev Loss combos flagged in week {_last_4_weeks[-1]} (latest): "
+      f"{_week_agg[_week_agg['Week']==_last_4_weeks[-1]]['rev_loss_flag'].sum()}")
+print(f"[Diagnostic] Wastage  combos flagged in week {_last_4_weeks[-1]} (latest): "
+      f"{_week_agg[_week_agg['Week']==_last_4_weeks[-1]]['wastage_flag'].sum()}")
+
+# ---- 9. Consecutive streak from latest week per Hub × SKU Class Prod ------
+# A combo qualifies only if the latest week meets the condition AND each
+# preceding week also meets it without a gap.
+# e.g. weeks [23,24,25,26]: check 26 → if passes check 25 → if passes check 24.
+# Stop at the first week that fails. Require streak ≥ 2 to be included.
+
+def _consecutive_from_latest(flags):
+    """Count unbroken True streak from the first element (latest week first)."""
+    count = 0
+    for f in flags:
+        if f:
+            count += 1
+        else:
+            break
+    return count
+
+# Sort latest week first within each group so streak starts from most recent
+_week_agg_desc = _week_agg.sort_values(
+    ['hub_name', 'SKU Class Prod', 'Week'], ascending=[True, True, False]
+)
+
+_rl_streak = (
+    _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['rev_loss_flag']
+    .apply(_consecutive_from_latest)
+    .reset_index()
+    .rename(columns={'rev_loss_flag': 'Instances'})
+)
+rev_loss_result = (
+    _rl_streak[_rl_streak['Instances'] >= 2]
+    .sort_values('Instances', ascending=False)
+    .reset_index(drop=True)
+)
+
+_wt_streak = (
+    _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['wastage_flag']
+    .apply(_consecutive_from_latest)
+    .reset_index()
+    .rename(columns={'wastage_flag': 'Instances'})
+)
+wastage_result = (
+    _wt_streak[_wt_streak['Instances'] >= 2]
+    .sort_values('Instances', ascending=False)
+    .reset_index(drop=True)
+)
+
+print(f"\nRev Loss  — Hub×SKU Class Prod combos with ≥2 qualifying weeks: {len(rev_loss_result)}")
+print(f"Wastage   — Hub×SKU Class Prod combos with ≥2 qualifying weeks: {len(wastage_result)}")
+
+# Quick streak distribution to diagnose 0-result issues
+_rl_streak_dist = _rl_streak['Instances'].value_counts().sort_index()
+_wt_streak_dist = _wt_streak['Instances'].value_counts().sort_index()
+print(f"\n[Diagnostic] Rev Loss streak distribution (0=never flagged, 4=all 4 weeks):\n{_rl_streak_dist.to_string()}")
+print(f"\n[Diagnostic] Wastage  streak distribution:\n{_wt_streak_dist.to_string()}")
+print(f"\n[Diagnostic] Weeks used: {_last_4_weeks}")
+
+# ---- 10. Save Excel files --------------------------------------------------
+
+_today  = datetime.date.today().strftime('%Y-%m-%d')
+_folder = BASELINE_CURRENT_FORECASTING_DIR
+
+_rl_path = os.path.join(_folder, f"Consistent_Issues_RevLoss_{_today}.xlsx")
+_wt_path = os.path.join(_folder, f"Consistent_Issues_Wastage_{_today}.xlsx")
+
+rev_loss_result.to_excel(_rl_path, index=False)
+wastage_result.to_excel(_wt_path,  index=False)
+
+print(f"\nSaved: {_rl_path}")
+print(f"Saved: {_wt_path}")
+
+# ---- 11. (Logging moved to Consistent Issues Validation tab — see end of script) ----
+
+# =============================================================================
+# END CONSISTENT ISSUES LOGIC
+# =============================================================================
 
 # %%
-outlier_df['process_dt'] = pd.to_datetime(outlier_df['process_dt'], format='%m/%d/%Y')
+# %%
+outlier_df = load_latest_parquet_from_drive("City_Cat")
 
 # %%
-final_df['process_dt'] = pd.to_datetime(final_df['process_dt'], format='%m/%d/%Y')
+outlier_df['process_dt'] = pd.to_datetime(outlier_df['process_dt'], format='%m/%d/%Y', errors='coerce')
+
+# %%
+final_df['process_dt'] = pd.to_datetime(final_df['process_dt'], format='%m/%d/%Y', errors='coerce')
 
 # %%
 final_df = final_df.merge(
@@ -941,24 +1454,55 @@ final_df = final_df.merge(
 )
 
 # %%
-# Note: Old "Hub_date_change" worksheet logic has been removed.
-# All hub changes are now handled through the "Hub_Changes" sheet above.
-# This includes both New Hub launches and KML Remapping.
-
-
-# %%
 final_df['Outlier_Flag'] = pd.to_numeric(final_df['Outlier_Flag'], errors='coerce').fillna(0).astype(int)
 
 # %%
-final_df.head()
+# =============================================================================
+# HUB-LEVEL OUTLIER EXCLUSION (City_Cat tab, columns H:I -> Hub, Date)
+# =============================================================================
+
+# Hub exclusions are not present in City_Cat parquet (Column G was blank in sheet)
+# Initialize empty DataFrame with target columns to safely bypass direct sheet calls.
+hub_exclude_df = pd.DataFrame(columns=['hub_name', 'process_dt', 'Hub_Outlier_Flag'])
+hub_exclude_df = hub_exclude_df.drop_duplicates(subset=['hub_name', 'process_dt'])
+
+print(f"[HUB OUTLIER] {len(hub_exclude_df)} hub+date exclusion pairs found in City_Cat (cols H:I)")
+if len(hub_exclude_df):
+    print(hub_exclude_df[['hub_name', 'process_dt']].to_string(index=False))
+
+# Merge onto final_df on hub_name + process_dt (applies across all
+# cities / categories / SKUs for that hub on that date)
+final_df = final_df.merge(
+    hub_exclude_df[['hub_name', 'process_dt', 'Hub_Outlier_Flag']],
+    on=['hub_name', 'process_dt'],
+    how='left'
+)
+final_df['Hub_Outlier_Flag'] = final_df['Hub_Outlier_Flag'].fillna(0).astype(int)
+
+
+
+
 
 # %%
-final_df.loc[final_df['Outlier_Flag'] == 1, ['Sales (qty)', 'simple_avail_num']] = 0
+# Skip city/subcategory outlier zeroing for sparse hub×SKU-class patterns:
+# weekly hub×class sales < 12 and that hub×class sells exactly 1 unit on this date.
+hub_class_week_sales = final_df.groupby(
+    ["hub_name", "SKU Class Prod", "Week"], dropna=False
+)["Sales_withoutclusterv2 (qty)"].transform("sum")
+hub_class_day_sales = final_df.groupby(
+    ["hub_name", "SKU Class Prod", "process_dt"], dropna=False
+)["Sales_withoutclusterv2 (qty)"].transform("sum")
+exempt_low_week_single_day = (hub_class_week_sales < 12) & np.isclose(
+    hub_class_day_sales, 1.0, rtol=0, atol=1e-9
+)
+apply_outlier_zero = (final_df["Outlier_Flag"] == 1) & (~exempt_low_week_single_day) | (final_df["Hub_Outlier_Flag"] == 1)
+# Store outlier flag for downstream 'L' marking — do NOT zero out sales or availability
+final_df['_apply_outlier'] = apply_outlier_zero.astype(int)
 
 
 
-# %%
-final_df.head()
+
+
 
 # %%
 availability_agg = final_df.groupby(
@@ -966,22 +1510,72 @@ availability_agg = final_df.groupby(
 ).agg(
     simple_avail_num_sum=('simple_avail_num', 'sum'),
     simple_avail_den_sum=('simple_avail_den', 'sum'),
-    sales_qty_sum=('Sales (qty)', 'sum')  
+    sales_qty_sum=('Sales_withoutclusterv2 (qty)', 'sum'),
+    _outlier_flag=('_apply_outlier', 'max'),
 ).reset_index()
 
 # %%
-availability_agg['simple_availability'] = (
-    availability_agg['simple_avail_num_sum']
-    .div(availability_agg['simple_avail_den_sum'].replace(0, np.nan))
-    .fillna(0)
+availability_agg['simple_availability'] = np.where(
+    (availability_agg['simple_avail_num_sum'] == 0) & (availability_agg['simple_avail_den_sum'] == 0),
+    0,
+    np.where(
+        (availability_agg['simple_avail_num_sum'] == 0) | (availability_agg['simple_avail_den_sum'] == 0),
+        0,
+        availability_agg['simple_avail_num_sum'] / availability_agg['simple_avail_den_sum']
+    )
 )
 
-
 # %%
-availability_agg.head()
+# Pure Preorder override:
+# For rows in the "Pure Preorder" tab where SKU Class Prod is a valid value (not #N/A/blank/nan),
+# match to availability_agg on hub_name + SKU Class Prod + process_dt,
+# and replace simple_availability = max(simple_availability, Availability Cap).
+# Only adds PF flag column — no other columns.
+preorder_raw_df = load_latest_parquet_from_drive("pure_preorder")
+preorder_df = pd.DataFrame()
+if len(preorder_raw_df.columns) >= 5:
+    preorder_df['hub_name'] = preorder_raw_df.iloc[:, 0].astype(str).str.strip()
+    preorder_df['SKU Class Prod'] = preorder_raw_df.iloc[:, 1].astype(str).str.strip()
+    preorder_df['Date'] = pd.to_datetime(preorder_raw_df.iloc[:, 3], errors='coerce')
+    preorder_df['Availability Cap'] = preorder_raw_df.iloc[:, 4]
+else:
+    preorder_df = pd.DataFrame(columns=['hub_name', 'SKU Class Prod', 'Date', 'Availability Cap'])
 
-# %%
-# availability_agg.to_clipboard()  # disabled for speed
+preorder_df["hub_name"] = preorder_df["hub_name"].astype(str).str.strip()
+preorder_df["Date"] = pd.to_datetime(preorder_df["Date"], errors="coerce")
+
+cap_raw = preorder_df["Availability Cap"].astype(str).str.strip()
+preorder_df["Availability Cap"] = (
+    pd.to_numeric(cap_raw.str.replace("%", "", regex=False), errors="coerce") / 100.0
+)
+
+# Keep only rows with a valid SKU Class Prod (exclude #N/A, blank, nan)
+_sku = preorder_df["SKU Class Prod"].astype(str).str.strip()
+_sku = _sku.replace({"nan": "#N/A", "": "#N/A"})
+preorder_valid = preorder_df.loc[
+    _sku.ne("#N/A"),
+    ["hub_name", "SKU Class Prod", "Date", "Availability Cap"],
+].copy()
+preorder_valid["SKU Class Prod"] = _sku[_sku.ne("#N/A")].values
+preorder_valid = preorder_valid.rename(columns={"Date": "process_dt", "Availability Cap": "preorder_cap"})
+
+preorder_caps = (
+    preorder_valid.groupby(["hub_name", "SKU Class Prod"], as_index=False)["preorder_cap"]
+    .max()
+)
+
+cap_series = (
+    pd.DataFrame({
+        "hub_name": availability_agg["hub_name"].astype(str).str.strip(),
+        "SKU Class Prod": availability_agg["SKU Class Prod"].astype(str).str.strip(),
+    })
+    .merge(preorder_caps, on=["hub_name", "SKU Class Prod"], how="left")
+    ["preorder_cap"]
+    .values
+)
+
+availability_agg["PF"] = np.where(pd.notna(cap_series), "PF", "")
+mask_pf = pd.notna(cap_series)
 
 # %%
 pivot_df = pd.pivot_table(
@@ -994,8 +1588,6 @@ pivot_df = pd.pivot_table(
 )
 
 
-# %%
-# pivot_df.to_clipboard()  # disabled for speed
 
 # %%
 if isinstance(pivot_df.columns, pd.MultiIndex):
@@ -1005,8 +1597,6 @@ if isinstance(pivot_df.columns, pd.MultiIndex):
 availability_cols = [c for c in pivot_df.columns if c.startswith("simple_availability")]
 
 
-# %%
-print(availability_cols)
 
 # %%
 for c in availability_cols:
@@ -1018,20 +1608,28 @@ for c in availability_cols:
 # %%
 pivot_df = pivot_df.reset_index()
 
+# Carry PF flag from availability_agg into pivot_df (hub_name + SKU Class Prod level)
+_pf_map = (
+    availability_agg[["hub_name", "SKU Class Prod", "PF"]]
+    .drop_duplicates(subset=["hub_name", "SKU Class Prod"])
+)
+pivot_df = pivot_df.merge(_pf_map, on=["hub_name", "SKU Class Prod"], how="left")
+pivot_df["PF"] = pivot_df["PF"].fillna("")
 
 # %%
-pivot_df.columns
-
-# %%
-avl_flag_full = read_dp_logics_table_engine(DP_LOGICS_FOLDER, "Avl_Flag")
-subcat_cat_df = avl_flag_subcat_cat_df(avl_flag_full)
+# Extract subcat to Cat mapping (previously H:J of Avl_Flag) from the loaded avl_flag_df
+subcat_cat_df = avl_flag_df[['Sub-category', 'Category']].drop_duplicates().rename(columns={
+    'Sub-category': 'sub category',
+    'Category': 'Cat'
+})
 
 # %%
 pivot_df = pivot_df.merge(subcat_cat_df, how='left', on='sub category')
 
 
 # %%
-stf_df = read_dp_logics_table_engine(DP_LOGICS_FOLDER, "SellThroughFactor")
+# Load Sell-Through Factor from parquet
+stf_df = load_latest_parquet_from_drive("SellThroughFactor")
 
 # %%
 for col in ['salethroughfactor', 'salethroughfactor_lowvolume']:
@@ -1069,9 +1667,47 @@ for factor_col in ['salethroughfactor', 'salethroughfactor_lowvolume']:
     pivot_list.append(stf_pivot)
 
 # Merge both sets of columns side-by-side
+from functools import reduce
 stf_pivot_all = reduce(lambda left, right: pd.merge(left, right, on=['city_name', 'Cat', 'day', 'hour']), pivot_list)
 
+# Hub × Cat × day × hour STF (STF_hub): overrides city factors where a hub row exists; NaN falls back to city
+stf_hub_df = load_latest_parquet_from_drive("stf_hub")
+stf_hub_df.columns = stf_hub_df.columns.str.strip()
+_stf_hub_required = {"hub_name", "Cat", "day", "hour_15min", "STF_sales", "STF_sales_lowvolume"}
+if len(stf_hub_df) > 0 and _stf_hub_required.issubset(set(stf_hub_df.columns)):
+    stf_hub_df["hour"] = pd.to_numeric(stf_hub_df["hour_15min"], errors="coerce").fillna(0).astype(int)
+    for _c in ["STF_sales", "STF_sales_lowvolume"]:
+        stf_hub_df[_c] = pd.to_numeric(stf_hub_df[_c], errors="coerce")
+    stf_hub_list = []
+    for factor_col, src_col in [
+        ("salethroughfactor", "STF_sales"),
+        ("salethroughfactor_lowvolume", "STF_sales_lowvolume"),
+    ]:
+        stf_hub_daily = (
+            stf_hub_df.groupby(["hub_name", "Cat", "day", "hour"], as_index=False)[src_col]
+            .mean()
+            .rename(columns={src_col: factor_col})
+        )
+        stf_hub_daily["key"] = 1
+        stf_hub_expanded = pd.merge(stf_hub_daily, week_df, on="key").drop("key", axis=1)
+        stf_hub_pivot = stf_hub_expanded.pivot(
+            index=["hub_name", "Cat", "day", "hour"], columns="week", values=factor_col
+        )
+        stf_hub_pivot.columns = [f"{factor_col}_{w}" for w in stf_hub_pivot.columns]
+        stf_hub_pivot = stf_hub_pivot.reset_index()
+        stf_hub_list.append(stf_hub_pivot)
+    stf_hub_pivot_all = reduce(
+        lambda left, right: pd.merge(left, right, on=["hub_name", "Cat", "day", "hour"]),
+        stf_hub_list,
+    )
+else:
+    stf_hub_pivot_all = None
 
+
+# %%
+stf_pivot = stf_expanded.pivot(index=['city_name', 'Cat', 'day','hour'], columns='week', values='salethroughfactor')
+stf_pivot.columns = [f'salethroughfactor_{w}' for w in stf_pivot.columns]
+stf_pivot = stf_pivot.reset_index()
 
 
 # %%
@@ -1088,16 +1724,57 @@ for week in weeks:
         if stf_week_col not in stf_pivot_all.columns:
             continue
 
-        temp_df = pivot_df[['city_name', 'Cat', 'day', out_of_stock_col]].copy()
-        temp_df = temp_df.rename(columns={out_of_stock_col: 'hour'})
+        temp_df = pivot_df[["city_name", "hub_name", "Cat", "day", out_of_stock_col]].copy()
+        temp_df = temp_df.rename(columns={out_of_stock_col: "hour"})
 
-        temp_merge = temp_df.merge(
-            stf_pivot_all[['city_name', 'Cat', 'day', 'hour', stf_week_col]],
-            on=['city_name', 'Cat', 'day', 'hour'],
-            how='left'
+        city_merge = temp_df.merge(
+            stf_pivot_all[["city_name", "Cat", "day", "hour", stf_week_col]],
+            on=["city_name", "Cat", "day", "hour"],
+            how="left",
         )
+        if (
+            stf_hub_pivot_all is not None
+            and stf_week_col in stf_hub_pivot_all.columns
+        ):
+            hub_merge = temp_df.merge(
+                stf_hub_pivot_all[["hub_name", "Cat", "day", "hour", stf_week_col]],
+                on=["hub_name", "Cat", "day", "hour"],
+                how="left",
+            )
+            pivot_df[stf_week_col] = hub_merge[stf_week_col].combine_first(
+                city_merge[stf_week_col]
+            )
+        else:
+            pivot_df[stf_week_col] = city_merge[stf_week_col]
 
-        pivot_df[stf_week_col] = temp_merge[stf_week_col]
+# Build salethroughfactor_8am_{week} columns using hub-then-city fallback at hour=8
+_stf_8am_city = stf_pivot_all[stf_pivot_all["hour"] == 8].copy()
+_stf_8am_hub  = stf_hub_pivot_all[stf_hub_pivot_all["hour"] == 8].copy() if stf_hub_pivot_all is not None else None
+
+for week in [col.split('_')[-1] for col in pivot_df.columns if col.startswith('simple_availability_')]:
+    _src_col   = f"salethroughfactor_{week}"
+    _8am_col   = f"salethroughfactor_8am_{week}"
+    _temp      = pivot_df[["city_name", "hub_name", "Cat", "day"]].copy()
+
+    _city_8am  = _temp.merge(
+        _stf_8am_city[["city_name", "Cat", "day", _src_col]].rename(columns={_src_col: _8am_col}),
+        on=["city_name", "Cat", "day"], how="left",
+    )[_8am_col]
+
+    if _stf_8am_hub is not None and _src_col in _stf_8am_hub.columns:
+        _hub_8am = _temp.merge(
+            _stf_8am_hub[["hub_name", "Cat", "day", _src_col]].rename(columns={_src_col: _8am_col}),
+            on=["hub_name", "Cat", "day"], how="left",
+        )[_8am_col]
+        pivot_df[_8am_col] = _hub_8am.combine_first(_city_8am)
+    else:
+        pivot_df[_8am_col] = _city_8am
+
+
+# %%
+
+week_cols = [col for col in pivot_df.columns if col.startswith('simple_availability_')]
+weeks = [col.split('_')[-1] for col in week_cols]
 
 
 # %%
@@ -1122,20 +1799,40 @@ for week in weeks:
         )
         
 
-        # Compute corrected sales (object dtype — may hold numeric values or 'L')
-        corrected = (
-            pivot_df[sales_col] / np.where(factor_used == 0, np.nan, factor_used)
-        ).round(0)
-        mask_L = (pivot_df[sales_col] == 0) & (pivot_df[availability_col] < 0.9)
-        corrected = corrected.astype(object)
-        corrected.loc[mask_L] = 'L'
-        pivot_df[corrected_col] = corrected
+        # Compute corrected sales
+        pivot_df[corrected_col] = (pivot_df[sales_col] / np.where(factor_used == 0, np.nan, factor_used)).round(0)
+
+# For PF rows: multiply corrected_col by salethroughfactor at 8am (hub-then-city fallback)
+mask_pf = pivot_df["PF"] == "PF"
+print(f"\n[PF DEBUG] PF rows in pivot_df: {mask_pf.sum()}")
+if mask_pf.any():
+    for week in weeks:
+        corrected_col = f"avl_corrected_sales_{week}"
+        _8am_col      = f"salethroughfactor_8am_{week}"
+        if corrected_col not in pivot_df.columns or _8am_col not in pivot_df.columns:
+            print(f"  [PF DEBUG] week {week}: missing column(s) — skipping")
+            continue
+        _pf_mask = mask_pf & (pivot_df[corrected_col] != "L")
+        _corr    = pd.to_numeric(pivot_df.loc[_pf_mask, corrected_col], errors="coerce")
+        _stf     = pd.to_numeric(pivot_df.loc[_pf_mask, _8am_col],      errors="coerce")
+        _result  = (_corr * _stf).round(0)
+        print(f"  [PF DEBUG] week {week}: {_pf_mask.sum()} rows multiplied | "
+              f"corr sample={_corr.head(3).tolist()} | "
+              f"stf_8am sample={_stf.head(3).tolist()} | "
+              f"result sample={_result.head(3).tolist()}")
+        pivot_df.loc[_pf_mask, corrected_col] = _result
+    print(f"[PF DEBUG] Sample PF rows after multiplication:")
+    _debug_cols = ["hub_name", "SKU Class Prod", "day", "PF"] + \
+                  [f"avl_corrected_sales_{w}" for w in weeks if f"avl_corrected_sales_{w}" in pivot_df.columns]
+    print(pivot_df.loc[mask_pf, _debug_cols].head(10).to_string(index=False))
+else:
+    print("[PF DEBUG] WARNING: No PF rows found in pivot_df — check PF merge step above")
+
+
 
 # %%
-# pivot_df.to_clipboard()  # disabled for speed
-
-# %%
-City_drops = read_dp_logics_table_engine(DP_LOGICS_FOLDER, "City_drops")
+# Load City drops from parquet
+City_drops = load_latest_parquet_from_drive("City_drops")
 
 # %%
 value_cols = [col for col in pivot_df.columns if col.startswith("avl_corrected_sales_")]
@@ -1159,18 +1856,59 @@ value_cols = [f"avl_corrected_sales_{w}" for w in weeks if f"avl_corrected_sales
 
 
 # %%
-pivot_long["week"] = pivot_long["week_col"].str.split("_").str[-1]
+pivot_long["week"] = pivot_long["week_col"].apply(lambda x: x.split("_")[-1])
 
 # %%
 City_drops = City_drops.rename(columns={"Day": "day"})
 City_drops["week"] = City_drops["week"].astype(str)
 
 # %%
-merged = pivot_long.merge(
-    City_drops[["city_name", "sub category","week", "day", "%Change"]],
-    how="left",
-    on=["city_name", "sub category","week", "day"]
+# Build outlier flag lookup at (city, sub_cat, hub, sku, day, week) level
+_outlier_for_adj = (
+    availability_agg
+    .groupby(['city_name', 'sub category', 'hub_name', 'SKU Class Prod', 'day', 'Week'], as_index=False)
+    ['_outlier_flag'].max()
+    .rename(columns={'Week': 'week'})
 )
+_outlier_for_adj['week'] = _outlier_for_adj['week'].astype(str)
+
+# Build original-L lookup: sales=0 AND availability<0.9 at (city, sub_cat, hub, sku, day, week) level
+# Mirrors the mask_L condition previously applied on pivot_df, now applied on adjusted_avl_corrected_sales
+_original_L_lookup = (
+    availability_agg
+    .groupby(['city_name', 'sub category', 'hub_name', 'SKU Class Prod', 'day', 'Week'], as_index=False)
+    .agg(_sales=('sales_qty_sum', 'sum'), _avail=('simple_availability', 'sum'))
+    .rename(columns={'Week': 'week'})
+)
+_original_L_lookup['week'] = _original_L_lookup['week'].astype(str)
+_original_L_lookup['_is_original_L'] = (
+    (_original_L_lookup['_sales'] == 0) & (_original_L_lookup['_avail'] == 0)
+).astype(int)
+_original_L_lookup = _original_L_lookup[
+    ['city_name', 'sub category', 'hub_name', 'SKU Class Prod', 'day', 'week', '_is_original_L']
+]
+
+# %%
+merged = (
+    pivot_long
+    .merge(City_drops[["city_name", "sub category","week", "day", "%Change"]],
+           how="left", on=["city_name", "sub category","week", "day"])
+    .merge(_outlier_for_adj,
+           on=['city_name', 'sub category', 'hub_name', 'SKU Class Prod', 'day', 'week'],
+           how='left')
+    .merge(_original_L_lookup,
+           on=['city_name', 'sub category', 'hub_name', 'SKU Class Prod', 'day', 'week'],
+           how='left')
+)
+merged['_outlier_flag'] = merged['_outlier_flag'].fillna(0).astype(int)
+# If the lookup merge missed (NaN) — combo had no data in availability_agg for that week
+# (pivot_table filled it with 0) — treat as 'L' when avl_corrected_sales is also 0
+_avl_num = pd.to_numeric(merged['avl_corrected_sales'], errors='coerce')
+merged['_is_original_L'] = np.where(
+    merged['_is_original_L'].isna(),
+    (_avl_num.fillna(0) == 0).astype(int),   # no real data + 0 sales → L
+    merged['_is_original_L']
+).astype(int)
 
 # %%
 merged["avl_corrected_sales_num"] = pd.to_numeric(merged["avl_corrected_sales"], errors="coerce")
@@ -1182,6 +1920,14 @@ merged["adjusted_avl_corrected_sales"] = np.where(
     (merged["avl_corrected_sales_num"] * (1 + merged["%Change"])),
     merged["avl_corrected_sales"]  # keep original if it's 'L' or NaN
 )
+
+# Mark adjusted_avl_corrected_sales as 'L' for:
+#   1. Outlier_Flag == 1 (non-exempt) — direct flag
+#   2. Original logic: sales=0 AND availability < 0.9
+_adj_L_mask = (merged['_outlier_flag'] >= 1) | (merged['_is_original_L'] >= 1)
+merged["adjusted_avl_corrected_sales"] = merged["adjusted_avl_corrected_sales"].astype(object)
+merged.loc[_adj_L_mask, 'adjusted_avl_corrected_sales'] = 'L'
+merged.drop(columns=['_outlier_flag', '_is_original_L'], inplace=True)
 
 # %%
 pivot_wide = merged.pivot_table(
@@ -1211,6 +1957,7 @@ pivot_final = pivot_df.merge(
 adj_cols = [col for col in pivot_final.columns if col.startswith("adjusted_avl_corrected_sales_")]
 
 # %%
+import re
 
 def reorder_week_columns(pivot_final):
     fixed_cols = []
@@ -1251,32 +1998,17 @@ print(pivot_final.columns)
 # %%
 # =============================================================================
 # AVAILABILITY-BASED OUTLIER CORRECTION
-# Rule: if simple_availability < 20% for a week -> that week's
-#       avl_corrected_sales is unreliable -> replace with the mean of
+# Rule: if simple_availability < 20% for a week → that week's
+#       avl_corrected_sales is unreliable → replace with the mean of
 #       avl_corrected_sales from OTHER weeks where availability >= 20%.
 # If no valid reference weeks exist (all < 20%), keep the original value.
 # Non-numeric values ('L') are always preserved as-is.
 # =============================================================================
 
-# Load AVAIL_THRESHOLD dynamically from Google Sheets parameters
-if os.environ.get("BASELINE_AVAIL_THRESHOLD"):
-    AVAIL_THRESHOLD = float(os.environ["BASELINE_AVAIL_THRESHOLD"])
-    print(f"[INFO] AVAIL_THRESHOLD from env: {AVAIL_THRESHOLD}")
-else:
-    try:
-        _params = sheets_manager.read_pipeline_params()
-        _avail_thresh_val = _params.get("avail_threshold", 0.20)
-        # Convert percentage (e.g. 20) to float ratio (0.20) if entered as whole number
-        if _avail_thresh_val > 1.0:
-            _avail_thresh_val = _avail_thresh_val / 100.0
-        AVAIL_THRESHOLD = _avail_thresh_val
-        print(f"[INFO] Loaded AVAIL_THRESHOLD from Google Sheets: {AVAIL_THRESHOLD}")
-    except Exception as _e:
-        AVAIL_THRESHOLD = 0.20   # 20% default
-        print(f"[WARN] Failed to load AVAIL_THRESHOLD from Google Sheets, using default: {AVAIL_THRESHOLD} (Error: {_e})")
+AVAIL_THRESHOLD = 0.20   # 20%
 
 # Collect week numbers present in both adj_cols and availability cols
-avail_week_map = {}   # week_suffix -> (adj_col, avail_col)
+avail_week_map = {}   # week_suffix → (adj_col, avail_col)
 for col in adj_cols:
     week_suffix = col.split("_")[-1]
     avail_col   = f"simple_availability_{week_suffix}"
@@ -1298,7 +2030,7 @@ available_raw_cols = [c for c in raw_sales_col_list if c in pivot_final.columns]
 raw_sales_matrix   = pivot_final[available_raw_cols].apply(pd.to_numeric, errors='coerce')
 raw_sales_matrix.columns = [c.split("_")[-1] for c in available_raw_cols]  # align to week_suffixes
 
-# Rename matrices to share the same week-suffix column names for easy masking
+# Rename matrices to share the same week-su                                  ffix column names for easy masking
 sales_matrix.columns = week_suffixes
 avail_matrix.columns = week_suffixes
 
@@ -1317,13 +2049,13 @@ for week in week_suffixes:
     avail_numeric = avail_matrix[week]                      # availability for this week
 
     # Start with original (numeric) values
-    pivot_final[new_col] = val_numeric
+    pivot_final[new_col] = val_numeric.astype(object)
 
     # Identify rows where this week has low availability (< 20%) and a numeric sales value
     low_avail_mask = (
         avail_numeric.notna() &
         (avail_numeric < AVAIL_THRESHOLD) &
-        val_numeric.notna()                                  # only replace if value exists
+        val_numeric.notna()# only replace if value exists
     )
 
     if low_avail_mask.any():
@@ -1354,23 +2086,23 @@ for week in week_suffixes:
         pivot_final.loc[replace_mask, new_col] = final_replacement[replace_mask].round(0)
 
     # Always restore non-numeric values ('L') from the original column
-    non_numeric_mask = pivot_final[adj_col].notna() & pd.to_numeric(pivot_final[adj_col], errors='coerce').isna()
+    non_numeric_mask = pivot_final[adj_col].apply(
+        lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
+    )
     if non_numeric_mask.any():
-        pivot_final[new_col] = pivot_final[new_col].astype(object)
         pivot_final.loc[non_numeric_mask, new_col] = pivot_final.loc[non_numeric_mask, adj_col]
 
     # Fill originally-blank (NaN) cells with 'L' for visual consistency
     blank_mask = pivot_final[adj_col].isna()
     if blank_mask.any():
-        pivot_final[new_col] = pivot_final[new_col].astype(object)
         pivot_final.loc[blank_mask, new_col] = 'L'
 
 # # %%
 # # =============================================================================
 # # STEP 2 — SPIKE / DIP OUTLIER CORRECTION  (commented out — enable when needed)
 # # Runs on the Outlier_corrected_ columns produced by Step 1 above.
-# # High spike : value deviates from BOTH row_avg and row_median -> replace with median
-# # Low dip    : value < 0.5×avg AND < 0.5×median (row_avg >= 3) -> replace with avg
+# # High spike : value deviates from BOTH row_avg and row_median → replace with median
+# # Low dip    : value < 0.5×avg AND < 0.5×median (row_avg >= 3) → replace with avg
 # # Latest week (_8) is never corrected.
 # # 'L' and blank values are always preserved.
 # =============================================================================
@@ -1386,14 +2118,13 @@ for oc_col in outlier_cols:
     week_suffix = oc_col.split("_")[-1]
 
     # Latest week — no outlier correction
-    if week_suffix == "8":
-        continue
+   
 
     val_numeric = pd.to_numeric(pivot_final[oc_col], errors='coerce')
 
     positive_mask = val_numeric > 0
-    avg_outlier   = (val_numeric - pivot_final['row_avg']).abs()    > pivot_final['row_avg']
-    med_outlier   = (val_numeric - pivot_final['row_median']).abs() > pivot_final['row_median']
+    avg_outlier   = (val_numeric - pivot_final['row_avg']).abs()    > 1.5 * pivot_final['row_avg']
+    med_outlier   = (val_numeric - pivot_final['row_median']).abs() > 1.5 * pivot_final['row_median']
 
     # High-spike: deviates from BOTH avg and median (meaningful baseline only)
     spike_mask = positive_mask & (pivot_final['row_avg'] >= 3) & avg_outlier & med_outlier
@@ -1409,7 +2140,9 @@ for oc_col in outlier_cols:
     pivot_final.loc[dip_mask, oc_col] = pivot_final.loc[dip_mask, 'row_avg']
 
     # Re-preserve 'L' and blanks — spike/dip logic must never overwrite them
-    non_numeric_mask = pivot_final[oc_col].notna() & pd.to_numeric(pivot_final[oc_col], errors='coerce').isna()
+    non_numeric_mask = pivot_final[oc_col].apply(
+        lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
+    )
     if non_numeric_mask.any():
         pivot_final.loc[non_numeric_mask, oc_col] = pivot_final.loc[non_numeric_mask, oc_col]
 
@@ -1420,187 +2153,37 @@ pivot_final = reorder_week_columns(pivot_final)
 print(pivot_final.columns)
 
 # %%
-_percentile_slices = load_percentile_slices_engine(DP_LOGICS_FOLDER)
-Percentile = _percentile_slices["percentile"]
+sugg_plan = pivot_final.copy()
 
 # %%
-sugg_plan = pivot_final.merge(
-    Percentile,
+# Load Percentile and overrides from parquet
+df_pct = load_latest_parquet_from_drive("Percentile")
+
+_pct_df = df_pct[['city_name', 'sub category', 'day', 'Percentile']].copy()
+for _c in ["city_name", "sub category", "day"]:
+    _pct_df[_c] = _pct_df[_c].astype(str).str.strip()
+_pct_df["Percentile"] = pd.to_numeric(_pct_df["Percentile"], errors="coerce")
+
+_override_df = df_pct[['hub_name_2', 'SKU Class Prod', 'day_2', 'percentile_override_2']].copy()
+_override_df = _override_df.rename(columns={
+    'hub_name_2': 'hub_name',
+    'day_2': 'day'
+})
+for _c in ["hub_name", "SKU Class Prod", "day"]:
+    _override_df[_c] = _override_df[_c].astype(str).str.strip()
+_override_df["percentile_override_2"] = pd.to_numeric(_override_df["percentile_override_2"], errors="coerce")
+_override_df = _override_df.dropna(subset=["percentile_override_2"])
+_override_lookup = _override_df.set_index(["hub_name", "SKU Class Prod", "day"])["percentile_override_2"].to_dict()
+
+sugg_plan = sugg_plan.merge(
+    _pct_df[["city_name", "sub category", "day", "Percentile"]].rename(
+        columns={"Percentile": "_pct_lookup"}
+    ),
+    on=["city_name", "sub category", "day"],
     how="left",
-    on=["city_name", "sub category", "day"]
 )
-
-# %%
-print(sugg_plan.columns)
-
-# %%
-# =============================================================================
-# HTT-BASED PERCENTILE OVERRIDE
-# Source: P-H Master tab in Product_Masters.xlsx (hub + SKU Class Prod + day)
-# For rows where HTT == "head": set Percentile = 0.75
-# =============================================================================
-_ph_df = _ph_master_raw.copy()
-_ph_df.columns = [str(c).strip() for c in _ph_df.columns]
-print(f"P-H Master columns: {_ph_df.columns.tolist()}")
-
-# Detect columns flexibly
-_ph_hub_col = next((c for c in _ph_df.columns if c.strip().lower() == "hub_name"), None)
-_ph_sku_col = next((c for c in _ph_df.columns if "sku" in c.strip().lower() and "class" in c.strip().lower()), None)
-_ph_day_col = next((c for c in _ph_df.columns if c.strip().lower() == "day"), None)
-_ph_htt_col = next((c for c in _ph_df.columns if c.strip().lower() == "htt"), None)
-
-if _ph_hub_col and _ph_sku_col and _ph_htt_col:
-    _keep_cols = [_ph_hub_col, _ph_sku_col, _ph_htt_col] + ([_ph_day_col] if _ph_day_col else [])
-    _htt_raw = (
-        _ph_df[_keep_cols]
-        .rename(columns={
-            _ph_hub_col: "hub_name",
-            _ph_sku_col: "SKU Class Prod",
-            _ph_htt_col: "_htt",
-            **({_ph_day_col: "day"} if _ph_day_col else {}),
-        })
-        .dropna(subset=["hub_name", "SKU Class Prod"])
-    )
-
-    for _k in ["hub_name", "SKU Class Prod"] + (["day"] if "day" in _htt_raw.columns else []):
-        _htt_raw[_k] = _htt_raw[_k].astype(str).str.strip()
-    _htt_raw["_htt"] = _htt_raw["_htt"].astype(str).str.strip().str.lower()
-
-    # Collapse duplicates deterministically: head > torso > tail
-    def _pick_htt(vals):
-        _s = set(v for v in vals if isinstance(v, str))
-        if "head" in _s:
-            return "head"
-        if "torso" in _s:
-            return "torso"
-        return "tail"
-
-    _grp_keys = ["hub_name", "SKU Class Prod"] + (["day"] if "day" in _htt_raw.columns else [])
-    _htt_map = _htt_raw.groupby(_grp_keys, as_index=False)["_htt"].agg(_pick_htt)
-
-    # Merge with day-level keys when available in P-H; otherwise hub+sku level.
-    _merge_keys = ["hub_name", "SKU Class Prod"] + (["day"] if "day" in _htt_map.columns and "day" in sugg_plan.columns else [])
-    for _k in _merge_keys:
-        sugg_plan[_k] = sugg_plan[_k].astype(str).str.strip()
-    sugg_plan = sugg_plan.merge(_htt_map, on=_merge_keys, how="left")
-    sugg_plan["_htt"] = sugg_plan["_htt"].fillna("tail")
-
-    sugg_plan["Percentile"] = pd.to_numeric(sugg_plan["Percentile"], errors="coerce")
-    sugg_plan.loc[sugg_plan["_htt"] == "head", "Percentile"] = 0.75
-
-    _head_count = (sugg_plan["_htt"] == "head").sum()
-    print(f"HTT override applied: {_head_count:,} rows set to Percentile=0.75 (head mappings from P-H Master)")
-    sugg_plan.drop(columns=["_htt"], inplace=True)
-else:
-    print(
-        f"WARNING: P-H HTT columns not detected "
-        f"(hub={_ph_hub_col}, sku={_ph_sku_col}, day={_ph_day_col}, htt={_ph_htt_col}). "
-        "Skipping HTT override."
-    )
-    sugg_plan["Percentile"] = pd.to_numeric(sugg_plan["Percentile"], errors="coerce")
-
-
-
-# %%
-# J:K — hub-level percentile override (hub_name, percentile_override)
-Percentile_override = _percentile_slices["override_hub"]
-
-# %%
-sugg_plan = sugg_plan.merge(Percentile_override, on="hub_name", how="left")
-
-# %%
-sugg_plan["Percentile"] = sugg_plan["percentile_override"].combine_first(sugg_plan["Percentile"])
-
-# %%
-sugg_plan = sugg_plan.drop(columns=["percentile_override"])
-
-# %%
-# O:R — hub × SKU Class Prod × day percentile override (hub_name, SKU Class Prod, day, percentile_override_2)
-Percentile_override_2 = _percentile_slices["override_hub_sku_day"].copy()
-Percentile_override_2.columns = [c.strip() for c in Percentile_override_2.columns]
-
-# Normalize duplicated Excel headers like hub_name.1 / day.1
-_p2_col_renames = {}
-for _c in Percentile_override_2.columns:
-    _base = str(_c).strip()
-    if _base.lower().startswith("hub_name"):
-        _p2_col_renames[_c] = "hub_name"
-    elif _base.lower().startswith("day"):
-        _p2_col_renames[_c] = "day"
-Percentile_override_2 = Percentile_override_2.rename(columns=_p2_col_renames)
-
-print(f"Percentile_override_2 columns: {Percentile_override_2.columns.tolist()}")
-
-# %%
-_p2_merge_keys = ["hub_name", "SKU Class Prod", "day"]
-_p2_value_col  = "percentile_override_2"
-_p2_cols_present = Percentile_override_2.columns.tolist()
-
-if all(k in _p2_cols_present for k in _p2_merge_keys) and _p2_value_col in _p2_cols_present:
-    # Standardize keys before merge to improve match rate.
-    for _k in _p2_merge_keys:
-        Percentile_override_2[_k] = Percentile_override_2[_k].astype(str).str.strip()
-        sugg_plan[_k] = sugg_plan[_k].astype(str).str.strip()
-
-    # Parse override values robustly (supports values like "45%" and decimals).
-    _p2_raw = Percentile_override_2[_p2_value_col].astype(str).str.strip()
-    _is_pct = _p2_raw.str.contains("%", regex=False, na=False)
-    _p2_num = pd.to_numeric(_p2_raw.str.replace("%", "", regex=False), errors="coerce")
-    _p2_num = np.where(_is_pct, _p2_num / 100.0, _p2_num)
-    # If values are given as 45 (not 0.45), scale down.
-    _p2_num = pd.Series(_p2_num)
-    _p2_num = np.where(_p2_num > 1, _p2_num / 100.0, _p2_num)
-    Percentile_override_2[_p2_value_col] = _p2_num
-
-    # Compute allowed percentile range from O:R values
-    _p2_pct_values = pd.to_numeric(Percentile_override_2[_p2_value_col], errors="coerce").dropna()
-    _p2_min = _p2_pct_values.min()
-    _p2_max = _p2_pct_values.max()
-    print(f"Percentile_override_2 range: [{_p2_min}, {_p2_max}]")
-
-    sugg_plan = sugg_plan.merge(
-        Percentile_override_2,
-        on=_p2_merge_keys,
-        how="left"
-    )
-    sugg_plan[_p2_value_col] = pd.to_numeric(sugg_plan[_p2_value_col], errors="coerce")
-
-    # Apply adjustment only where override_2 value exists.
-    _has_override = sugg_plan[_p2_value_col].notna()
-    _final_col = next((c for c in ["Final_Plan", "final_plan"] if c in sugg_plan.columns), None)
-    _base_col  = next((c for c in ["Base_Plan (qty)", "Base_plan", "base_plan"] if c in sugg_plan.columns), None)
-
-    if _final_col and _base_col:
-        _final_vals = pd.to_numeric(sugg_plan[_final_col], errors="coerce")
-        _base_vals  = pd.to_numeric(sugg_plan[_base_col],  errors="coerce")
-
-        # Final < Base → increase by 10%, cap at O:R max
-        _mask_low = _has_override & (_final_vals < _base_vals)
-        sugg_plan.loc[_mask_low, _p2_value_col] = (
-            sugg_plan.loc[_mask_low, _p2_value_col] * 1.1
-        ).clip(upper=_p2_max)
-
-        # Final > Base → decrease to 0.45 floor with O:R min bound
-        _mask_high = _has_override & (_final_vals > _base_vals)
-        sugg_plan.loc[_mask_high, _p2_value_col] = max(0.5 * 0.9, _p2_min)
-
-        print(
-            f"Percentile_override_2 adjustments: {_mask_low.sum():,} rows increased (Final<Base), "
-            f"{_mask_high.sum():,} rows decreased (Final>Base)"
-        )
-    else:
-        print(
-            f"WARNING: Could not find comparison columns for override_2 adjustment "
-            f"(final={_final_col}, base={_base_col}). Applying raw override_2 values without adjustment."
-        )
-
-    sugg_plan["Percentile"] = sugg_plan[_p2_value_col].combine_first(sugg_plan["Percentile"])
-    sugg_plan = sugg_plan.drop(columns=[_p2_value_col])
-else:
-    print(f"WARNING: Percentile_override_2 columns {_p2_cols_present} do not match expected keys {_p2_merge_keys + [_p2_value_col]}. Skipping override_2 merge.")
-
-# %%
-sugg_plan["Percentile"] = pd.to_numeric(sugg_plan["Percentile"], errors="coerce")
+# Default to 0.5 (mean) where no mapping exists
+sugg_plan["_pct_lookup"] = sugg_plan["_pct_lookup"].fillna(0.5)
 
 # %%
 outlier_cols = [c for c in sugg_plan.columns if c.startswith("Outlier_corrected_")]
@@ -1610,108 +2193,85 @@ outlier_cols = [c for c in sugg_plan.columns if c.startswith("Outlier_corrected_
 print(outlier_cols)
 
 # %%
-sugg_plan["Percentile"] = pd.to_numeric(sugg_plan["Percentile"], errors="coerce")
-
-# %%
 print(sugg_plan.columns)
 
 # %%
-def get_sugg_plan(row, cols, percentile_col="Percentile"):
-    # Convert all to string and strip spaces
-    raw_values = row[cols].astype(str).str.strip()
+def _week_num_from_outlier_col(col_name: str) -> int:
+    s = str(col_name)
+    tail = s.split("_")[-1]
+    m = re.search(r"(\d+)(?!.*\d)", tail)  # last run of digits
+    return int(m.group(1)) if m else -1
 
-    # Keep only purely numeric values (integer or decimal, positive or zero)
-    numeric_mask = raw_values.str.match(r'^\d*\.?\d+$')
-    numeric_values = pd.to_numeric(raw_values.where(numeric_mask), errors="coerce").values[::-1]
 
-    # Include all numeric values (including 0s)
-    valid_vals = [v for v in numeric_values if pd.notna(v)]
+# Reorder Outlier_corrected_ columns in the DataFrame from oldest to newest week
+outlier_cols = sorted(outlier_cols, key=_week_num_from_outlier_col)
+_other_cols = [c for c in sugg_plan.columns if c not in outlier_cols]
+sugg_plan = sugg_plan[_other_cols + outlier_cols]
 
-    # --- Final decision ---
-    if len(valid_vals) == 0:
+
+def get_weighted_recent_trend(
+    row,
+    cols,
+    windows=(3, 6, 10),
+    weights=(0.80, 0.10, 0.10),
+    percentile: float = 0.5,
+):
+    cols_sorted = sorted(cols, key=_week_num_from_outlier_col)  # oldest -> newest by week number
+
+    raw_values = row[cols_sorted].astype(str).str.strip()
+    numeric_mask = raw_values.str.match(r"^\d*\.?\d+$")
+    values_by_week = pd.to_numeric(raw_values.where(numeric_mask), errors="coerce").values  # NaN for non-numeric/'L'/blank
+
+    if not np.isfinite(values_by_week).any():
         return np.nan
 
-    pct = row[percentile_col]
-    if pct <= 1:  # if percentile is given in 0–1 scale
-        pct *= 100
+    # last values correspond to most recent weeks (because cols_sorted is oldest -> newest)
+    # When percentile == 0.5 use mean (not median) as explicitly required.
+    def _stat_last_k(k: int) -> float:
+        window = values_by_week[-k:] if len(values_by_week) >= k else values_by_week
+        window = [v for v in window if pd.notna(v)]  # keep 0s, drop NaNs
+        if not window:
+            return float("nan")
+        if percentile == 0.5:
+            return float(np.mean(window))
+        return float(np.percentile(window, percentile * 100))
 
-    # If percentile is 50, use mean of all numeric values instead
-    if pct == 50:
-        return np.mean(valid_vals)
+    stats = [_stat_last_k(int(w)) for w in windows]
+    weighted = sum(float(wt) * s for wt, s in zip(weights, stats) if pd.notna(s))
+    weight_sum = sum(float(wt) for wt, s in zip(weights, stats) if pd.notna(s))
 
-    return np.percentile(valid_vals, pct)
-
-# %%
-print(sugg_plan.columns)
-
-# %%
-# ─── Fast vectorised replacement for get_sugg_plan ───────────────────────────
-# The original apply() runs regex + pd.to_numeric inside a Python loop for
-# every row, which is slow on large DataFrames.  The approach below:
-#   1. Parses the entire outlier matrix to numeric ONCE (vectorised)
-#   2. Reverses column order once (matching the original [::-1] logic)
-#   3. Loops only over the few unique percentile values (~3-5) — each inner
-#      iteration processes all matching rows with pure numpy, which is ~20x
-#      faster than Python object processing per row.
-_oc_raw      = sugg_plan[outlier_cols].astype(str).apply(lambda c: c.str.strip())
-_oc_num_mask = _oc_raw.apply(lambda c: c.str.match(r'^\d*\.?\d+$'))
-_oc_mat      = _oc_raw.where(_oc_num_mask).apply(pd.to_numeric, errors='coerce')
-_oc_mat_rev  = _oc_mat[outlier_cols[::-1]].values   # numpy (n_rows, n_cols)
-
-_pct_arr = sugg_plan['Percentile'].values.astype(float)
-_pct_arr = np.where(_pct_arr <= 1, _pct_arr * 100, _pct_arr)
-
-_sugg_result = np.full(len(sugg_plan), np.nan)
-for _pct_val in np.unique(_pct_arr[~np.isnan(_pct_arr)]):
-    _idx  = np.where(_pct_arr == _pct_val)[0]
-    _rows = _oc_mat_rev[_idx]           # (n_matching, n_cols)
-    if _pct_val == 50:
-        _sugg_result[_idx] = np.nanmean(_rows, axis=1)
-    else:
-        for _k, _ri in enumerate(_idx):
-            _valid = _rows[_k][~np.isnan(_rows[_k])]
-            if len(_valid) > 0:
-                _sugg_result[_ri] = np.percentile(_valid, _pct_val)
-
-sugg_plan["sugg_plan"] = _sugg_result
+    return weighted / weight_sum if weight_sum > 0 else np.nan
 
 # %%
-# sugg_plan.to_clipboard()  # disabled for speed
+
 
 # %%
-_BP_CACHE_CANDIDATES = [
-    os.path.join(PROJECT_ROOT, "outputs", "prev_baseline_latest.parquet"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "prev_baseline_latest.parquet"),
-]
-base_plan = None
-_BP_CACHE = None
-for _cache_path in _BP_CACHE_CANDIDATES:
-    if os.path.exists(_cache_path):
-        _BP_CACHE = _cache_path
-        base_plan = pd.read_parquet(_cache_path)
-        print(f"[base_plan] Loaded from parquet cache: {_cache_path} ({len(base_plan):,} rows)")
-        break
+sugg_plan["sugg_plan"] = sugg_plan.apply(
+    lambda r: get_weighted_recent_trend(r, outlier_cols, percentile=r["_pct_lookup"]), axis=1
+)
 
-if base_plan is None:
-    print("[base_plan] Cache not found — reading from Excel (update cache via Streamlit → Fetch Previous Baseline)")
-    import glob
-    _possible_files = glob.glob(os.path.join(BASELINE_OUTPUTS_FOLDER, "*.xlsx"))
-    if _possible_files:
-        _latest = max(_possible_files, key=os.path.getctime)
-        base_plan = pd.read_excel(_latest)
-        print(f"Loaded from: {_latest}")
-    else:
-        raise FileNotFoundError(
-            "Could not find prev_baseline_latest.parquet or any excel file in BASELINE_OUTPUTS_FOLDER. "
-            "Run Auto-Pilot / Fetch Previous Baseline in Streamlit first."
-        )
+# %%
+# Hub-level percentile override on latest 2 data points (cols O:R of Percentile sheet)
+_latest_2_cols = outlier_cols[-2:]  # already sorted oldest→newest, so last 2 = most recent
 
-base_plan = normalize_base_plan_columns(base_plan)
-if "BasePlan" not in base_plan.columns:
-    raise KeyError(
-        "BasePlan column not found in previous baseline data. "
-        f"Available columns: {base_plan.columns.tolist()}"
-    )
+def _apply_hub_override(row):
+    key = (str(row["hub_name"]).strip(), str(row["SKU Class Prod"]).strip(), str(row["day"]).strip())
+    if key not in _override_lookup:
+        return row["sugg_plan"]
+    p = _override_lookup[key]
+    raw = row[_latest_2_cols].astype(str).str.strip()
+    numeric_mask = raw.str.match(r"^\d*\.?\d+$")
+    values = pd.to_numeric(raw.where(numeric_mask), errors="coerce").dropna().tolist()
+    if not values:  # both data points are L → increase by 20%
+        return row["sugg_plan"] * 1.10
+    if p == 0.5:
+        return float(np.mean(values))
+    return float(np.percentile(values, p * 100))
+
+sugg_plan["sugg_plan"] = sugg_plan.apply(_apply_hub_override, axis=1)
+
+# %%
+base_plan = pd.read_excel(BASELINE_WEEKLY_PLAN_PATH)
 
 # %%
 print(base_plan["BasePlan"].sum())
@@ -1731,7 +2291,7 @@ child_hubs = base_plan_df[~base_plan_df["MotherHub_name"].isna()].copy()
 print(base_plan_df["BasePlan"].sum())
 
 # %%
-# child_hubs.to_clipboard()  # disabled for speed
+
 
 # %%
 child_hubs["process_dt"] = pd.to_datetime(child_hubs["process_dt"], errors="coerce")
@@ -1846,15 +2406,15 @@ Final_Plan["Base_Plan (qty)"] = Final_Plan["Base_Plan (qty)"].fillna(0)
 
 
 # %%
-VA_exclusive_1 = [
-    "Burger", "Eggs", 
- "Spreads", "Heat & Eat"
-]
+# VA_exclusive_1 = [
+#     "Burger", "Eggs", 
+#  "Spreads", "Heat & Eat"
+# ]
 
-VA_exclusive_2 = [
-    "Kebab & Tandoor", 
-    "Ready to Cook",
-]
+# VA_exclusive_2 = [
+#     "Kebab & Tandoor", 
+#     "Ready to Cook",
+# ]
 
 # %%
 outlier_cols = [c for c in Final_Plan.columns if c.startswith("Outlier_corrected_")]
@@ -1867,24 +2427,24 @@ Final_Plan["numeric_outlier_count"] = (
 )
 
 
-# %%
-skip_hubs = ["CCS", "ECS", "HKM", "KLK", "SMG", "SPC"]
-skip_cities = ["Chennai", "Kolkata"]
+# # %%
+# skip_hubs = ["CCS", "ECS", "HKM", "KLK", "SMG", "SPC"]
+# skip_cities = ["Chennai", "Kolkata"]
 
 def final_plan_logic(row):
-    # Case -1: both NaN -> 0
+    # Case -1: both NaN → 0
     if pd.isna(row["sugg_plan"]) and pd.isna(row["Base_Plan (qty)"]):
         return 0
 
-    # Case 0: sugg_plan NaN -> base_plan
+    # Case 0: sugg_plan NaN → base_plan
     if pd.isna(row["sugg_plan"]):
         return row["Base_Plan (qty)"]
 
-    # Case 1: base_plan NaN -> 0
+    # Case 1: base_plan NaN → 0
     if pd.isna(row["Base_Plan (qty)"]):
         return 0
 
-    # Case 2: base_plan 0 -> sugg_plan
+    # Case 2: base_plan 0 → sugg_plan
     if row["Base_Plan (qty)"] == 0:
         return row["sugg_plan"]
 
@@ -1899,92 +2459,545 @@ def final_plan_logic(row):
             )
 
     # Case 3 & 4: VA_exclusive rules
-    if (row["hub_name"] not in skip_hubs) and (row["city_name"] not in skip_cities):
+    # if (row["hub_name"] not in skip_hubs) and (row["city_name"] not in skip_cities):
 
-        if row["sub category"] in VA_exclusive_1:
-            if row["sugg_plan"] < 5:
-                return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
-            else:
-                return min(row["sugg_plan"], 1.5 * row["Base_Plan (qty)"])
+    #     if row["sub category"] in VA_exclusive_1:
+    #         if row["sugg_plan"] < 5:
+    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+    #         else:
+    #             return min(row["sugg_plan"], 1.5 * row["Base_Plan (qty)"])
 
-        if row["sub category"] in VA_exclusive_2:
-            if row["sugg_plan"] < 5:
-                return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
-            else:
-                return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+    #     if row["sub category"] in VA_exclusive_2:
+    #         if row["sugg_plan"] < 5:
+    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+    #         else:
+    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
 
     # Default
     return row["sugg_plan"]
 
 
 # %%
-_s   = Final_Plan["sugg_plan"]
-_b   = Final_Plan["Base_Plan (qty)"]
-_n   = Final_Plan["numeric_outlier_count"]
-_cat = Final_Plan["sub category"]
-_hub = Final_Plan["hub_name"]
-_cty = Final_Plan["city_name"]
+Final_Plan["Final_Plan"] = Final_Plan.apply(final_plan_logic, axis=1)
 
-_not_skip = ~_hub.isin(skip_hubs) & ~_cty.isin(skip_cities)
+# %%
+Final_Plan["Final_Plan"] = Final_Plan["Final_Plan"].apply(
+    lambda x: round(x) if pd.notna(x) else x
+)
 
-# Pre-compute branch values (evaluated for all rows; conditions pick the right one)
-_va1 = np.where(_s < 5, np.minimum(_s, 2.0 * _b), np.minimum(_s, 1.5 * _b))
-_va2 = np.minimum(_s, 2.0 * _b)
-_oc1 = np.maximum(_s, (_s + _b) / 2.0)
 
-Final_Plan["Final_Plan"] = np.select(
-    [
-        _s.isna() & _b.isna(),                    # both NaN  -> 0
-        _s.isna(),                                 # sugg NaN  -> base
-        _b.isna(),                                 # base NaN  -> 0
-        _b == 0,                                   # base 0    -> sugg
-        (_n == 1) & (_s == 0),                    # oc=1, sugg=0 -> base
-        (_n == 1) & (_s != 0),                    # oc=1, sugg>0 -> max formula
-        _not_skip & _cat.isin(VA_exclusive_1),    # VA cap 1
-        _not_skip & _cat.isin(VA_exclusive_2),    # VA cap 2
-    ],
-    [0, _b, 0, _s, _b, _oc1, _va1, _va2],
-    default=_s
+
+# %%
+# Final_Plan.to_clipboard()
+
+# %%
+# =============================================================================
+# REV LOSS PLAN UPLIFT
+# Adds new columns to Final_Plan (no extra rows):
+#   Initial_Final_Plan  — original Final_Plan value
+#   Weekly_Plan_Agg     — sum of Initial_Final_Plan across days per hub-SKU
+#   Doubled_Plan        — Weekly_Plan_Agg × 2
+#   Salience            — hub × sub category × day weight from base_plan
+#   is_rev_loss_uplift  — True for combos in the latest Rev Loss file
+#   Final_Plan (new)    — Doubled_Plan × Salience for flagged rows,
+#                         Initial_Final_Plan for all others
+# ============================================================================
+
+# ── Rename existing Final_Plan column ────────────────────────────────────────
+Final_Plan = Final_Plan.rename(columns={'Final_Plan': 'Initial_Final_Plan'})
+
+_rl_files = sorted(
+    _glob.glob(os.path.join(_folder, "Consistent_Issues_RevLoss_*.xlsx"))
+)
+
+if not _rl_files:
+    print("WARNING: No Consistent_Issues_RevLoss_*.xlsx found — Rev Loss uplift skipped")
+    Final_Plan['Weekly_Plan_Agg']    = np.nan
+    Final_Plan['Doubled_Plan']       = np.nan
+    Final_Plan['Salience']           = np.nan
+    Final_Plan['is_rev_loss_uplift'] = False
+    Final_Plan['Final_Plan']         = Final_Plan['Initial_Final_Plan']
+else:
+    _latest_rl_path = _rl_files[-1]
+    print(f"\n[REV LOSS UPLIFT] Loading: {_latest_rl_path}")
+
+    rl_combos = (
+        pd.read_excel(_latest_rl_path)[['hub_name', 'SKU Class Prod']]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    print(f"[REV LOSS UPLIFT] Rev Loss combos: {len(rl_combos)}")
+
+    # ── Step 1: Flag Rev Loss combos ─────────────────────────────────────────
+    rl_combos['is_rev_loss_uplift'] = True
+    Final_Plan = Final_Plan.merge(
+        rl_combos, on=['hub_name', 'SKU Class Prod'], how='left'
+    )
+    Final_Plan['is_rev_loss_uplift'] = Final_Plan['is_rev_loss_uplift'].fillna(False)
+
+    # ── Step 2: Weekly_Plan_Agg and Doubled_Plan ─────────────────────────────
+    _weekly_agg = (
+        Final_Plan.groupby(['hub_name', 'SKU Class Prod'], as_index=False)['Initial_Final_Plan']
+        .sum()
+        .rename(columns={'Initial_Final_Plan': 'Weekly_Plan_Agg'})
+    )
+    Final_Plan = Final_Plan.merge(_weekly_agg, on=['hub_name', 'SKU Class Prod'], how='left')
+    Final_Plan['Doubled_Plan'] = Final_Plan['Weekly_Plan_Agg'] * 1.5
+
+    # ── Step 3: Salience at hub × sub category × day from base_plan ──────────
+    _sku_subcat = (
+        Final_Plan[['SKU Class Prod', 'sub category']]
+        .drop_duplicates(subset=['SKU Class Prod'])
+    )
+    bp_sal = (
+        base_plan_grouped[['hub_name', 'SKU Class Prod', 'day', 'BasePlan']]
+        .merge(_sku_subcat, on='SKU Class Prod', how='left')
+    )
+    bp_subcat_day = (
+        bp_sal.groupby(['hub_name', 'sub category', 'day'], as_index=False)['BasePlan']
+        .sum()
+        .rename(columns={'BasePlan': 'subcat_day_plan'})
+    )
+    bp_subcat_day['subcat_total'] = bp_subcat_day.groupby(
+        ['hub_name', 'sub category'])['subcat_day_plan'].transform('sum')
+    bp_subcat_day['Salience'] = np.where(
+        bp_subcat_day['subcat_total'] > 0,
+        bp_subcat_day['subcat_day_plan'] / bp_subcat_day['subcat_total'],
+        np.nan,
+    )
+    _n_days = bp_subcat_day.groupby(['hub_name', 'sub category'])['day'].transform('count')
+    bp_subcat_day['Salience'] = bp_subcat_day['Salience'].fillna(1.0 / _n_days)
+
+    # Merge Salience back onto Final_Plan (hub × sub category × day)
+    Final_Plan = Final_Plan.merge(
+        bp_subcat_day[['hub_name', 'sub category', 'day', 'Salience']],
+        on=['hub_name', 'sub category', 'day'],
+        how='left',
+    )
+
+    # ── Step 4: Compute new Final_Plan ───────────────────────────────────────
+    # max(Initial_Final_Plan, Doubled_Plan × Salience) — never go below original
+    _rl_salience_plan = (Final_Plan['Doubled_Plan'] * Final_Plan['Salience']).round(0)
+    Final_Plan['Final_Plan'] = np.where(
+        Final_Plan['is_rev_loss_uplift'],
+        np.maximum(
+            pd.to_numeric(Final_Plan['Initial_Final_Plan'], errors='coerce').fillna(0),
+            pd.to_numeric(_rl_salience_plan, errors='coerce').fillna(0),
+        ),
+        Final_Plan['Initial_Final_Plan'],
+    )
+
+    _flagged = Final_Plan['is_rev_loss_uplift'].sum()
+    print(f"[REV LOSS UPLIFT] Rows uplifted      : {_flagged}")
+    print(f"[REV LOSS UPLIFT] Rows unchanged     : {len(Final_Plan) - _flagged}")
+    print(f"[REV LOSS UPLIFT] Sample (flagged rows):")
+    print(Final_Plan[Final_Plan['is_rev_loss_uplift']][
+        ['hub_name', 'SKU Class Prod', 'day', 'Initial_Final_Plan',
+         'Weekly_Plan_Agg', 'Doubled_Plan', 'Salience', 'Final_Plan']
+    ].head(8).to_string(index=False))
+
+# %%
+# =============================================================================
+# WASTAGE PLAN CORRECTION
+# For hub × SKU Class Prod combos flagged as Consistent Wastage issues:
+#   1. Load the latest Consistent_Issues_Wastage_*.xlsx from the folder
+#   2. Compute 4-week average of avl_corrected_sales_{week} per hub-SKU-day
+#      ('L' values treated as NaN and excluded from average)
+#   3. Redistribute using same hub × sub category × day salience from base_plan
+#   4. Add columns: Wastage_Avg_4Wk_Sales, is_wastage_uplift
+#   5. Override Final_Plan for wastage-flagged rows with avg × Salience
+# =============================================================================
+
+_wt_files = sorted(
+    _glob.glob(os.path.join(_folder, "Consistent_Issues_Wastage_*.xlsx"))
+)
+
+if not _wt_files:
+    print("WARNING: No Consistent_Issues_Wastage_*.xlsx found — Wastage correction skipped")
+    Final_Plan['Wastage_Avg_4Wk_Sales'] = np.nan
+    Final_Plan['is_wastage_uplift']     = False
+else:
+    _latest_wt_path = _wt_files[-1]
+    print(f"\n[WASTAGE CORRECTION] Loading: {_latest_wt_path}")
+
+    wt_combos = (
+        pd.read_excel(_latest_wt_path)[['hub_name', 'SKU Class Prod', 'Instances']]
+        .drop_duplicates(subset=['hub_name', 'SKU Class Prod'])
+        .reset_index(drop=True)
+    )
+    print(f"[WASTAGE CORRECTION] Wastage combos: {len(wt_combos)}")
+
+    # ── Step 1: Flag wastage combos ───────────────────────────────────────────
+    wt_combos['is_wastage_uplift'] = True
+    Final_Plan = Final_Plan.merge(
+        wt_combos, on=['hub_name', 'SKU Class Prod'], how='left'
+    )
+    Final_Plan['is_wastage_uplift'] = Final_Plan['is_wastage_uplift'].fillna(False)
+
+    # ── Step 2: 4-week average of avl_corrected_sales per hub-SKU-day ─────────
+    # Identify avl_corrected_sales columns for _last_4_weeks
+    # All 4 available avl_corrected_sales columns (sorted oldest → latest)
+    _all_avl_cols = [f"avl_corrected_sales_{w}" for w in _last_4_weeks
+                     if f"avl_corrected_sales_{w}" in Final_Plan.columns]
+    print(f"[WASTAGE CORRECTION] avl_corrected_sales cols available: {_all_avl_cols}")
+
+    if _all_avl_cols:
+        # Step A: coerce to numeric ('L' → NaN), sum across days per hub-SKU per week
+        _avl_num = Final_Plan[['hub_name', 'SKU Class Prod'] + _all_avl_cols].copy()
+        for _c in _all_avl_cols:
+            _avl_num[_c] = pd.to_numeric(_avl_num[_c], errors='coerce')
+
+        _hub_sku_weekly = (
+            _avl_num.groupby(['hub_name', 'SKU Class Prod'])[_all_avl_cols]
+            .sum()
+            .reset_index()
+        )
+
+        # Step B: merge Instances so we know how many weeks to average per combo
+        _hub_sku_weekly = _hub_sku_weekly.merge(
+            wt_combos[['hub_name', 'SKU Class Prod', 'Instances']],
+            on=['hub_name', 'SKU Class Prod'], how='left'
+        )
+
+        # Step C: for each combo use last N weeks based on Instances
+        def _wt_avg_and_weeks(row):
+            n = int(row['Instances']) if pd.notna(row['Instances']) else len(_all_avl_cols)
+            n = min(n, len(_all_avl_cols))          # cap at available weeks
+            cols = _all_avl_cols[-n:]               # last N cols = most recent N weeks
+            avg  = row[cols].mean()
+            wks  = ', '.join(str(w) for w in _last_4_weeks[-n:])
+            return pd.Series({'Wastage_Avg_4Wk_Sales': avg, 'Wastage_Avg_Weeks': wks})
+
+        _hub_sku_avg = _hub_sku_weekly.apply(_wt_avg_and_weeks, axis=1)
+        _hub_sku_weekly = pd.concat([
+            _hub_sku_weekly[['hub_name', 'SKU Class Prod']], _hub_sku_avg
+        ], axis=1)
+
+        # Merge avg and week-label back onto Final_Plan
+        Final_Plan = Final_Plan.merge(
+            _hub_sku_weekly, on=['hub_name', 'SKU Class Prod'], how='left'
+        )
+        # Non-wastage rows get blank week label
+        Final_Plan['Wastage_Avg_Weeks'] = Final_Plan['Wastage_Avg_Weeks'].fillna('')
+    else:
+        print("[WASTAGE CORRECTION] WARNING: No avl_corrected_sales columns found — using 0")
+        Final_Plan['Wastage_Avg_4Wk_Sales'] = 0.0
+        Final_Plan['Wastage_Avg_Weeks']      = ''
+
+    # ── Step 3: Salience already merged in Rev Loss step — reuse if present ───
+    # If Salience column is missing (Rev Loss file was absent), recompute it
+    if 'Salience' not in Final_Plan.columns:
+        _sku_subcat_wt = (
+            Final_Plan[['SKU Class Prod', 'sub category']]
+            .drop_duplicates(subset=['SKU Class Prod'])
+        )
+        bp_sal_wt = (
+            base_plan_grouped[['hub_name', 'SKU Class Prod', 'day', 'BasePlan']]
+            .merge(_sku_subcat_wt, on='SKU Class Prod', how='left')
+        )
+        bp_subcat_day_wt = (
+            bp_sal_wt.groupby(['hub_name', 'sub category', 'day'], as_index=False)['BasePlan']
+            .sum()
+            .rename(columns={'BasePlan': 'subcat_day_plan'})
+        )
+        bp_subcat_day_wt['subcat_total'] = bp_subcat_day_wt.groupby(
+            ['hub_name', 'sub category'])['subcat_day_plan'].transform('sum')
+        bp_subcat_day_wt['Salience'] = np.where(
+            bp_subcat_day_wt['subcat_total'] > 0,
+            bp_subcat_day_wt['subcat_day_plan'] / bp_subcat_day_wt['subcat_total'],
+            np.nan,
+        )
+        _n_days_wt = bp_subcat_day_wt.groupby(
+            ['hub_name', 'sub category'])['day'].transform('count')
+        bp_subcat_day_wt['Salience'] = bp_subcat_day_wt['Salience'].fillna(1.0 / _n_days_wt)
+        Final_Plan = Final_Plan.merge(
+            bp_subcat_day_wt[['hub_name', 'sub category', 'day', 'Salience']],
+            on=['hub_name', 'sub category', 'day'],
+            how='left',
+        )
+
+    # ── Step 4: Override Final_Plan for wastage-flagged rows ──────────────────
+    # min(Final_Plan, Wastage_Avg_4Wk_Sales × Salience) — never go above current plan
+    _wt_salience_plan = (Final_Plan['Wastage_Avg_4Wk_Sales'] * Final_Plan['Salience']).round(0)
+    Final_Plan['Final_Plan'] = np.where(
+        Final_Plan['is_wastage_uplift'],
+        np.minimum(
+            pd.to_numeric(Final_Plan['Final_Plan'], errors='coerce').fillna(0),
+            pd.to_numeric(_wt_salience_plan, errors='coerce').fillna(0),
+        ),
+        Final_Plan['Final_Plan'],
+    )
+
+    _wt_flagged = Final_Plan['is_wastage_uplift'].sum()
+    print(f"[WASTAGE CORRECTION] Rows corrected  : {_wt_flagged}")
+    print(f"[WASTAGE CORRECTION] Rows unchanged  : {len(Final_Plan) - _wt_flagged}")
+    print(f"[WASTAGE CORRECTION] Sample (flagged rows):")
+    print(Final_Plan[Final_Plan['is_wastage_uplift']][
+        ['hub_name', 'SKU Class Prod', 'day',
+         'Wastage_Avg_4Wk_Sales', 'Salience', 'Final_Plan']
+    ].head(8).to_string(index=False))
+
+
+
+
+
+# %%
+# Final_Plan.to_clipboard()
+
+# %%
+# =============================================================================
+# NEW HUB WATCH — FF Input
+# Local-only summary to avoid any Google Sheet dependency.
+# =============================================================================
+
+_ff_df   = hub_changes_df.copy()
+
+# Normalise columns
+_ff_df.columns = _ff_df.columns.str.strip()
+_ff_df['Hub_name']   = _ff_df['Hub_name'].astype(str).str.strip()
+_ff_df['Type']       = _ff_df['Type'].astype(str).str.strip()
+_ff_df['Start_date'] = pd.to_datetime(_ff_df['Start_date'], errors='coerce')
+
+_today_ts   = pd.Timestamp.today().normalize()
+_watch_types = ['New Hub', 'KML Remapping']
+_watched = _ff_df[
+    (_ff_df['Type'].isin(_watch_types)) &
+    (_ff_df['Start_date'].notna()) &
+    ((_ff_df['Start_date'] - _today_ts).dt.days.abs() <= 15)
+].copy()
+
+print(f"\n[HUB WATCH] Entries within ±15 days of today ({_today_ts.date()}): {len(_watched)}")
+
+if _watched.empty:
+    print("[HUB WATCH] No matching entries found.")
+else:
+    for _type in _watch_types:
+        _type_df = _watched[_watched['Type'] == _type].copy()
+        if _type_df.empty:
+            print(f"[HUB WATCH] {_type}: none within ±15 days.")
+            continue
+        _hub_names = set(_type_df['Hub_name'].str.lower())
+        _fp_sub = Final_Plan[
+            Final_Plan['hub_name'].astype(str).str.strip().str.lower().isin(_hub_names)
+        ].copy()
+        print(f"\n[HUB WATCH] {_type}: {len(_type_df)} entries")
+        if _fp_sub.empty:
+            print(f"[HUB WATCH] {_type}: no Final_Plan rows matched. Hubs: {_type_df['Hub_name'].tolist()}")
+        else:
+            _summary = (
+                _fp_sub.groupby('hub_name', as_index=False).agg(
+                    Final_Plan_Sum = ('Final_Plan', 'sum'),
+                    Base_Plan_Sum  = ('Base_Plan (qty)', 'sum'),
+                )
+            )
+            _summary['Delta'] = np.where(
+                _summary['Final_Plan_Sum'] != 0,
+                (_summary['Final_Plan_Sum'] - _summary['Base_Plan_Sum']) / _summary['Final_Plan_Sum'],
+                np.nan
+            ).round(4)
+            _start_map = _type_df.set_index(_type_df['Hub_name'].str.lower())['Start_date'].to_dict()
+            _summary['Start_date'] = _summary['hub_name'].str.lower().map(_start_map).dt.date
+            print(_summary[['hub_name', 'Start_date', 'Final_Plan_Sum', 'Base_Plan_Sum', 'Delta']]
+                  .to_string(index=False))
+
+
+# =============================================================================
+# DAY-LEVEL PLAN ADJUSTMENT
+# Reads conditions from "Consistent Issues Logic" sheet, same tab, cols J–L.
+# Sheet layout (rows 3 & 5, day-level label at col I, thresholds at J,K,L):
+#   Col J = Attainment | Col K = Availability | Col L = Vol Bucket
+#
+# For each hub×SKU×day row, check conditions across ALL last 4 complete weeks.
+# Day_RL_Instances / Day_WT_Instances = number of weeks all conditions were met.
+# Adjustment and Google Sheet logging only applied where Instances >= 3.
+#
+# Rev Loss: Final_Plan = max(Final_Plan, latest clean adj_avl_sales)
+# Wastage : Final_Plan = min(Final_Plan, latest clean adj_avl_sales)
+# "Latest clean" = most recent week where adjusted_avl_corrected_sales != 'L'
+# =============================================================================
+
+# -- Read day-level thresholds (label at col I=8, thresholds at J,K,L = 9,10,11) --
+_rl_day_att_op, _rl_day_att_val = _parse_threshold(_rl_row[9])   # Col J: Attainment
+_rl_day_avl_op, _rl_day_avl_val = _parse_threshold(_rl_row[10])  # Col K: Availability
+_rl_day_vol_op, _rl_day_vol_val = _parse_threshold(_rl_row[11])  # Col L: Vol Bucket
+
+_wt_day_att_op, _wt_day_att_val = _parse_threshold(_wt_row[9])   # Col J: Attainment
+_wt_day_avl_op, _wt_day_avl_val = _parse_threshold(_wt_row[10])  # Col K: Availability
+_wt_day_vol_op, _wt_day_vol_val = _parse_threshold(_wt_row[11])  # Col L: Vol Bucket
+
+print(f"\n[Config Day] Rev Loss — Attainment {_rl_day_att_op}{_rl_day_att_val} | "
+      f"Availability {_rl_day_avl_op}{_rl_day_avl_val} | Vol {_rl_day_vol_op}{_rl_day_vol_val}")
+print(f"[Config Day] Wastage  — Attainment {_wt_day_att_op}{_wt_day_att_val} | "
+      f"Availability {_wt_day_avl_op}{_wt_day_avl_val} | Vol {_wt_day_vol_op}{_wt_day_vol_val}")
+
+# -- Consecutive streak from latest week (same logic as week-level) ------------
+# Start from the most recent week. If it passes, check the previous week.
+# Stop at the first week that fails. Count = unbroken streak length.
+_base_plan_num = pd.to_numeric(Final_Plan['Base_Plan (qty)'], errors='coerce')
+_latest_week_str = str(int(_last_4_weeks[-1]))
+
+# Discover all weeks present via avl_corrected_sales_{w} columns, latest first
+_all_day_weeks = sorted(
+    set(col.split('_')[-1] for col in Final_Plan.columns if col.startswith('avl_corrected_sales_')),
+    key=lambda x: int(x),
+    reverse=True   # latest week first
+)
+
+_rl_streak = pd.Series(0, index=Final_Plan.index)
+_wt_streak = pd.Series(0, index=Final_Plan.index)
+
+# Rows still in the running (haven't hit a failing week yet)
+_rl_still_passing = pd.Series(True, index=Final_Plan.index)
+_wt_still_passing = pd.Series(True, index=Final_Plan.index)
+
+for _ws in _all_day_weeks:
+    _sales_col = f"avl_corrected_sales_{_ws}"
+    _avail_col = f"simple_availability_{_ws}"
+
+    if _sales_col not in Final_Plan.columns or _avail_col not in Final_Plan.columns:
+        # Treat missing week as a failure — break streak for all rows
+        _rl_still_passing[:] = False
+        _wt_still_passing[:] = False
+        break
+
+    _s   = pd.to_numeric(Final_Plan[_sales_col], errors='coerce')
+    _a   = pd.to_numeric(Final_Plan[_avail_col], errors='coerce')
+    _att = pd.Series(
+        np.where(_base_plan_num > 0, _s / _base_plan_num, np.nan),
+        index=Final_Plan.index
+    )
+
+    _rl_passes_this_week = (
+        _apply_op(_att, _rl_day_att_op, _rl_day_att_val) &
+        _apply_op(_a,   _rl_day_avl_op, _rl_day_avl_val) &
+        _apply_op(_s,   _rl_day_vol_op, _rl_day_vol_val)
+    )
+    _wt_passes_this_week = (
+        _apply_op(_att, _wt_day_att_op, _wt_day_att_val) &
+        _apply_op(_a,   _wt_day_avl_op, _wt_day_avl_val) &
+        _apply_op(_s,   _wt_day_vol_op, _wt_day_vol_val)
+    )
+
+    # Only count if the row is still in an unbroken streak
+    _rl_streak += (_rl_still_passing & _rl_passes_this_week).astype(int)
+    _wt_streak += (_wt_still_passing & _wt_passes_this_week).astype(int)
+
+    # Break streak for rows that failed this week
+    _rl_still_passing = _rl_still_passing & _rl_passes_this_week
+    _wt_still_passing = _wt_still_passing & _wt_passes_this_week
+
+    # If no row is still passing, no need to check earlier weeks
+    if not _rl_still_passing.any() and not _wt_still_passing.any():
+        break
+
+Final_Plan['Day_RL_Instances'] = _rl_streak
+Final_Plan['Day_WT_Instances'] = _wt_streak
+
+# -- Latest clean adjusted_avl_corrected_sales (most recent non-'L' week) -----
+_adj_weeks_rev = [
+    str(int(w)) for w in reversed(_last_4_weeks)
+    if f"adjusted_avl_corrected_sales_{int(w)}" in Final_Plan.columns
+]
+Final_Plan['_latest_clean_adj'] = np.nan
+for _wk in _adj_weeks_rev:
+    _col_adj  = f"adjusted_avl_corrected_sales_{_wk}"
+    _num_vals = pd.to_numeric(Final_Plan[_col_adj], errors='coerce')
+    _still_nan = Final_Plan['_latest_clean_adj'].isna()
+    Final_Plan.loc[_still_nan, '_latest_clean_adj'] = _num_vals[_still_nan]
+
+# -- Apply Rev Loss: only where Day_RL_Instances >= 3 -------------------------
+_rl_day_mask = (
+    (Final_Plan['Day_RL_Instances'] >= 3) &
+    Final_Plan['_latest_clean_adj'].notna()
+)
+Final_Plan['is_day_revloss_flag'] = _rl_day_mask
+
+Final_Plan.loc[_rl_day_mask, 'Final_Plan'] = np.maximum(
+    pd.to_numeric(Final_Plan.loc[_rl_day_mask, 'Final_Plan'], errors='coerce').fillna(0),
+    Final_Plan.loc[_rl_day_mask, '_latest_clean_adj']
 ).round()
 
+# -- Apply Wastage: only where Day_WT_Instances >= 3 --------------------------
+_wt_day_mask = (
+    (Final_Plan['Day_WT_Instances'] >= 3) &
+    Final_Plan['_latest_clean_adj'].notna()
+)
+Final_Plan['is_day_wastage_flag'] = _wt_day_mask
+
+Final_Plan.loc[_wt_day_mask, 'Final_Plan'] = np.minimum(
+    pd.to_numeric(Final_Plan.loc[_wt_day_mask, 'Final_Plan'], errors='coerce').fillna(0),
+    Final_Plan.loc[_wt_day_mask, '_latest_clean_adj']
+).round()
+
+# -- Drop temp column ---------------------------------------------------------
+Final_Plan.drop(columns=['_latest_clean_adj'], inplace=True)
+
+print(f"\n[Day-Level] Rev Loss rows adjusted (instances ≥3): {_rl_day_mask.sum()}")
+print(f"[Day-Level] Wastage  rows adjusted (instances ≥3): {_wt_day_mask.sum()}")
 
 
-# %%
-# Final_Plan.to_clipboard()  # disabled for speed
 
-# %%
-_COMPARE_DIR = os.environ.get("BASELINE_COMPARE_DIR")
-if _COMPARE_DIR:
-    import json as _json
-    _COMPARE_TAG = os.environ.get("BASELINE_COMPARE_TAG", "run")
-    os.makedirs(_COMPARE_DIR, exist_ok=True)
-    _compare_path = os.path.join(_COMPARE_DIR, f"Final_Plan_{_COMPARE_TAG}.pkl")
-    Final_Plan.to_pickle(_compare_path)
-    _meta = {
-        "tag": _COMPARE_TAG,
-        "rows": int(len(Final_Plan)),
-        "columns": int(len(Final_Plan.columns)),
-        "column_names": Final_Plan.columns.tolist(),
-        "dtypes": {str(c): str(t) for c, t in Final_Plan.dtypes.items()},
-    }
-    with open(os.path.join(_COMPARE_DIR, f"meta_{_COMPARE_TAG}.json"), "w", encoding="utf-8") as _mf:
-        _json.dump(_meta, _mf, indent=2)
-    print(f"[COMPARE] Saved Final_Plan -> {_compare_path} ({len(Final_Plan):,} rows x {len(Final_Plan.columns)} cols)")
-    raise SystemExit(0)
+# ---- Save local validation summaries from the new script ----
+_civ_ts  = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+_COL_HEADERS = ["City", "Hub", "SKU Class Prod", "Day", "Initial_Final_Plan", "Final_Plan"]
 
-# %%
+def _section_rows(label, df):
+    rows = [[f"--- {label} ---", "", "", "", "", ""],
+            [f"Run: {_civ_ts}", "", "", "", "", ""],
+            _COL_HEADERS]
+    _view = df[['city_name', 'hub_name', 'SKU Class Prod', 'day',
+                'Initial_Final_Plan', 'Final_Plan']].copy()
+    _view = _view.sort_values(['hub_name', 'SKU Class Prod', 'day'])
+    for _, _r in _view.iterrows():
+        rows.append([
+            str(_r['city_name']),
+            str(_r['hub_name']),
+            str(_r['SKU Class Prod']),
+            str(_r['day']),
+            float(_r['Initial_Final_Plan']) if pd.notna(_r['Initial_Final_Plan']) else "",
+            float(_r['Final_Plan']) if pd.notna(_r['Final_Plan']) else "",
+        ])
+    rows.append([""])
+    return rows
 
+_all_civ_rows = [[f"Consistent Issues Validation — Last run: {_civ_ts}", "", "", "", "", ""], [""]]
+
+_wrl_df = Final_Plan[Final_Plan.get('is_rev_loss_uplift', pd.Series(False, index=Final_Plan.index)) == True].copy()
+_wwt_df = Final_Plan[Final_Plan.get('is_wastage_uplift', pd.Series(False, index=Final_Plan.index)) == True].copy()
+_drl_df = Final_Plan[Final_Plan.get('is_day_revloss_flag', pd.Series(False, index=Final_Plan.index)) == True].copy()
+_dwt_df = Final_Plan[Final_Plan.get('is_day_wastage_flag', pd.Series(False, index=Final_Plan.index)) == True].copy()
+
+_all_civ_rows += _section_rows("1. WEEK-LEVEL REV LOSS (is_rev_loss_uplift)", _wrl_df)
+_all_civ_rows += _section_rows("2. WEEK-LEVEL WASTAGE (is_wastage_uplift)", _wwt_df)
+_all_civ_rows += _section_rows("3. DAY-LEVEL REV LOSS (instances ≥3)", _drl_df)
+_all_civ_rows += _section_rows("4. DAY-LEVEL WASTAGE (instances ≥3)", _dwt_df)
+
+_today = datetime.date.today().strftime('%Y-%m-%d')
+try:
+    from config_paths import BASELINE_CURRENT_FORECASTING_DIR
+except ImportError:
+    BASELINE_CURRENT_FORECASTING_DIR = PROJECT_ROOT
+
+_civ_path = os.path.join(BASELINE_CURRENT_FORECASTING_DIR, f"Consistent_Issues_Validation_{_today}.csv")
+pd.DataFrame(_all_civ_rows).to_csv(_civ_path, index=False, header=False)
+print(f"\n[CIV] Local validation output written to: {_civ_path}")
+
+Final_Plan.to_csv(os.path.join(PROJECT_ROOT, 'Final_Plan_Old.csv'), index=False)
+
+
+# =============================================================================
+# PIPELINE INTEGRATION: Write Output Files & Upload to Google Sheets
+# =============================================================================
+
+# Save main summary output file to BASELINE_OUTPUTS_FOLDER
 _OUTPUTS_FOLDER = BASELINE_OUTPUTS_FOLDER
-_os.makedirs(_OUTPUTS_FOLDER, exist_ok=True)
-_timestamp = _datetime.now().strftime("%Y%m%d_%H%M%S")
-_output_path = _os.path.join(_OUTPUTS_FOLDER, f"Summary_{_timestamp}.xlsx")
+os.makedirs(_OUTPUTS_FOLDER, exist_ok=True)
+_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+_output_path = os.path.join(_OUTPUTS_FOLDER, f"Summary_{_timestamp}.xlsx")
 Final_Plan.to_excel(_output_path, index=False)
 print(f"[Baseline] Summary saved to: {_output_path}")
 
-# %%
-# =============================================================================
 # HUB LEVEL SUGGESTION — save log of previous, then overwrite with new values
-# =============================================================================
 print(f"[Debug] Final_Plan shape: {Final_Plan.shape}")
 print(f"[Debug] Final_Plan columns: {Final_Plan.columns.tolist()}")
 
@@ -1992,112 +3005,92 @@ _HUB_SHEET_URL = DP_LOGICS_SHEET_URL
 _HUB_SHEET_TAB  = "Hub level Suggestion"
 _LOG_FOLDER     = DP_LOGICS_FOLDER
 
-# Initialise so comparison block always has valid references even if Hub step fails
 _prev_df    = pd.DataFrame()
 _new_hub_df = pd.DataFrame()
 
 try:
+    sheets_manager = GoogleSheetsManager()
     _hub_spreadsheet = sheets_manager.gc.open_by_url(_HUB_SHEET_URL)
     _hub_ws          = _hub_spreadsheet.worksheet(_HUB_SHEET_TAB)
 
-    # Step 1: Read existing Hub level Suggestion (previous baseline)
+    # Read existing Hub level Suggestion
     _prev_data  = _hub_ws.get_all_values()
     if len(_prev_data) < 2:
         raise ValueError("[Hub Suggestion] Sheet is empty — nothing to log or compare against.")
     _prev_df = pd.DataFrame(_prev_data[1:], columns=_prev_data[0])
-    # Strip whitespace from column names to avoid hidden mismatches
     _prev_df.columns = [c.strip() for c in _prev_df.columns]
     print(f"[Hub Suggestion] Previous sheet loaded: {len(_prev_df):,} rows")
-    print(f"[Hub Suggestion] Columns: {_prev_df.columns.tolist()}")
 
-    # Step 2: Save previous sheet as timestamped log
-    _os.makedirs(_LOG_FOLDER, exist_ok=True)
-    _log_path = _os.path.join(_LOG_FOLDER, f"Hub_level_Suggestion_log_{_timestamp}.xlsx")
+    # Save previous sheet locally
+    os.makedirs(_LOG_FOLDER, exist_ok=True)
+    _log_path = os.path.join(_LOG_FOLDER, f"Hub_level_Suggestion_log_{_timestamp}.xlsx")
     _prev_df.to_excel(_log_path, index=False)
     print(f"[Hub Suggestion] Previous baseline logged to: {_log_path}")
 
-    # Step 3: Build lookup from Final_Plan — detect column names flexibly
+    # Build lookup from Final_Plan
     def _detect(df, candidates):
         for c in df.columns:
-            if c.strip().lower() in [x.lower() for x in candidates]:
+            if str(c).strip().lower() in [cand.strip().lower() for cand in candidates]:
                 return c
         return None
 
     _fp_hub   = _detect(Final_Plan, ["hub_name", "hub"])
-    _fp_sku   = _detect(Final_Plan, ["SKU Class Prod", "sku class prod", "sku class"])
-    _fp_day   = _detect(Final_Plan, ["day"])
+    _fp_sku   = _detect(Final_Plan, ["SKU Class Prod", "sku class prod", "sku"])
+    _fp_day   = _detect(Final_Plan, ["day", "Day"])
     _fp_fp    = _detect(Final_Plan, ["Final_Plan", "final_plan"])
+
     _missing_fp = [n for n, v in [("hub_name", _fp_hub), ("SKU Class Prod", _fp_sku),
-                                   ("day", _fp_day), ("Final_Plan", _fp_fp)] if v is None]
+                                  ("day", _fp_day), ("Final_Plan", _fp_fp)] if not v]
     if _missing_fp:
-        raise KeyError(f"Final_Plan missing required columns: {_missing_fp}. Available: {Final_Plan.columns.tolist()}")
+        raise KeyError(f"[Hub Suggestion] Final_Plan missing columns: {_missing_fp}")
 
     _final_lookup = Final_Plan[[_fp_hub, _fp_sku, _fp_day, _fp_fp]].copy()
     _final_lookup.columns = ["hub_name", "sku class prod", "day", "Final_Plan"]
-    for _c in ["hub_name", "sku class prod", "day"]:
-        _final_lookup[_c] = _final_lookup[_c].astype(str).str.strip()
+    _final_lookup["hub_name"]      = _final_lookup["hub_name"].astype(str).str.strip()
+    _final_lookup["sku class prod"] = _final_lookup["sku class prod"].astype(str).str.strip()
+    _final_lookup["day"]           = _final_lookup["day"].astype(str).str.strip()
 
-    # Lookup mode (no summation): keep only one Final_Plan per hub+sku+day.
-    # This avoids doubling when summary has repeated line items for the same key.
-    _final_lookup["Final_Plan"] = pd.to_numeric(_final_lookup["Final_Plan"], errors="coerce")
-    _dup_mask = _final_lookup.duplicated(subset=["hub_name", "sku class prod", "day"], keep="first")
-    _dup_cnt = int(_dup_mask.sum())
-    if _dup_cnt:
-        print(f"[Hub Suggestion] WARNING: {_dup_cnt:,} duplicate summary rows detected for hub+sku+day; keeping first (lookup mode).")
-    _final_lookup = _final_lookup.drop_duplicates(
-        subset=["hub_name", "sku class prod", "day"],
-        keep="first"
-    ).reset_index(drop=True)
-    print(f"[Hub Suggestion] Final_Plan lookup built (unique keys): {len(_final_lookup):,} rows")
+    # Match previous template to construct _new_hub_df
+    _new_hub_df = _prev_df.copy()
+    
+    # Strip columns in template
+    _t_hub = _detect(_new_hub_df, ["hub_name", "hub"])
+    _t_sku = _detect(_new_hub_df, ["sku class prod", "sku"])
+    _t_day = _detect(_new_hub_df, ["day"])
+    _t_qty = _detect(_new_hub_df, ["Final Plan (qty)", "final plan", "qty"])
 
-    # Step 4: Detect key columns in _prev_df and merge
-    _prev_hub = _detect(_prev_df, ["hub_name", "hub"])
-    _prev_sku = _detect(_prev_df, ["sku class prod", "SKU Class Prod", "sku class"])
-    _prev_day = _detect(_prev_df, ["day"])
-    _prev_bp  = _detect(_prev_df, ["Base_plan", "base_plan", "base plan"])
-    _missing_prev = [n for n, v in [("hub_name", _prev_hub), ("sku class prod", _prev_sku),
-                                     ("day", _prev_day), ("Base_plan", _prev_bp)] if v is None]
-    if _missing_prev:
-        raise KeyError(f"Hub Suggestion sheet missing columns: {_missing_prev}. Available: {_prev_df.columns.tolist()}")
+    if not _t_hub or not _t_sku or not _t_day or not _t_qty:
+         raise KeyError(f"[Hub Suggestion] Previous sheet missing key columns: {[c for c in ['hub_name','sku class prod','day','Final Plan (qty)'] if not c]}")
 
-    # Standardise key column names in _prev_df
-    _prev_df = _prev_df.rename(columns={_prev_hub: "hub_name", _prev_sku: "sku class prod",
-                                         _prev_day: "day",      _prev_bp:  "Base_plan"})
-    for _c in ["hub_name", "sku class prod", "day"]:
-        _prev_df[_c] = _prev_df[_c].astype(str).str.strip()
+    _new_hub_df["_hub_key"] = _new_hub_df[_t_hub].astype(str).str.strip()
+    _new_hub_df["_sku_key"] = _new_hub_df[_t_sku].astype(str).str.strip()
+    _new_hub_df["_day_key"] = _new_hub_df[_t_day].astype(str).str.strip()
 
-    # Keep all rows from Hub Suggestion; if no matching Final_Plan key is found,
-    # retain the previous Base_plan value from the sheet.
-    _new_hub_df = _prev_df.merge(
+    # Merge on keys
+    _new_hub_df = _new_hub_df.merge(
         _final_lookup,
-        on=["hub_name", "sku class prod", "day"],
+        left_on=["_hub_key", "_sku_key", "_day_key"],
+        right_on=["hub_name", "sku class prod", "day"],
         how="left"
     )
-    _new_hub_df["Base_plan_prev"] = pd.to_numeric(_new_hub_df["Base_plan"], errors="coerce")
-    _new_hub_df["Base_plan_new"] = pd.to_numeric(_new_hub_df["Final_Plan"], errors="coerce")
-    _new_hub_df["Base_plan"] = _new_hub_df["Base_plan_new"].where(
-        _new_hub_df["Base_plan_new"].notna(),
-        _new_hub_df["Base_plan_prev"]
-    )
+
+    # Overwrite the suggestion quantity column
+    _new_hub_df[_t_qty] = _new_hub_df["Final_Plan"].fillna(0).round(0).astype(int)
+
+    # Determine base plan source
     _new_hub_df["base_plan_source"] = np.where(
-        _new_hub_df["Base_plan_new"].notna(),
-        "summary",
-        "previous_hub_suggestion"
+        _new_hub_df["Final_Plan"].isna(),
+        "not_in_summary_excel",
+        "baseline_engine"
     )
 
-    _matched   = _new_hub_df["Base_plan_new"].notna().sum()
-    _unmatched = _new_hub_df["Base_plan_new"].isna().sum()
-    print(
-        f"[Hub Suggestion] Matched: {_matched:,} rows | "
-        f"Unmatched (kept previous Base_plan): {_unmatched:,} rows"
+    _new_hub_df.drop(
+        columns=["_hub_key", "_sku_key", "_day_key", "hub_name", "sku class prod", "day", "Final_Plan"],
+        errors="ignore",
+        inplace=True
     )
 
-    _new_hub_df = _new_hub_df.drop(columns=["Final_Plan", "Base_plan_prev", "Base_plan_new"], errors="ignore")
-    print(f"[Hub Suggestion] Rows to write: {len(_new_hub_df):,}")
-
-    # Persist audit source in Summary file as requested.
-    # This tags each Final_Plan row with whether Hub-sheet base_plan came from
-    # summary match or previous Hub level Suggestion fallback.
+    # Enrich original Summary excel with base plan source metadata
     _source_map = _new_hub_df[["hub_name", "sku class prod", "day", "base_plan_source"]].drop_duplicates(
         subset=["hub_name", "sku class prod", "day"], keep="first"
     )
@@ -2121,7 +3114,7 @@ try:
     _summary_enriched.to_excel(_output_path, index=False)
     print(f"[Baseline] Summary updated with base_plan_source: {_output_path}")
 
-    # Step 5: Write updated Hub level Suggestion back to Google Sheet
+    # Write suggestions back to Google Sheet
     _hub_ws.clear()
     set_with_dataframe(_hub_ws, _new_hub_df)
     print(f"[Hub Suggestion] Google Sheet updated: {len(_new_hub_df):,} rows written to '{_HUB_SHEET_TAB}'")
@@ -2131,339 +3124,70 @@ except Exception as _hub_err:
     import traceback as _tb
     print(_tb.format_exc())
 
-# %%
-# =============================================================================
 # BASE PLAN COMPARISON — write 3 granularity views to validation Google Sheet
-# Tabs: Hub SKU Day | City Category | City Level
-# =============================================================================
 _VALIDATION_SHEET_URL = VALIDATION_SHEET_URL
-
-print(f"[Validation] _prev_df shape={_prev_df.shape} | columns={_prev_df.columns.tolist()}")
-print(f"[Validation] _new_hub_df shape={_new_hub_df.shape} | columns={_new_hub_df.columns.tolist()}")
-
 if _prev_df.empty or _new_hub_df.empty:
-    print(f"[Validation] Skipping — prev_df empty={_prev_df.empty}, new_hub_df empty={_new_hub_df.empty}. Hub Suggestion step must succeed first.")
+    print(f"[Validation] Skipping comparison upload — Hub Suggestion step failed.")
 else:
     try:
-        # Normalise column names in both DataFrames to lowercase+stripped for robust matching
+        # Normalise column names
         _prev_df.columns   = [c.strip().lower() for c in _prev_df.columns]
         _new_hub_df.columns = [c.strip().lower() for c in _new_hub_df.columns]
 
-        # Detect the exact column names (handles casing variations)
-        def _find_col(df, candidates):
-            for c in df.columns:
-                if c in candidates:
-                    return c
-            return None
+        _city_col  = _detect(_prev_df, ["city_name", "city"])
+        _hub_col   = _detect(_prev_df, ["hub_name", "hub"])
+        _sku_col   = _detect(_prev_df, ["sku class prod", "sku"])
+        _day_col   = _detect(_prev_df, ["day"])
+        _p_qty_col = _detect(_prev_df, ["final plan (qty)", "qty"])
+        _n_qty_col = _detect(_new_hub_df, ["final plan (qty)", "qty"])
 
-        _city_col  = _find_col(_prev_df, ["city_name", "city"])
-        _hub_col   = _find_col(_prev_df, ["hub_name", "hub"])
-        _subcat_col = _find_col(_prev_df, ["sub category", "sub-category", "sub_category", "subcategory"])
-        _sku_col   = _find_col(_prev_df, ["sku class prod", "sku_class_prod", "sku class", "skuprod"])
-        _day_col   = _find_col(_prev_df, ["day"])
-        _bp_col    = _find_col(_prev_df, ["base_plan", "base plan"])
+        if all(v is not None for v in [_city_col, _hub_col, _sku_col, _day_col, _p_qty_col, _n_qty_col]):
+            print("[Validation] Comparing base plans...")
+            _prev_df[_p_qty_col] = pd.to_numeric(_prev_df[_p_qty_col], errors='coerce').fillna(0)
+            _new_hub_df[_n_qty_col] = pd.to_numeric(_new_hub_df[_n_qty_col], errors='coerce').fillna(0)
 
-        print(f"[Validation] Detected columns — city={_city_col} hub={_hub_col} subcat={_subcat_col} sku={_sku_col} day={_day_col} bp={_bp_col}")
+            _merged = pd.merge(
+                _prev_df[[_city_col, _hub_col, _sku_col, _day_col, _p_qty_col]],
+                _new_hub_df[[_city_col, _hub_col, _sku_col, _day_col, _n_qty_col]],
+                on=[_city_col, _hub_col, _sku_col, _day_col],
+                suffixes=('_prev', '_new')
+            )
+            _merged['diff'] = _merged[f'{_p_qty_col}_new'] - _merged[f'{_p_qty_col}_prev']
+            print(f"[Validation] Comparison merged shape: {_merged.shape}")
 
-        _missing = [n for n, v in [("city_name", _city_col), ("hub_name", _hub_col), ("sub category", _subcat_col),
-                                    ("sku class prod", _sku_col), ("day", _day_col), ("Base_plan", _bp_col)] if v is None]
-        if _missing:
-            raise KeyError(f"Columns not found in hub suggestion data: {_missing}. Available: {_prev_df.columns.tolist()}")
+            _val_spreadsheet = sheets_manager.gc.open_by_url(_VALIDATION_SHEET_URL)
 
-        _curr_bp_col = _find_col(_new_hub_df, ["base_plan", "base plan"]) or _bp_col
-        _key_cols = [_city_col, _hub_col, _subcat_col, _sku_col, _day_col]
-        _rename_map = {_city_col: "city_name", _hub_col: "hub_name", _subcat_col: "sub category",
-                       _sku_col: "sku class prod", _day_col: "day"}
+            # View 1: Hub SKU Day
+            _ws1 = _val_spreadsheet.worksheet("Hub SKU Day")
+            _ws1.clear()
+            set_with_dataframe(_ws1, _merged)
+            print("[Validation] Uploaded View 1 (Hub SKU Day) to Google Sheets.")
 
-        _prev_cmp = _prev_df[[*_key_cols, _bp_col]].copy().rename(columns={**_rename_map, _bp_col: "Base_plan"})
+            # View 2: City Category
+            _summary_enriched['Category'] = _summary_enriched['sub category']
+            
+            _view2 = _summary_enriched.groupby(['city_name', 'Category'], as_index=False).agg(
+                Initial_Base_Plan=('Base_Plan (qty)', 'sum'),
+                New_Base_Plan=('Final_Plan', 'sum')
+            )
+            _view2['diff'] = _view2['New_Base_Plan'] - _view2['Initial_Base_Plan']
+            _ws2 = _val_spreadsheet.worksheet("City Category")
+            _ws2.clear()
+            set_with_dataframe(_ws2, _view2)
+            print("[Validation] Uploaded View 2 (City Category) to Google Sheets.")
 
-        _missing_curr = [c for c in [*_key_cols, _curr_bp_col] if c not in _new_hub_df.columns]
-        if _missing_curr:
-            raise KeyError(f"Columns missing in _new_hub_df: {_missing_curr}. Available: {_new_hub_df.columns.tolist()}")
-        _curr_cmp = _new_hub_df[[*_key_cols, _curr_bp_col]].copy().rename(columns={**_rename_map, _curr_bp_col: "Base_plan"})
-
-        print(f"[Validation] _prev_cmp shape={_prev_cmp.shape} | _curr_cmp shape={_curr_cmp.shape}")
-
-        for _df_c in [_prev_cmp, _curr_cmp]:
-            for _c in ["hub_name", "sku class prod", "day", "city_name", "sub category"]:
-                _df_c[_c] = _df_c[_c].astype(str).str.strip()
-            _df_c["Base_plan"] = pd.to_numeric(_df_c["Base_plan"], errors="coerce").fillna(0)
-
-        _cmp = _prev_cmp.merge(
-            _curr_cmp,
-            on=["city_name", "hub_name", "sub category", "sku class prod", "day"],
-            how="outer",
-            suffixes=("_prev", "_curr")
-        ).fillna(0)
-        print(f"[Validation] _cmp shape after merge: {_cmp.shape}")
-        _cmp["delta_%"] = np.where(
-            _cmp["Base_plan_prev"] != 0,
-            ((_cmp["Base_plan_curr"] - _cmp["Base_plan_prev"]) / _cmp["Base_plan_prev"] * 100).round(1),
-            None
-        )
-
-        # Tab 1: Hub SKU Day — days in columns (prev | curr | delta% per day)
-        _days_order   = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        _hub_sku_rows = []
-        for (_hub, _sku), _grp in _cmp.groupby(["hub_name", "sku class prod"]):
-            _row = {"Hub": _hub, "SKU Class": _sku}
-            for _d in _days_order:
-                _dr = _grp[_grp["day"] == _d]
-                _prev_v = _dr["Base_plan_prev"].sum() if not _dr.empty else 0
-                _curr_v = _dr["Base_plan_curr"].sum() if not _dr.empty else 0
-                _row[f"{_d} Prev"]    = int(_prev_v)
-                _row[f"{_d} Curr"]    = int(_curr_v)
-                _row[f"{_d} Delta%"]  = round((_curr_v - _prev_v) / _prev_v * 100, 1) if _prev_v != 0 else None
-            _hub_sku_rows.append(_row)
-        _tab1_df = pd.DataFrame(_hub_sku_rows)
-
-        # Tab 2: City × Category
-        _tab2_df = _cmp.groupby(["city_name", "sub category"], as_index=False).agg(
-            Prev_Plan=("Base_plan_prev", "sum"), Curr_Plan=("Base_plan_curr", "sum")
-        )
-        _tab2_df.rename(columns={"city_name": "City", "sub category": "Category"}, inplace=True)
-        _tab2_df["Delta_%"] = np.where(
-            _tab2_df["Prev_Plan"] != 0,
-            ((_tab2_df["Curr_Plan"] - _tab2_df["Prev_Plan"]) / _tab2_df["Prev_Plan"] * 100).round(1),
-            None
-        )
-
-        # Tab 3: City Level
-        _tab3_df = _cmp.groupby("city_name", as_index=False).agg(
-            Prev_Plan=("Base_plan_prev", "sum"), Curr_Plan=("Base_plan_curr", "sum")
-        )
-        _tab3_df.rename(columns={"city_name": "City"}, inplace=True)
-        _tab3_df["Delta_%"] = np.where(
-            _tab3_df["Prev_Plan"] != 0,
-            ((_tab3_df["Curr_Plan"] - _tab3_df["Prev_Plan"]) / _tab3_df["Prev_Plan"] * 100).round(1),
-            None
-        )
-
-        # Write all three tabs to validation Google Sheet
-        _val_ss = sheets_manager.gc.open_by_url(_VALIDATION_SHEET_URL)
-
-        def _apply_sheet_formatting(spreadsheet, ws, df):
-            """Bold header, freeze row, number formats, green/red conditional on Delta% cols."""
-            sid    = ws.id
-            n_rows = len(df) + 1
-            n_cols = len(df.columns)
-            cols   = list(df.columns)
-            reqs   = []
-
-            # 1. Bold white-text navy header
-            reqs.append({"repeatCell": {
-                "range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-                          "startColumnIndex": 0, "endColumnIndex": n_cols},
-                "cell": {"userEnteredFormat": {
-                    "textFormat": {"bold": True,
-                                   "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
-                    "backgroundColor": {"red": 0.18, "green": 0.37, "blue": 0.58},
-                    "horizontalAlignment": "CENTER",
-                    "verticalAlignment": "MIDDLE"
-                }},
-                "fields": "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment,verticalAlignment)"
-            }})
-
-            # 2. Freeze header
-            reqs.append({"updateSheetProperties": {
-                "properties": {"sheetId": sid, "gridProperties": {"frozenRowCount": 1}},
-                "fields": "gridProperties.frozenRowCount"
-            }})
-
-            # 3. Per-column: number format + conditional colours for Delta% columns
-            for ci, col in enumerate(cols):
-                col_l      = col.lower()
-                data_range = {"sheetId": sid, "startRowIndex": 1, "endRowIndex": n_rows,
-                              "startColumnIndex": ci, "endColumnIndex": ci + 1}
-
-                if any(x in col_l for x in ["prev", "curr", "plan"]):
-                    reqs.append({"repeatCell": {
-                        "range": data_range,
-                        "cell": {"userEnteredFormat": {
-                            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}
-                        }},
-                        "fields": "userEnteredFormat.numberFormat"
-                    }})
-
-                elif "delta" in col_l:
-                    # values stored as e.g. 5.2 → display "+5.2%" / "-3.1%"
-                    reqs.append({"repeatCell": {
-                        "range": data_range,
-                        "cell": {"userEnteredFormat": {
-                            "numberFormat": {"type": "NUMBER",
-                                             "pattern": '+0.0"%";-0.0"%";"-"'}
-                        }},
-                        "fields": "userEnteredFormat.numberFormat"
-                    }})
-                    # Green cell for positive delta
-                    reqs.append({"addConditionalFormatRule": {"rule": {
-                        "ranges": [data_range],
-                        "booleanRule": {
-                            "condition": {"type": "NUMBER_GREATER",
-                                          "values": [{"userEnteredValue": "0"}]},
-                            "format": {"backgroundColor": {"red": 0.71, "green": 0.84, "blue": 0.66}}
-                        }
-                    }, "index": 0}})
-                    # Red cell for negative delta
-                    reqs.append({"addConditionalFormatRule": {"rule": {
-                        "ranges": [data_range],
-                        "booleanRule": {
-                            "condition": {"type": "NUMBER_LESS",
-                                          "values": [{"userEnteredValue": "0"}]},
-                            "format": {"backgroundColor": {"red": 0.96, "green": 0.69, "blue": 0.69}}
-                        }
-                    }, "index": 1}})
-
-            # 4. Auto-resize columns
-            reqs.append({"autoResizeDimensions": {
-                "dimensions": {"sheetId": sid, "dimension": "COLUMNS",
-                               "startIndex": 0, "endIndex": n_cols}
-            }})
-
-            spreadsheet.batch_update({"requests": reqs})
-            print(f"    [fmt] base formatting applied to sheet id={sid}")
-
-            # 5. Alternating row shading
-            # First delete any existing banded ranges on this sheet (avoid duplicate error)
-            try:
-                _ss_meta = spreadsheet.get(fields="sheets(properties/sheetId,bandedRanges)")
-                for _sh in _ss_meta.get("sheets", []):
-                    if _sh.get("properties", {}).get("sheetId") == sid:
-                        _del_reqs = [
-                            {"deleteBanding": {"bandedRangeId": _br["bandedRangeId"]}}
-                            for _br in _sh.get("bandedRanges", [])
-                        ]
-                        if _del_reqs:
-                            spreadsheet.batch_update({"requests": _del_reqs})
-                        break
-            except Exception as _be:
-                print(f"    [fmt] could not clear existing banding (ignored): {_be}")
-
-            spreadsheet.batch_update({"requests": [{"addBanding": {
-                "bandedRange": {
-                    "range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": n_rows,
-                              "startColumnIndex": 0, "endColumnIndex": n_cols},
-                    "rowProperties": {
-                        "firstBandColor":  {"red": 1.0,  "green": 1.0,  "blue": 1.0},
-                        "secondBandColor": {"red": 0.93, "green": 0.95, "blue": 0.98}
-                    }
-                }
-            }}]})
-            print(f"    [fmt] banding applied")
-
-        for _tab_name, _tab_df in [("Hub SKU Day", _tab1_df), ("City Category", _tab2_df), ("City Level", _tab3_df)]:
-            try:
-                _val_ws = _val_ss.worksheet(_tab_name)
-            except Exception:
-                _val_ws = _val_ss.add_worksheet(title=_tab_name, rows=5000, cols=50)
-            _val_ws.clear()
-            set_with_dataframe(_val_ws, _tab_df)
-            try:
-                _apply_sheet_formatting(_val_ss, _val_ws, _tab_df)
-                print(f"[Validation] '{_tab_name}' written & formatted: {len(_tab_df):,} rows")
-            except Exception as _fmt_err:
-                print(f"[Validation] '{_tab_name}' written but formatting failed: {_fmt_err}")
-
-        print("[Validation] All comparison tabs updated successfully.")
+            # View 3: City Level
+            _view3 = _summary_enriched.groupby(['city_name'], as_index=False).agg(
+                Initial_Base_Plan=('Base_Plan (qty)', 'sum'),
+                New_Base_Plan=('Final_Plan', 'sum')
+            )
+            _view3['diff'] = _view3['New_Base_Plan'] - _view3['Initial_Base_Plan']
+            _ws3 = _val_spreadsheet.worksheet("City Level")
+            _ws3.clear()
+            set_with_dataframe(_ws3, _view3)
+            print("[Validation] Uploaded View 3 (City Level) to Google Sheets.")
 
     except Exception as _val_err:
         print(f"[Validation] ERROR: {_val_err}")
-        import traceback as _tb2
-        print(_tb2.format_exc())
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
-# def fast_smooth_all_weeks(pivot_df, weeks, threshold_multiplier=1.0, cutoff_count=1):
-#     weeks_sorted = sorted(map(int, weeks))  # ensure weeks are in order
-    
-#     for i, target_week in enumerate(weeks_sorted):
-#         current_col = f'avl_corrected_sales_{target_week}'
-#         history_weeks = weeks_sorted[:i]
-#         history_cols = [f'avl_corrected_sales_{w}' for w in history_weeks if f'avl_corrected_sales_{w}' in pivot_df.columns]
-#         left_cols = [f'avl_corrected_sales_{w}' for w in weeks_sorted[:i+1] if f'avl_corrected_sales_{w}' in pivot_df.columns]
-
-#         # Skip if the current column doesn't exist
-#         if current_col not in pivot_df.columns:
-#             continue
-
-#         # Step 1: Calculate history mean (excluding 0s)
-#         history_vals = pivot_df[history_cols].replace(0, np.nan)
-#         avg_vals = history_vals.mean(axis=1).fillna(0)
-
-#         # Step 2: Get current week's values
-#         current_vals = pivot_df[current_col]
-
-#         # Step 3: Count non-zero values from left
-#         non_zero_count = (pivot_df[left_cols] > 0).sum(axis=1)
-
-#         # Step 4: Conditions
-#         is_too_many_nonzero = non_zero_count > cutoff_count
-#         is_outlier = abs(current_vals - avg_vals) > (threshold_multiplier * avg_vals)
-
-#         # Step 5: Apply smoothing logic
-#         smoothed_col = f'smoothed_sales_{target_week}'
-#         pivot_df[smoothed_col] = np.where(
-#             is_too_many_nonzero,
-#             0,
-#             np.where(is_outlier, avg_vals.round(0), current_vals)
-#         )
-
-
-
-# %%
-# history_weeks.to_clipboard()
-
-# %%
-
-
-# %%
-
-
-# %%
-# pivot_df.to_clipboard()
-
-# # %%
-# fast_smooth_all_weeks(pivot_df, weeks, threshold_multiplier=1.0, cutoff_count=1)
-
-# # %%
-# latest_week = max(map(int, weeks))
-# weeks_sorted = sorted(map(int, weeks))
-
-# for week in weeks_sorted:
-#     if week >= latest_week - 1:
-#         fast_smooth_week(pivot_df, week, weeks_sorted)
-
-
-# # %%
-# pivot_df.to_clipboard()
-
-# %%
+        import traceback as _tb
+        print(_tb.format_exc())

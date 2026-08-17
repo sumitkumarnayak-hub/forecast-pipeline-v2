@@ -17,7 +17,7 @@ The application is built on a split-monorepo design, combining a stateless Next.
 ### Frontend Directory Layout
 The frontend application is built with Next.js (App Router), utilizing Tailwind CSS and TypeScript:
 - **`src/app/`**: The App Router pages and API routes.
-  - Features include: `dashboard`, `autopilot`, `baseline` (steps 1–5), `master-data`, `new-product-launch`, `hub-launch`, `final-plan`, `validation`, `settings`, `analytics`, and `admin`.
+  - Features include: `dashboard`, `baseline` (steps 1–5), `master-data`, `new-product-launch`, `hub-launch`, `final-plan`, `validation`, `settings`, `analytics`, and `admin`.
   - Also contains global layouts (`layout.tsx`), global CSS (`globals.css`), and context providers (`providers.tsx`).
 - **`src/components/`**: Modular UI components grouped by feature area:
   - `ui/`: Shared base UI components (buttons, dialogs, cards, etc.).
@@ -45,16 +45,14 @@ The backend application has been modularized by feature domain:
   - `storage/`: Cloud and local storage provider abstractions (`local.py`, `drive.py`, `supabase.py`) managed by a provider factory (`factory.py`) with synchronization helpers (`sync.py`).
   - `shared/`: Shared services including Google Sheets client integration (`google_sheets.py`), cache management (`sheets_cache.py`), in-memory caches (`api_cache.py`), email dispatches (`email.py`), system monitoring details (`system_details.py`), and system alerts/notifications (`workflow_notifications.py`).
   - `queue/`: Database-backed task queue drivers (`driver.py`) and workers (`worker.py`) for processing deferred jobs in background threads.
-  - `ui/`: Core styling and layout render support (`nav.py`, `pages/optimized_baseline.py`).
   - `utils/`: Dataframe parsing helpers (`dataframe.py`) and session stores (`session_store.py`).
 - **`features/`**: Modular packages representing self-contained business pages/features:
-  - Each package is a standalone domain folder containing `router.py` (controllers), and sub-modules handling its specialized business logic (e.g., `product_launch/core.py`, `autopilot/optimized.py`, etc.).
+  - Each package is a standalone domain folder containing `router.py` (controllers), and sub-modules handling its specialized business logic (e.g., `product_launch/core.py`, etc.).
   - Features include:
     - `auth`: Credentials verification and session token management.
     - `dashboard`: Main business overview metrics and aggregations.
     - `master_data`: Google Sheets master configurations, metadata, and tables sync.
     - `baseline`: Load raw data, configure parameters, generate baseline, review baseline, and approve baseline actions.
-    - `autopilot`: Runs the automated 6-step forecasting pipeline.
     - `final_plan`: Consensus and final submission processing.
     - `product_launch`: Wizard for submitting new product launch configurations, tracking master mappings, and watching for changes.
     - `hub_launch`: Handles new hub mapping cloning and syncing.
@@ -97,31 +95,6 @@ The system maps operations according to the following scopes (configured via `US
 | **product** | `read`, `write` | Manage product launches and configuration parameters. |
 | **viewer** | `read` | Read-only access to dashboards, master data, and analytics. |
 
----
-
-## 4. Asynchronous Pipeline & SSE
-
-### The Multi-Threaded Auto-Pilot Pipeline
-When a user launches the Auto-Pilot process (`POST /api/autopilot/run`), the execution occurs asynchronously to prevent HTTP timeouts.
-
-1. **Thread Spawning**: The router spawns a background thread running `run_optimized_autopilot()` inside `features/autopilot/optimized.py`.
-2. **State Store**: The thread records the execution parameters and logs in a database run state (`load_autopilot_state`) indexed by a task UUID (`run_id`).
-3. **Step Log Tracking**: As each of the 6 steps executes, the step status (`running`, `completed`, `failed`), progress logs, warning alerts, and execution errors are committed to the database.
-
-### Server-Sent Events (SSE) Interface
-The frontend client subscribes to progress events in real-time by opening a persistent HTTP connection:
-```http
-GET /api/autopilot/stream/{run_id}
-Accept: text/event-stream
-```
-The FastAPI backend uses an SSE generator yielding line-buffered JSON strings representing step events:
-- `event: step`: Yields status updates for specific steps including logs, warnings, execution metrics, and error summaries.
-- `event: log`: Sends live incremental console logs as they are generated.
-- `event: completed`: Emitted when the entire pipeline run finishes successfully.
-- `event: failed`: Emitted when any pipeline step raises an exception.
-- `event: error`: Indicates system errors (e.g., run not found, stream timeout).
-
-This allows the client to display live progress bars, terminal logs, and execution times without polling the database.
 
 ---
 

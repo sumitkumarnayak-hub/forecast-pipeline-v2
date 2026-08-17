@@ -120,16 +120,6 @@ class MasterSyncLog(Base):
     session_id = Column(String)
 
 
-class PipelineRunLogLine(Base):
-    __tablename__ = "pipeline_run_log_lines"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, ForeignKey("pipeline_runs.run_id"), nullable=False)
-    level = Column(String)
-    message = Column(String, nullable=False)
-    logged_at = Column(DateTime(timezone=True), server_default=func.now())
-
-
 class EmailNotificationRecipient(Base):
     __tablename__ = "email_notification_recipients"
 

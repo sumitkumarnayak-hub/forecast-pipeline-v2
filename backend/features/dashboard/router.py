@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.dependencies import get_current_user, get_db
-from features.autopilot.state import load_autopilot_state
 
 from core.database.engine import Database
 
@@ -56,21 +55,7 @@ def dashboard_bootstrap(
             cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
             day_list = [d.strip() for d in days.split(",") if d.strip()] if days else None
 
-            state = load_autopilot_state()
-            if not state:
-                pipeline_card = {"has_run": False, "run_name": None, "status": None}
-            else:
-                if state.get("success"):
-                    status = "Success"
-                elif state.get("failed_step") is not None:
-                    status = "Failed"
-                else:
-                    status = "In progress"
-                pipeline_card = {
-                    "has_run": True,
-                    "run_name": (state.get("run_name") or "—")[:28],
-                    "status": status,
-                }
+            pipeline_card = {"has_run": False, "run_name": None, "status": None}
 
             analytics = (
                 build_week_analytics(week_label)
@@ -92,21 +77,7 @@ def dashboard_bootstrap(
                 "revenue_trends": revenue_trends,
             }
         except FileNotFoundError as exc:
-            state = load_autopilot_state()
-            if not state:
-                pipeline_card = {"has_run": False, "run_name": None, "status": None}
-            else:
-                if state.get("success"):
-                    status = "Success"
-                elif state.get("failed_step") is not None:
-                    status = "Failed"
-                else:
-                    status = "In progress"
-                pipeline_card = {
-                    "has_run": True,
-                    "run_name": (state.get("run_name") or "—")[:28],
-                    "status": status,
-                }
+            pipeline_card = {"has_run": False, "run_name": None, "status": None}
             detail = str(exc)
             return {
                 "pipeline_card": pipeline_card,
@@ -125,20 +96,6 @@ def dashboard_bootstrap(
     return _build()
 
 
-@router.get("/pipeline-card")
-def get_pipeline_card(current_user: dict = Depends(get_current_user)):
-    """Compact last Auto-Pilot run summary (Streamlit render_pipeline_dashboard_card)."""
-    state = load_autopilot_state()
-    if not state:
-        return {"has_run": False, "run_name": None, "status": None}
-    if state.get("success"):
-        status = "Success"
-    elif state.get("failed_step") is not None:
-        status = "Failed"
-    else:
-        status = "In progress"
-    run_name = (state.get("run_name") or "—")[:28]
-    return {"has_run": True, "run_name": run_name, "status": status}
 
 
 @router.get("/weeks")

@@ -5,7 +5,6 @@ import api from "@/lib/api";
 import { cacheGet, cacheSet } from "@/lib/queryCache";
 import { writeSessionBootstrap, readSessionBootstrap, BOOTSTRAP_TTL_MS } from "@/lib/bootstrapCache";
 import { prefetchNplBootstrap } from "@/lib/nplBootstrap";
-import { prefetchManualSync } from "@/lib/autopilotManualSync";
 import { SIDEBAR_NAV, type NavLink } from "@/lib/navigation";
 
 const inflight = new Map<string, Promise<void>>();
@@ -14,7 +13,6 @@ const MAX_CONCURRENT = 3;
 
 const KEYS = {
   dashboard: "dashboard:bootstrap",
-  autopilotShell: "autopilot:bootstrap-shell",
   settings: "settings:bootstrap",
   validation: "validation:bootstrap",
   insights: "insights:bootstrap",
@@ -23,7 +21,7 @@ const KEYS = {
   nplLogSummary: "npl:submission-log:summary:|",
 } as const;
 
-const PRIORITY_HREFS = ["/dashboard", "/autopilot", "/settings", "/new-product-launch"];
+const PRIORITY_HREFS = ["/dashboard", "/settings", "/new-product-launch"];
 
 async function withConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
   while (activePrefetches >= MAX_CONCURRENT) {
@@ -45,14 +43,7 @@ async function prefetchDashboard(): Promise<void> {
   });
 }
 
-async function prefetchAutopilot(): Promise<void> {
-  prefetchManualSync();
-  if (cacheGet(KEYS.autopilotShell)) return;
-  await withConcurrencyLimit(async () => {
-    const { data } = await api.get("/api/autopilot/bootstrap");
-    cacheSet(KEYS.autopilotShell, data, 300_000);
-  });
-}
+
 
 async function prefetchSettings(): Promise<void> {
   if (readSessionBootstrap(KEYS.settings, BOOTSTRAP_TTL_MS)) return;

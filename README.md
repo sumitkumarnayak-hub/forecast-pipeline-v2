@@ -10,7 +10,7 @@ pinned: false
 
 # Demand Planning & Forecasting workbench (Monorepo - Scoped Deployment)
 
-A production-grade web application scoped specifically for **New Product Launch**, **Hub Launch**, and **Settings** management. Other pipeline forecasting modules (Dashboard, Auto-Pilot, Baseline, Final Plan, Validation, Analytics) are temporarily disabled and display a "Coming Soon" placeholder UI in this release.
+A production-grade web application scoped specifically for **New Product Launch**, **Hub Launch**, and **Settings** management. Other pipeline forecasting modules (Dashboard, Baseline, Final Plan, Validation, Analytics) are temporarily disabled and display a "Coming Soon" placeholder UI in this release.
 
 Built using a **Next.js (React)** frontend with vanilla CSS/Tailwind styling and a modular **FastAPI (Python)** backend, this workbench serves as a high-performance control panel integrating database tables and cached Google Sheets worksheets.
 
@@ -34,7 +34,6 @@ forecast-pipeline-v2/
 │   ├── features/          # Self-Contained Business Domains (Route Controllers & Logic)
 │   │   ├── auth/          # Login authentication handlers
 │   │   ├── product_launch/# Product launch wizard, sheet_reads cache, watcher service
-│   │   ├── autopilot/     # 6-step autopilot runner, logs, & live stream (SSE)
 │   │   ├── baseline/      # Manual raw data pull, configs, approval statuses
 │   │   ├── dashboard/     # Week analytics & KPI dashboard engine
 │   │   ├── final_plan/    # Festive/adhoc synchronizers & final planning exports

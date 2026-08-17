@@ -23,7 +23,7 @@ TOKEN_EXPIRE_DAYS = float(os.getenv("AUTH_COOKIE_DAYS", "7"))
 
 
 def get_db() -> Database:
-    """Shared DB singleton — one engine per process (required for autopilot + cache coherence)."""
+    """Shared DB singleton — one engine per process (required for cache coherence)."""
     return get_shared_database()
 
 

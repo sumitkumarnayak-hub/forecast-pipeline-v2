@@ -15,7 +15,6 @@ PRODUCT_PAGES: frozenset[str] = frozenset({
     "Settings",
 })
 
-PAGE_AUTO_PILOT = "Auto-Pilot"
 PAGE_LOAD_RAW_DATA = "1. Load Raw Data"
 PAGE_CONFIGURE_PARAMS = "2. Configure Parameters"
 PAGE_GENERATE_BASELINE = "3. Generate Baseline"
@@ -32,7 +31,6 @@ MANUAL_BASELINE_PAGES: list[str] = [
 
 PAGE_ORDER: list[str] = [
     "Dashboard",
-    PAGE_AUTO_PILOT,
     *MANUAL_BASELINE_PAGES,
     "Master Data",
     "Product Launch",
