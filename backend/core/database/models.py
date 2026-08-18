@@ -68,34 +68,6 @@ class FinalPlanRun(Base):
     session_id = Column(String)
 
 
-class PipelineRun(Base):
-    __tablename__ = "pipeline_runs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, unique=True, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    status = Column(String)
-    current_step = Column(String)
-    started_at = Column(DateTime(timezone=True), server_default=func.now())
-    completed_at = Column(DateTime(timezone=True))
-    summary_stats = Column(String)
-    session_id = Column(String)
-
-
-class PipelineStepLog(Base):
-    __tablename__ = "pipeline_step_logs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, ForeignKey("pipeline_runs.run_id"), nullable=False)
-    step_key = Column(String, nullable=False)
-    step_name = Column(String)
-    step_order = Column(Integer)
-    status = Column(String)
-    message = Column(String)
-    error_detail = Column(String)
-    logged_at = Column(DateTime(timezone=True), server_default=func.now())
-    session_id = Column(String)
-
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"

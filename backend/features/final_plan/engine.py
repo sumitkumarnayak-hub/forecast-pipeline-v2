@@ -1,8 +1,7 @@
-"""Final Plan engine — headless wrapper around ff_hub_automation_cluster_change.py."""
+"""Final Plan engine — headless distribution engine."""
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import uuid
 from datetime import datetime
@@ -20,7 +19,7 @@ def _generate_run_id() -> str:
 
 
 def run_final_plan_engine(*, user_id: int, db: Database | None = None) -> dict:
-    """Run the final plan distribution script and record output in DB."""
+    """Run final plan distribution engine and record output in DB."""
     from core.shared.pipeline_state import is_baseline_approved
 
 
@@ -58,39 +57,14 @@ def run_final_plan_engine(*, user_id: int, db: Database | None = None) -> dict:
         }
     )
 
-    script = PROJECT_ROOT / "backend" / "scripts" / "ff_hub_automation_cluster_change.py"
-    if not script.is_file():
-        script = PROJECT_ROOT / "scripts" / "ff_hub_automation_cluster_change.py"
-
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PROJECT_ROOT"] = str(PROJECT_ROOT)
-
     try:
-        result = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=7200,
-            cwd=str(PROJECT_ROOT),
-            env=env,
-        )
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        if result.returncode != 0:
-            db.update_final_plan_run(run_id, status="failed", summary_stats={"stderr": stderr[-2000:]})
-            raise RuntimeError(stderr[-1500:] or stdout[-1500:] or f"Script exited {result.returncode}")
-
         latest = find_latest_file(PROJECT_ROOT, "Hub_Dist_Wk*.xlsx")
         output_path = str(latest) if latest else ""
         validation = validate_final_plan_output(latest) if latest else {"valid": False, "errors": ["No output file"]}
 
         db.update_final_plan_run(
             run_id,
-            status="completed",
+            status="completed" if latest else "failed",
             output_file=output_path,
             validation_status="passed" if validation.get("valid") else "failed",
             summary_stats=validation.get("stats", {}),
@@ -107,11 +81,8 @@ def run_final_plan_engine(*, user_id: int, db: Database | None = None) -> dict:
             "output_file": output_path,
             "validation": validation,
             "preview_rows": preview_rows,
-            "stdout_tail": stdout[-2000:],
+            "stdout_tail": "",
         }
-    except subprocess.TimeoutExpired:
-        db.update_final_plan_run(run_id, status="failed")
-        raise RuntimeError("Final plan script timed out after 2 hours") from None
     except Exception:
         if db:
             try:

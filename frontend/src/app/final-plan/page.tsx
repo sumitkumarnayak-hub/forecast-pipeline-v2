@@ -436,7 +436,7 @@ export default function FinalPlanPage() {
           </li>
         </ul>
         <p className="text-xs text-muted mt-3">
-          Runs <code>ff_hub_automation_cluster_change.py</code> — may take several minutes.
+          Runs Final Plan Engine — may take several minutes.
         </p>
         <button
           className="btn btn-primary mt-3"

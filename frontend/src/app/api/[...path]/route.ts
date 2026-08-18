@@ -131,7 +131,9 @@ async function proxy(request: NextRequest, pathSegments: string[]): Promise<Next
   };
 
   if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = await request.arrayBuffer();
+    init.body = request.body;
+    // @ts-ignore - duplex property is required for ReadableStream request body in Node.js fetch
+    init.duplex = "half";
   }
 
   let upstream: Response;

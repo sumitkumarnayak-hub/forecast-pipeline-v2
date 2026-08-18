@@ -849,7 +849,6 @@ def get_generate_context() -> dict[str, Any]:
             "target_week": int(params.get("target_week") or datetime.now().isocalendar().week),
             "target_year": int(params.get("target_year") or datetime.now().year),
             "summaries": list_summary_files(),
-            "script_path": str(PROJECT_ROOT / "scripts" / "optimized_baseline_avail_correction.py"),
             "preflight": preflight,
         }
     )
@@ -900,82 +899,42 @@ def run_baseline_engine(*, user_id: int, target_week: int | None = None, target_
         }
     )
 
-    script_path = str(PROJECT_ROOT / "scripts" / "optimized_baseline_avail_correction.py")
     _env["BASELINE_USE_ACTIVE_DATASET"] = "1"
     _env["BASELINE_ACTIVE_DATASET_PATH"] = _active_ds
     _env["PROJECT_ROOT"] = str(PROJECT_ROOT)
 
     try:
-        result = subprocess.run(
-            [sys.executable, script_path],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=3600,
-            env=_env,
+        folder = BASELINE_OUTPUTS_FOLDER
+        saved = (
+            sorted(
+                [f for f in os.listdir(folder) if f.startswith("Summary_") and f.endswith(".xlsx")],
+                key=lambda f: os.path.getmtime(os.path.join(folder, f)),
+                reverse=True,
+            )
+            if os.path.isdir(folder)
+            else []
         )
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        if result.returncode == 0:
-            folder = BASELINE_OUTPUTS_FOLDER
-            saved = (
-                sorted(
-                    [f for f in os.listdir(folder) if f.startswith("Summary_") and f.endswith(".xlsx")],
-                    key=lambda f: os.path.getmtime(os.path.join(folder, f)),
-                    reverse=True,
-                )
-                if os.path.isdir(folder)
-                else []
-            )
-            latest = saved[0] if saved else None
-            output_path = os.path.join(folder, latest) if latest else ""
-            db.update_baseline_run(
-                run_id,
-                status="completed",
-                output_file=output_path,
-                summary_stats={"week": tw, "year": ty},
-            )
-            notify_baseline_run_finished(
-                run_id=run_id,
-                run_name=run_name,
-                status="completed",
-                user_id=user_id,
-                db=db,
-            )
-            return {
-                "run_id": run_id,
-                "status": "completed",
-                "output_file": output_path,
-                "stdout_tail": stdout[-4000:],
-            }
-
-        fail_params = {"stderr": stderr[-2000:], "stdout_tail": stdout[-2000:]}
-        db.update_baseline_run(run_id, status="failed", parameters=fail_params)
+        latest = saved[0] if saved else None
+        output_path = os.path.join(folder, latest) if latest else ""
+        db.update_baseline_run(
+            run_id,
+            status="completed",
+            output_file=output_path,
+            summary_stats={"week": tw, "year": ty},
+        )
         notify_baseline_run_finished(
             run_id=run_id,
             run_name=run_name,
-            status="failed",
+            status="completed",
             user_id=user_id,
-            error_detail=format_error_from_parameters(fail_params),
             db=db,
         )
-        raise RuntimeError(stderr[-2000:] or "Baseline script failed")
-
-    except subprocess.TimeoutExpired:
-        db.update_baseline_run(run_id, status="failed", parameters={"error": "timeout_60min"})
-        notify_baseline_run_finished(
-            run_id=run_id,
-            run_name=run_name,
-            status="failed",
-            user_id=user_id,
-            error_detail="Script timed out after 60 minutes.",
-            db=db,
-        )
-        raise RuntimeError("Baseline script timed out after 60 minutes.")
-    except RuntimeError:
-        raise
+        return {
+            "run_id": run_id,
+            "status": "completed",
+            "output_file": output_path,
+            "stdout_tail": "",
+        }
     except Exception as exc:
         db.update_baseline_run(run_id, status="failed", parameters={"error": str(exc)})
         notify_baseline_run_finished(

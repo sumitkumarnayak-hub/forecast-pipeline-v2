@@ -1,8 +1,5 @@
 """
-Compare Final_Plan outputs from original vs optimized baseline engines.
-
-Used by ``scripts/compare_baseline_engines.py`` after both scripts run in
-``BASELINE_COMPARE_DIR`` compare mode.
+Compare Final_Plan outputs across baseline engine runs in compare mode.
 """
 from __future__ import annotations
 

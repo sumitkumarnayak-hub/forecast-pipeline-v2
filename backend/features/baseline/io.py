@@ -1,5 +1,5 @@
 """
-Fast local I/O helpers for the optimized baseline engine.
+Fast local I/O helpers for the baseline engine.
 
 - Single open for Product_Masters (P Master + P-H Master)
 - Single read for Percentile with in-memory column slices

@@ -1,6 +1,6 @@
 /**
  * Sidebar & page hierarchy — mirrors Streamlit NAV_PAGES + nested tabs.
- * Source: forecast-pipeline-new-codebase (sidebar.py, router.py, optimized_baseline.py)
+ * Source: forecast-pipeline-new-codebase (sidebar.py, router.py, baseline engine)
  */
 import type { ElementType } from "react";
 import {

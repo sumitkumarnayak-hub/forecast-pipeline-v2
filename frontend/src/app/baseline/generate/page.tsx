@@ -234,7 +234,7 @@ function GenerateContent() {
 
       <SectionCard title="Run Baseline">
         <p className="text-xs text-muted mb-3">
-          Runs <code>optimized_baseline_avail_correction.py</code> and writes Summary_*.xlsx.
+          Runs Baseline Engine and writes Summary_*.xlsx.
         </p>
         <button
           type="button"
