@@ -12,9 +12,9 @@ from core.shared.google_sheets import GoogleSheetsManager
 from core.utils.dataframe import clean_sheet_df, df_to_records, sanitize_for_json
 
 
-P_MASTER_READ_RANGE = "A:K"
-PH_MASTER_READ_RANGE = "A:AX"
-HUB_MASTER_READ_RANGE = "A:F"
+P_MASTER_READ_RANGE = ""
+PH_MASTER_READ_RANGE = ""
+HUB_MASTER_READ_RANGE = ""
 
 def _normalize(text: str) -> str:
     return "".join(ch.lower() for ch in str(text).strip() if ch.isalnum())
@@ -68,7 +68,7 @@ def build_new_hub_sync_preview(sheets: GoogleSheetsManager, bypass_cache: bool =
         raw = sheets.batch_read_worksheets(NEW_HUB_LAUNCH_SHEET_KEY, [("FF Input", "A:H")])
         data = raw.get("FF Input") or []
         if len(data) >= 2:
-            ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            ff_df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
 
     if hub_df is None or hub_df.empty or ph_df is None or ph_df.empty or ff_df is None or ff_df.empty:
         raise ValueError("Could not read Hub Mapping, P-H Master, or FF Input sheet configuration.")
@@ -229,7 +229,7 @@ def clone_from_source_hub_mapping(
         data = raw.get(name) or []
         if not data or len(data) < 2:
             return pd.DataFrame()
-        return clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+        return clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
         
     hub_df = _to_df("Hub Mapping")
     ph_df = _to_df("P-H Master")

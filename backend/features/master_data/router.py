@@ -120,7 +120,7 @@ def get_inventory_buffer(current_user: dict = Depends(get_current_user)):
             # Fetch worksheet data manually to avoid cached read
             data = ws.get_all_values()
             if data and len(data) > 0:
-                df = pd.DataFrame(data[1:], columns=data[0])
+                df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
                 df = clean_sheet_df(df)
                 result[ws.title] = df_to_records(df)
             else:
@@ -151,7 +151,7 @@ def sync_inventory_excel(
             data = ws.get_all_values()
             if not data:
                 continue
-            df = pd.DataFrame(data[1:], columns=data[0])
+            df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
             df = clean_sheet_df(df)
             total_rows += len(df)
 

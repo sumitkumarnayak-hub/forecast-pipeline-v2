@@ -18,7 +18,7 @@ def _ws_to_df(ws, rng=None):
     data = ws.get(rng) if rng else ws.get_all_values()
     if len(data) < 2:
         return pd.DataFrame()
-    df = pd.DataFrame(data[1:], columns=data[0])
+    df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
     df.columns = [c.strip() for c in df.columns]
     return df
 

@@ -349,7 +349,7 @@ def load_salience_source() -> pd.DataFrame:
         logger.warning("[NPL] load_salience_source(): '%s' returned no rows.", SALIENCE_SHEET_NAME)
         return pd.DataFrame()
 
-    df = pd.DataFrame(data[1:], columns=data[0])
+    df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
     df = _normalize_columns(df)
 
     day_col = _resolve_col(df, "day", "Day")
@@ -411,7 +411,7 @@ def load_hub_sku_master_flags() -> pd.DataFrame:
     if not data or len(data) < 2:
         return pd.DataFrame()
 
-    df = pd.DataFrame(data[1:], columns=data[0])
+    df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
     df = _normalize_columns(df)
 
     city_col = _resolve_col(df, "city_name", "City Name", "city")
@@ -1648,7 +1648,7 @@ def load_log() -> pd.DataFrame:
     )
     if len(data) <= 1:
         return pd.DataFrame(columns=LOG_HEADERS)
-    df = pd.DataFrame(data[1:], columns=data[0])
+    df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
     for col, default in [("Status", "Pending"), ("Rejection_Reason", ""),
                           ("Submitted_By", ""), ("MRP", "")]:
         if col not in df.columns:

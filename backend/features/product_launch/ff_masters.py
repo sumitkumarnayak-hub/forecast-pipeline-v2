@@ -31,11 +31,11 @@ HUB_MAPPING_ALT_TAB = HUB_MAPPING_TAB_ALT
 HUB_MAPPING_RANGE = HUB_MAPPING_READ_RANGE
 PH_MASTER_TAB = "P-H Master"
 
-PRODUCT_MASTER_RANGE = "A:K"
-PH_MASTER_RANGE = "A:AX"
-PL_MASTER_RANGE = "A:Z"
+PRODUCT_MASTER_RANGE = ""
+PH_MASTER_RANGE = ""
+PL_MASTER_RANGE = ""
 WIZARD_MASTER_TAB = PL_MASTER_TAB
-WIZARD_MASTER_RANGE = PL_MASTER_RANGE
+WIZARD_MASTER_RANGE = ""
 
 
 def _canon(s: str) -> str:
@@ -187,9 +187,6 @@ def load_product_master_df() -> pd.DataFrame:
             df = df[df[col].astype(str).str.strip().str.upper() == "E"]
             break
 
-    pid_col = _resolve_col(df, "Product id", "Product ID", "product_id")
-    if pid_col:
-        df = df.drop_duplicates(subset=[pid_col])
     return df
 
 
@@ -203,9 +200,6 @@ def load_p_master_df() -> pd.DataFrame:
     df = _values_to_df(data)
     if df.empty:
         return df
-    pid_col = _resolve_col(df, "Product id", "Product ID", "product_id")
-    if pid_col:
-        df = df.drop_duplicates(subset=[pid_col])
     return df
 
 

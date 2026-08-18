@@ -511,7 +511,7 @@ def sync_dp_logics(user_id: int) -> dict[str, Any]:
                 continue
             
             if ws_name == "Adhoc_adjustment":
-                df_raw = pd.DataFrame(data[1:], columns=data[0])
+                df_raw = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
                 df_ad, df_hk = split_adhoc_adjustment(df_raw)
                 if df_ad.empty:
                     continue
@@ -536,7 +536,7 @@ def sync_dp_logics(user_id: int) -> dict[str, Any]:
                 }
                 _create_config_master_audit_log(ws_name, user_id, len(df_ad) + len(df_hk), "success")
             else:
-                df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
                 if df.empty:
                     continue
                 
@@ -601,7 +601,7 @@ def sync_single_dp_logic(worksheet_name: str, user_id: int) -> dict[str, Any]:
             raise ValueError(f"Worksheet '{info['label']}' is empty or invalid")
 
         if worksheet_name == "Adhoc_adjustment":
-            df_raw = pd.DataFrame(data[1:], columns=data[0])
+            df_raw = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
             df_ad, df_hk = split_adhoc_adjustment(df_raw)
             if df_ad.empty:
                 raise ValueError(f"Worksheet '{info['label']}' A:D range resolved to empty DataFrame")
@@ -634,7 +634,7 @@ def sync_single_dp_logic(worksheet_name: str, user_id: int) -> dict[str, Any]:
                 "sidecars": sidecars
             })
         else:
-            df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
             if df.empty:
                 raise ValueError(f"Worksheet '{info['label']}' resolved to empty DataFrame")
 

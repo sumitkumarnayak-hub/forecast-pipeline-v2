@@ -13,11 +13,22 @@ from pathlib import Path
 from typing import TypedDict
 
 import pandas as pd
+from core.shared.drive_client import upload_df_to_drive, download_df_from_drive
+from app.config import get_pipeline_drive_folder_id
+import logging
+
+logger = logging.getLogger(__name__)
+
+def get_dp_logics_folder_id() -> str:
+    folder = get_pipeline_drive_folder_id()
+    if not folder:
+        # Fallback to the explicit ID used for Festive Upload if env var missing
+        return "17mYoNPGhmhw4MlZoE24gWG2onA9WmFya"
+    return folder
 
 P_MASTER_SHEET = "P Master"
-P_MASTER_READ_RANGE = "A:K"
+P_MASTER_READ_RANGE = ""
 PH_MASTER_SHEET = "P-H Master"
-PH_MASTER_USECOLS = "A:AX"
 
 PERCENTILE_AD_PARQUET = "percentile_AD.parquet"
 PERCENTILE_JK_PARQUET = "percentile_JK.parquet"
@@ -32,23 +43,7 @@ class PercentileSlices(TypedDict):
     override_hub_sku_day: pd.DataFrame
 
 
-def sidecar_exists_and_fresh(
-    sidecar: str | Path,
-    source: str | Path,
-    *,
-    max_age_mins: int | None = None,
-) -> bool:
-    """True when sidecar exists, is newer than source Excel, and within optional max age."""
-    sidecar_p = Path(sidecar)
-    source_p = Path(source)
-    if not sidecar_p.is_file() or not source_p.is_file():
-        return False
-    if sidecar_p.stat().st_mtime < source_p.stat().st_mtime:
-        return False
-    if max_age_mins is not None:
-        if time.time() - sidecar_p.stat().st_mtime > max_age_mins * 60:
-            return False
-    return True
+# sidecar_exists_and_fresh removed completely.
 
 
 def product_masters_sidecar_dir(excel_path: str | Path) -> Path:
@@ -72,9 +67,20 @@ def write_percentile_engine_sidecars(
         "override_hub": folder / PERCENTILE_JK_PARQUET,
         "override_hub_sku_day": folder / PERCENTILE_OR_PARQUET,
     }
-    slices["percentile"].to_parquet(paths["percentile"], index=False)
-    slices["override_hub"].to_parquet(paths["override_hub"], index=False)
-    slices["override_hub_sku_day"].to_parquet(paths["override_hub_sku_day"], index=False)
+    folder_id = get_dp_logics_folder_id()
+    
+    # Cast object columns to strings to avoid PyArrow mixed-type crashes
+    for key in slices:
+        out_df = slices[key].copy()
+        for col in out_df.columns:
+            if out_df[col].dtype == 'object':
+                out_df[col] = out_df[col].apply(lambda x: str(x) if pd.notnull(x) else x)
+        slices[key] = out_df
+
+    upload_df_to_drive(slices["percentile"], PERCENTILE_AD_PARQUET, folder_id)
+    upload_df_to_drive(slices["override_hub"], PERCENTILE_JK_PARQUET, folder_id)
+    upload_df_to_drive(slices["override_hub_sku_day"], PERCENTILE_OR_PARQUET, folder_id)
+    
     return paths
 
 
@@ -86,8 +92,16 @@ def write_product_master_engine_sidecars(excel_path: str | Path) -> tuple[Path, 
     out_dir.mkdir(parents=True, exist_ok=True)
     p_path = out_dir / P_MASTER_PARQUET
     ph_path = out_dir / PH_MASTER_PARQUET
-    p_df.to_parquet(p_path, index=False)
-    ph_df.to_parquet(ph_path, index=False)
+    folder_id = get_dp_logics_folder_id()
+
+    # Cast object columns to strings to avoid PyArrow mixed-type crashes
+    for df in (p_df, ph_df):
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else x)
+
+    upload_df_to_drive(p_df, P_MASTER_PARQUET, folder_id)
+    upload_df_to_drive(ph_df, PH_MASTER_PARQUET, folder_id)
     return p_path, ph_path
 
 
@@ -123,15 +137,18 @@ def refresh_all_engine_sidecars(
 
 
 def load_product_masters_sheets_engine(excel_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Engine read: parquet sidecars when fresh vs Product_Masters.xlsx."""
-    excel_path = Path(excel_path)
-    cache_dir = product_masters_sidecar_dir(excel_path)
-    p_path = cache_dir / P_MASTER_PARQUET
-    ph_path = cache_dir / PH_MASTER_PARQUET
-    if sidecar_exists_and_fresh(p_path, excel_path) and sidecar_exists_and_fresh(ph_path, excel_path):
-        return pd.read_parquet(p_path), pd.read_parquet(ph_path)
-    write_product_master_engine_sidecars(excel_path)
-    return pd.read_parquet(p_path), pd.read_parquet(ph_path)
+    """Engine read: strictly download from Google Drive."""
+    folder_id = get_dp_logics_folder_id()
+    try:
+        p_df = download_df_from_drive(P_MASTER_PARQUET, folder_id)
+        ph_df = download_df_from_drive(PH_MASTER_PARQUET, folder_id)
+        return p_df, ph_df
+    except FileNotFoundError:
+        # Rebuild if not in drive
+        write_product_master_engine_sidecars(excel_path)
+        p_df = download_df_from_drive(P_MASTER_PARQUET, folder_id)
+        ph_df = download_df_from_drive(PH_MASTER_PARQUET, folder_id)
+        return p_df, ph_df
 
 
 def load_product_masters_sheets(excel_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -141,7 +158,7 @@ def load_product_masters_sheets(excel_path: str | Path) -> tuple[pd.DataFrame, p
         raise FileNotFoundError(f"Product masters not found: {path}")
     with pd.ExcelFile(path) as book:
         p_master = pd.read_excel(book, sheet_name=P_MASTER_SHEET)
-        ph_master = pd.read_excel(book, sheet_name=PH_MASTER_SHEET, usecols=PH_MASTER_USECOLS)
+        ph_master = pd.read_excel(book, sheet_name=PH_MASTER_SHEET)
     return p_master, ph_master
 
 
@@ -188,10 +205,24 @@ def dp_logics_xlsx_path(folder: str | Path, table_name: str) -> Path:
 
 
 def write_dp_logics_parquet_sidecar(df: pd.DataFrame, xlsx_path: str | Path) -> Path:
-    """Write .parquet next to a DP Logics .xlsx file."""
+    """Upload a DP Logics table directly to Google Drive as Parquet."""
+    folder_id = get_dp_logics_folder_id()
     pq_path = Path(xlsx_path).with_suffix(".parquet")
-    pq_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(pq_path, index=False)
+    filename = pq_path.name
+    
+    # Prevent PyArrow mixed-type crashes by coercing object columns to strings
+    out_df = df.copy()
+    for col in out_df.columns:
+        if out_df[col].dtype == 'object':
+            out_df[col] = out_df[col].apply(lambda x: str(x) if pd.notnull(x) else x)
+            
+    try:
+        upload_df_to_drive(out_df, filename, folder_id)
+        logger.info(f"Uploaded {filename} to Google Drive")
+    except Exception as e:
+        logger.error(f"Failed to upload {filename} to Google Drive: {e}")
+        raise
+        
     return pq_path
 
 
@@ -221,42 +252,35 @@ def read_dp_logics_table(folder: str | Path, table_name: str) -> pd.DataFrame:
 
 
 def read_dp_logics_table_engine(folder: str | Path, table_name: str) -> pd.DataFrame:
-    """Baseline engine path: prefer fresh .parquet sidecar over opening .xlsx."""
-    folder = Path(folder)
-    xlsx = dp_logics_xlsx_path(folder, table_name)
-    parquet = dp_logics_parquet_path(folder, table_name)
-
-    if parquet.exists():
-        return pd.read_parquet(parquet)
-
-    if xlsx.exists():
-        df = pd.read_excel(xlsx)
-        write_dp_logics_parquet_sidecar(df, xlsx)
-        return df
-
-    raise FileNotFoundError(f"DP Logics table not found: {xlsx} (or {parquet})")
+    """Baseline engine path: strictly download from Google Drive."""
+    folder_id = get_dp_logics_folder_id()
+    filename = f"{table_name}.parquet"
+    try:
+        logger.info(f"Downloading {filename} from Google Drive...")
+        return download_df_from_drive(filename, folder_id)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"DP Logics table '{filename}' not found in Google Drive folder {folder_id}")
 
 
 def load_percentile_slices_engine(folder: str | Path) -> PercentileSlices:
-    """Load Percentile slices from engine sidecars when fresh, else rebuild from xlsx."""
-    folder = Path(folder)
-    xlsx = dp_logics_xlsx_path(folder, "Percentile")
-    ad = folder / PERCENTILE_AD_PARQUET
-    jk = folder / PERCENTILE_JK_PARQUET
-    or_path = folder / PERCENTILE_OR_PARQUET
-    if xlsx.exists() and all(sidecar_exists_and_fresh(p, xlsx) for p in (ad, jk, or_path)):
+    """Load Percentile slices from Google Drive, rebuild if missing."""
+    folder_id = get_dp_logics_folder_id()
+    try:
         return PercentileSlices(
-            percentile=pd.read_parquet(ad),
-            override_hub=pd.read_parquet(jk),
-            override_hub_sku_day=pd.read_parquet(or_path),
+            percentile=download_df_from_drive(PERCENTILE_AD_PARQUET, folder_id),
+            override_hub=download_df_from_drive(PERCENTILE_JK_PARQUET, folder_id),
+            override_hub_sku_day=download_df_from_drive(PERCENTILE_OR_PARQUET, folder_id),
         )
-    if xlsx.exists():
-        full = pd.read_excel(xlsx)
-    else:
-        full = read_dp_logics_table(folder, "Percentile")
-    slices = percentile_slices_from_frame(full)
-    write_percentile_engine_sidecars(folder, full)
-    return slices
+    except FileNotFoundError:
+        folder = Path(folder)
+        xlsx = dp_logics_xlsx_path(folder, "Percentile")
+        if xlsx.exists():
+            full = pd.read_excel(xlsx)
+        else:
+            full = read_dp_logics_table(folder, "Percentile")
+        slices = percentile_slices_from_frame(full)
+        write_percentile_engine_sidecars(folder, full)
+        return slices
 
 
 def avl_flag_subcat_cat_df(avl_flag_full: pd.DataFrame) -> pd.DataFrame:

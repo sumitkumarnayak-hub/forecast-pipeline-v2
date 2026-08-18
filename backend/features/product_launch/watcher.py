@@ -270,7 +270,7 @@ def _poll_once() -> None:
                 import pandas as pd
                 from core.utils.dataframe import clean_sheet_df
 
-                ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                ff_df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
 
         if ff_df is None or ff_df.empty:
             logger.debug("[FFWatcher] FF Input sheet is empty or unreadable — skipping diff")

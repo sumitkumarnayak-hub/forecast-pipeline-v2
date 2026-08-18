@@ -271,7 +271,7 @@ def sync_inv_buffer(current_user: dict = Depends(require_write)):
             data = ws.get_all_values()
             if not data:
                 continue
-            df = pd.DataFrame(data[1:], columns=data[0])
+            df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
             df = clean_sheet_df(df)
             out_path = out_dir / f"{ws.title}.xlsx"
             with pd.ExcelWriter(str(out_path), engine="openpyxl") as writer:

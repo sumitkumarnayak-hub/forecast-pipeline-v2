@@ -121,7 +121,7 @@ _ui_step("Loading Hub level Suggestion and P-H Master")
 _dp_logics_ss = client.open_by_key(_DP_LOGICS_KEY)
 Hub_level_Suggestion = _dp_logics_ss.worksheet("Hub level Suggestion")
 data = Hub_level_Suggestion.get("A:F")
-Hub_suggestion = pd.DataFrame(data[1:], columns=data[0])
+Hub_suggestion = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))
 Hub_suggestion.columns = [c.strip() for c in Hub_suggestion.columns]
 print(f"[Hub Suggestion] {len(Hub_suggestion):,} rows loaded")
 print(Hub_suggestion.describe(include="all"))
@@ -133,7 +133,7 @@ if not os.path.exists(_MASTERS_XLSX):
         f"Master file not found: {_MASTERS_XLSX}. "
         "Sync Masters first from the Master Data page."
     )
-ph_master_raw = _excel_tab_to_df(_MASTERS_XLSX, "P-H Master", usecols="A:AX")
+ph_master_raw = _excel_tab_to_df(_MASTERS_XLSX, "P-H Master")
 print(f"[P-H Master] {len(ph_master_raw):,} rows loaded from {_MASTERS_XLSX}")
 
 # Standardise column names to match downstream code (which was written for P-L Master)
@@ -420,7 +420,7 @@ final_df.describe(include='all')
 # data = New_Hub_Launch.get("A:F")  # Fetch only columns A to L
 
 # # Convert to DataFrame
-# Hub_Launch = pd.DataFrame(data[1:], columns=data[0])  # First row as header
+# Hub_Launch = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # First row as header
 # # Display DataFrame
 # Hub_Launch.describe(include='all')
 
@@ -519,7 +519,7 @@ final_df.to_csv("Hub_level_plan.csv",index=False)
 # data = worksheet.get("A:G")  # Fetch only columns A to L
 
 # # Convert to DataFrame
-# festive_factor = pd.DataFrame(data[1:], columns=data[0])  # First row as header
+# festive_factor = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # First row as header
 # print(festive_factor[festive_factor.duplicated(subset=['city_name', 'Cut class', 'date'])])
 
 # # Display DataFrame
@@ -560,7 +560,7 @@ final_df.to_csv("Hub_level_plan.csv",index=False)
 # data = worksheet.get("A:I")  # Fetch only columns A to L
 
 # # Convert to DataFrame
-# festive_factor_hub = pd.DataFrame(data[1:], columns=data[0])  # First row as header
+# festive_factor_hub = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # First row as header
 # print(festive_factor[festive_factor.duplicated(subset=['city_name', 'Cut class', 'date'])])
 
 # # Display DataFrame
@@ -662,7 +662,7 @@ print(hub_festive_factor[hub_festive_factor.duplicated(subset=['hub_name', 'Cut 
 # data = worksheet.get("A:H")  # Fetch only columns A to L
 
 # # Convert to DataFrame
-# hub_festive_factor = pd.DataFrame(data[1:], columns=data[0])  # First row as header
+# hub_festive_factor = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # First row as header
 # print(hub_festive_factor[hub_festive_factor.duplicated(subset=['hub_name', 'Cut class', 'date'])])
 
 # # Display DataFrame
@@ -1125,7 +1125,7 @@ Final_sale["base_plan"].sum()
 # data = worksheet.get("A:I")  # Fetch only columns A to L
 
 # # Convert to DataFrame
-# Hub_Sku_plan_override = pd.DataFrame(data[1:], columns=data[0])  # First row as header
+# Hub_Sku_plan_override = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # First row as header
 
 # # Display DataFrame
 # Hub_Sku_plan_override.describe()
@@ -1292,7 +1292,7 @@ if 'is_active_ph' in Final_sale.columns:
     Final_sale.loc[Final_sale['is_active_ph'] != 1, ['sale_plan', 'base_plan']] = 0
 
 # Map sub category from P Master (Excel) — source of truth by Product id (before revenue / gr2 / plan.csv)
-_pm_sub = _excel_tab_to_df(_MASTERS_XLSX, "P Master", usecols="A:K")
+_pm_sub = _excel_tab_to_df(_MASTERS_XLSX, "P Master")
 _pm_sub.columns = [str(c).strip() for c in _pm_sub.columns]
 _pm_id = next((c for c in _pm_sub.columns if c.strip().lower() in ("product id", "product_id")), None)
 _pm_sc = next((c for c in _pm_sub.columns if "sub" in c.lower() and "cat" in c.lower()), None)
@@ -1937,7 +1937,7 @@ final_dataframe.describe(include='all')
 
 # %% Cell 160
 # Hub Mapping from synced local Product_Masters.xlsx
-Hub_Mapping = _excel_tab_to_df(_MASTERS_XLSX, "Hub Mapping", usecols="A:F")
+Hub_Mapping = _excel_tab_to_df(_MASTERS_XLSX, "Hub Mapping")
 print(f"[Hub Mapping] {len(Hub_Mapping):,} rows from Product_Masters.xlsx")
 
 # Deduplicate on merge key — multiple rows per hub_name would fan out left rows
@@ -1959,7 +1959,7 @@ final_dataframe['AF-50'] = 'old'
 
 # %% Cell 162
 # P Master from synced local Product_Masters.xlsx
-Product_Master = _excel_tab_to_df(_MASTERS_XLSX, "P Master", usecols="A:K")
+Product_Master = _excel_tab_to_df(_MASTERS_XLSX, "P Master")
 # Standardise Product id column name
 if 'Product id' not in Product_Master.columns:
     _pid = [c for c in Product_Master.columns if c.lower().strip() in ('product id', 'product_id')]
@@ -2115,7 +2115,7 @@ pass  # clipboard removed
 # def read_sheet(sheet_name):
 #     worksheet = spreadsheet.worksheet(sheet_name)
 #     data = worksheet.get_all_values()
-#     # df = pd.DataFrame(data[1:], columns=data[0])  # Convert to DataFrame
+#     # df = pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str))  # Convert to DataFrame
 #     return df
 
 # %% Cell 172

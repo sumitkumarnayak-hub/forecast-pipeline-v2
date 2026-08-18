@@ -1,7 +1,11 @@
 """Baseline router — manual steps 1–5, config, runs, approve/reject."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
+import uuid
+import datetime
+import io
+import pandas as pd
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_current_user, require_write, require_approve, get_db
@@ -449,3 +453,64 @@ def get_baseline_config(current_user: dict = Depends(get_current_user)):
         "ff_masters_xlsx": cfg.FF_MASTERS_XLSX,
         "pipeline_params_sheet_url": cfg.PIPELINE_PARAMS_SHEET_URL,
     }
+
+
+@router.post("/festive-upload")
+async def festive_upload(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_write),
+):
+    from features.baseline.drive_uploader import upload_parquet_to_drive_bg, UPLOAD_PROGRESS
+
+    task_id = str(uuid.uuid4())
+    UPLOAD_PROGRESS[task_id] = {"progress": 0, "status": "queued", "error": None}
+
+    try:
+        content = await file.read()
+        
+        # Determine file type
+        filename_lower = file.filename.lower()
+        if filename_lower.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(content))
+        elif filename_lower.endswith((".xls", ".xlsx")):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(status_code=400, detail="Only CSV and Excel files are supported")
+
+        # Convert object columns to string to avoid pyarrow mixed-type inference crashes
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else x)
+
+        # Convert to parquet in memory
+        parquet_io = io.BytesIO()
+        # Convert column names to strings to avoid parquet schema issues
+        df.columns = df.columns.astype(str)
+        df.to_parquet(parquet_io, index=False)
+        parquet_bytes = parquet_io.getvalue()
+
+        # Generate target filename
+        date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_filename = f"festive_file_{date_str}.parquet"
+
+        # Dispatch background task
+        background_tasks.add_task(upload_parquet_to_drive_bg, task_id, parquet_bytes, target_filename)
+
+        return {"task_id": task_id, "detail": "Upload queued"}
+
+    except Exception as exc:
+        UPLOAD_PROGRESS[task_id] = {"progress": 0, "status": "error", "error": str(exc)}
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/festive-upload/status/{task_id}")
+def festive_upload_status(task_id: str, current_user: dict = Depends(get_current_user)):
+    from features.baseline.drive_uploader import UPLOAD_PROGRESS
+    
+    status_info = UPLOAD_PROGRESS.get(task_id)
+    if not status_info:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return status_info
+

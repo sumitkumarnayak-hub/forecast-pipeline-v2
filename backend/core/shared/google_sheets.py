@@ -85,7 +85,9 @@ class GoogleSheetsManager:
             data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return pd.DataFrame()
-        return pd.DataFrame(data[1:], columns=data[0])
+        df_raw = pd.DataFrame(data)
+        headers = df_raw.iloc[0].fillna("").astype(str)
+        return pd.DataFrame(df_raw.values[1:], columns=headers)
 
     def read_worksheet_uncached(
         self, sheet_category, worksheet_key, range_notation="", *, use_cache: bool = True
@@ -143,7 +145,7 @@ class GoogleSheetsManager:
 
     @staticmethod
     def _persist_dp_logics_table(df: pd.DataFrame, save_path: str) -> None:
-        df.to_excel(save_path, index=False)
+        # Removed df.to_excel to enforce stateless Google Drive architecture
         try:
             write_dp_logics_parquet_sidecar(df, save_path)
         except Exception:
@@ -202,35 +204,8 @@ class GoogleSheetsManager:
         worksheet_names: list[str],
         max_age_hours: float,
     ) -> dict[str, dict] | None:
-        """Return sidecar refresh result if all local xlsx files are younger than max_age_hours."""
-        import time
-
-        now = time.time()
-        max_age_sec = max_age_hours * 3600
-        results: dict[str, dict] = {}
-        for ws_name in worksheet_names:
-            save_path = os.path.join(output_folder, f"{ws_name}.xlsx")
-            if not os.path.isfile(save_path):
-                return None
-            age = now - os.path.getmtime(save_path)
-            if age > max_age_sec:
-                return None
-            try:
-                df = pd.read_excel(save_path)
-                if df.empty:
-                    return None
-                try:
-                    write_dp_logics_parquet_sidecar(df, save_path)
-                except Exception:
-                    pass
-                results[ws_name] = {
-                    "status": "local",
-                    "rows": len(df),
-                    "source": "local_fresh",
-                }
-            except Exception:
-                return None
-        return results
+        """Disabled for stateless architecture: always return None."""
+        return None
 
     def _sync_dp_logics_parallel(
         self,
@@ -269,7 +244,9 @@ class GoogleSheetsManager:
                 continue
             
             if ws_name == "Adhoc_adjustment":
-                df_raw = pd.DataFrame(data[1:], columns=data[0])
+                df_raw_padded = pd.DataFrame(data)
+                headers = df_raw_padded.iloc[0].fillna("").astype(str)
+                df_raw = pd.DataFrame(df_raw_padded.values[1:], columns=headers)
                 df_ad, df_hk = split_adhoc_adjustment(df_raw)
                 if df_ad.empty:
                     missing.append(ws_name)
@@ -288,7 +265,9 @@ class GoogleSheetsManager:
                     "source": "google_sheets_batch",
                 }
             else:
-                df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                df_raw_padded = pd.DataFrame(data)
+                headers = df_raw_padded.iloc[0].fillna("").astype(str)
+                df = clean_sheet_df(pd.DataFrame(df_raw_padded.values[1:], columns=headers))
                 if df.empty:
                     missing.append(ws_name)
                     continue
@@ -664,7 +643,9 @@ class GoogleSheetsManager:
             data = raw.get(name) or []
             if not data or len(data) < 2:
                 return pd.DataFrame()
-            return clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+            df_raw = pd.DataFrame(data)
+            headers = df_raw.iloc[0].fillna("").astype(str)
+            return clean_sheet_df(pd.DataFrame(df_raw.values[1:], columns=headers))
 
         return (
             _to_df("P Master"),

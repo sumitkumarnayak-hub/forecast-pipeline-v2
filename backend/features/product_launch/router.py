@@ -446,7 +446,7 @@ def npl_ff_input_data(
                 import pandas as pd
                 from core.utils.dataframe import clean_sheet_df
 
-                ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                ff_df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
 
         rows = []
         headers = []
@@ -800,7 +800,7 @@ def npl_append_ff_input_row(
             if len(data) >= 2:
                 import pandas as pd
                 from core.utils.dataframe import clean_sheet_df
-                ff_df = clean_sheet_df(pd.DataFrame(data[1:], columns=data[0]))
+                ff_df = clean_sheet_df(pd.DataFrame(pd.DataFrame(data).values[1:], columns=pd.DataFrame(data).iloc[0].fillna("").astype(str)))
 
         # Build the row values aligned to sheet column order
         headers = list(ff_df.columns) if ff_df is not None and not ff_df.empty else list(validated_row.keys())

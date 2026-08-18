@@ -57,7 +57,7 @@ def drop_completely_blank_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return df.loc[~blank_mask].reset_index(drop=True), removed
 
 
-def clean_sheet_df(df: pd.DataFrame, *, drop_blank_rows: bool = True) -> pd.DataFrame:
+def clean_sheet_df(df: pd.DataFrame, *, drop_blank_rows: bool = False) -> pd.DataFrame:
     """
     Clean a DataFrame loaded from Google Sheets:
     - Reset index so Polars conversion is safe
