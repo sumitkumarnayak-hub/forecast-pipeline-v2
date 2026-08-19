@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from core.database.engine import Database, get_shared_database
-from core.shared.helpers import sanitize_for_json
+from core.utils.dataframe import sanitize_for_json
 from features.auth.dependencies import get_current_user, require_write
 
 router = APIRouter()
