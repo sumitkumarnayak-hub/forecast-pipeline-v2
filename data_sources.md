@@ -103,8 +103,7 @@ Relational state is mapped inside [`c:/Users/sumitkumar.nayak/Desktop/forecast-p
 - **`auth_sessions`**: Active authentication sessions audit trail logs.
 - **`baseline_runs`**: Historical baseline execution details logs.
 - **`final_plan_runs`**: logs of adhoc inputs, festive configurations.
-- **`pipeline_runs`**: Pipeline Flow audit execution states logs.
-- **`pipeline_step_logs`**: Pipeline Flow audit step execution logs.
+- **`pipeline_execution_logs`**: External & manual pipeline execution logs (GitHub Actions, Airflow, CLI, Portal UI).
 - **`email_notification_recipients`**: Recipient lists for alerts.
 - **`email_log`**: Log of sent email outcomes.
 - **`sync_run`**: Sync process sessions state.

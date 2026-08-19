@@ -10,7 +10,7 @@ pinned: false
 
 # Demand Planning & Forecasting workbench (Monorepo - Scoped Deployment)
 
-A production-grade web application scoped specifically for **New Product Launch**, **Hub Launch**, and **Settings** management. Other pipeline forecasting modules (Dashboard, Baseline, Final Plan, Validation, Analytics) are temporarily disabled and display a "Coming Soon" placeholder UI in this release.
+A production-grade Demand Planning & Forecasting web application integrating weekly baseline calculations, consensus final plan distribution, New Product Launch wizards, Hub Launch cloning, automated 3-step pipeline scheduling, and executive analytics.
 
 Built using a **Next.js (React)** frontend with vanilla CSS/Tailwind styling and a modular **FastAPI (Python)** backend, this workbench serves as a high-performance control panel integrating database tables and cached Google Sheets worksheets.
 
@@ -26,7 +26,8 @@ forecast-pipeline-v2/
 │   │   ├── config.py      # App configurations, worksheets mappings, path resolver
 │   │   ├── dependencies.py# JWT auth decoders & role check dependencies
 │   │   └── middleware.py  # Request id tracing & HttpOnly cookies parser
-│   ├── core/              # Platform Infrastructure (Domain-Agnostic Modules)
+│   ├── pipeline/          # 3-step forecasting pipeline (raw_data_6w, baseline_parquet, ff_hub)
+│   ├── core/              # Platform Infrastructure (Database, Security, Storage, Shared)
 │   │   ├── database/      # SQL base engines & models.py (SQLAlchemy schema)
 │   │   ├── security/      # JWT handlers & role permission maps
 │   │   ├── storage/       # Cloud sync factory (Local, Google Drive, Supabase Bucket)
@@ -35,6 +36,7 @@ forecast-pipeline-v2/
 │   │   ├── auth/          # Login authentication handlers
 │   │   ├── product_launch/# Product launch wizard, sheet_reads cache, watcher service
 │   │   ├── baseline/      # Manual raw data pull, configs, approval statuses
+│   │   ├── pipeline/      # Pipeline execution history, log console, & trigger endpoints
 │   │   ├── dashboard/     # Week analytics & KPI dashboard engine
 │   │   ├── final_plan/    # Festive/adhoc synchronizers & final planning exports
 │   │   ├── validation/    # Pandera validation schemes on files
@@ -44,9 +46,12 @@ forecast-pipeline-v2/
 │   ├── scripts/           # DevOps and verification runners
 │   └── run_backend.py     # Main Uvicorn development server script
 │
+├── .github/
+│   └── workflows/         # GitHub Actions automated cron (.github/workflows/forecast_pipeline.yml)
+│
 └── frontend/              # Next.js Frontend Client (React)
     ├── src/
-    │   ├── app/           # Next.js App Router (dashboard, baseline, new-product-launch...)
+    │   ├── app/           # Next.js App Router (dashboard, baseline, new-product-launch, pipeline-runs...)
     │   ├── components/    # Page-specific panels, NPL tables, forms
     │   ├── hooks/         # Client context state hooks (useAuth, useToast)
     │   └── lib/           # Axios networking layer & client calls

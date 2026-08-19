@@ -261,6 +261,7 @@ const getPageName = (path: string): string => {
   if (path.startsWith("/about")) return "About & Guide";
   if (path.startsWith("/validation")) return "Validation";
   if (path.startsWith("/analytics")) return "Analytics";
+  if (path.startsWith("/pipeline-runs")) return "Pipeline Runs";
   return "Requested Module";
 };
 
@@ -305,6 +306,7 @@ export default function AppShell({ children, title, subtitle, actions }: Props) 
     pathname.startsWith("/base-sheets") ||
     pathname.startsWith("/master-data") ||
     pathname.startsWith("/settings") ||
+    pathname.startsWith("/pipeline-runs") ||
     pathname.startsWith("/final-plan");
 
 

@@ -1054,6 +1054,103 @@ class Database:
                 params={"limit": limit},
             )
 
+    # ── Pipeline execution logs ────────────────────────────────────────────────
+    def save_pipeline_execution_log(
+        self,
+        *,
+        run_id: str,
+        triggered_by: str = "Manual",
+        status: str = "running",
+        session_id: str | None = None,
+    ) -> None:
+        resolved = self._resolve_session_id(session_id)
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO pipeline_execution_logs
+                        (run_id, triggered_by, status, started_at, step1_status, step2_status, step3_status, session_id)
+                    VALUES
+                        (:run_id, :triggered_by, :status, :started_at, 'pending', 'pending', 'pending', :session_id)
+                """),
+                {
+                    "run_id": run_id,
+                    "triggered_by": triggered_by,
+                    "status": status,
+                    "started_at": datetime.now(),
+                    "session_id": resolved,
+                },
+            )
+
+    def update_pipeline_execution_log(self, run_id: str, **fields) -> None:
+        allowed = {
+            "status",
+            "completed_at",
+            "step1_status",
+            "step2_status",
+            "step3_status",
+            "console_log",
+        }
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return
+        set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+        updates["run_id"] = run_id
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(f"UPDATE pipeline_execution_logs SET {set_clause} WHERE run_id = :run_id"),
+                updates,
+            )
+
+    def get_pipeline_execution_logs(self, limit: int = 50) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT run_id, triggered_by, status, started_at, completed_at,
+                           step1_status, step2_status, step3_status
+                    FROM pipeline_execution_logs
+                    ORDER BY started_at DESC
+                    LIMIT :limit
+                """),
+                {"limit": max(1, int(limit))},
+            ).fetchall()
+        return [
+            {
+                "run_id": r[0],
+                "triggered_by": r[1],
+                "status": r[2],
+                "started_at": r[3],
+                "completed_at": r[4],
+                "step1_status": r[5],
+                "step2_status": r[6],
+                "step3_status": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_pipeline_execution_log_detail(self, run_id: str) -> dict | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT run_id, triggered_by, status, started_at, completed_at,
+                           step1_status, step2_status, step3_status, console_log
+                    FROM pipeline_execution_logs
+                    WHERE run_id = :run_id
+                """),
+                {"run_id": run_id},
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row[0],
+            "triggered_by": row[1],
+            "status": row[2],
+            "started_at": row[3],
+            "completed_at": row[4],
+            "step1_status": row[5],
+            "step2_status": row[6],
+            "step3_status": row[7],
+            "console_log": row[8] or "",
+        }
 
     def log_master_sync(self, sync_data):
         """Log master data sync."""
@@ -2233,6 +2330,21 @@ _SQLITE_SCHEMA = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS pipeline_execution_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT UNIQUE NOT NULL,
+        triggered_by TEXT DEFAULT 'Manual',
+        status TEXT DEFAULT 'running',
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
+        step1_status TEXT DEFAULT 'pending',
+        step2_status TEXT DEFAULT 'pending',
+        step3_status TEXT DEFAULT 'pending',
+        console_log TEXT,
+        session_id TEXT
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS master_sync_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sync_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2415,6 +2527,21 @@ _POSTGRES_SCHEMA = [
         session_id TEXT,
         FOREIGN KEY (user_id) REFERENCES users (id),
         FOREIGN KEY (baseline_run_id) REFERENCES baseline_runs (run_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_execution_logs (
+        id BIGSERIAL PRIMARY KEY,
+        run_id TEXT UNIQUE NOT NULL,
+        triggered_by TEXT DEFAULT 'Manual',
+        status TEXT DEFAULT 'running',
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        step1_status TEXT DEFAULT 'pending',
+        step2_status TEXT DEFAULT 'pending',
+        step3_status TEXT DEFAULT 'pending',
+        console_log TEXT,
+        session_id TEXT
     )
     """,
     """

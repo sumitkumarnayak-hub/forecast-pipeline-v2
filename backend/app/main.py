@@ -66,6 +66,7 @@ from features.settings import router as settings
 from features.validation import router as validation
 from features.shared import demo_filter_router as demo_filter
 from features.base_sheets import router as base_sheets
+from features.pipeline import router as pipeline_router
 
 
 
@@ -254,6 +255,7 @@ app.include_router(settings.router,           prefix="/api/settings",           
 app.include_router(validation.router,         prefix="/api/validation",         tags=["Validation"])
 app.include_router(demo_filter.router,        prefix="/api/demo-filter",        tags=["Demo Filter"])
 app.include_router(base_sheets.router,        prefix="/api/base-sheets",        tags=["Base Sheets"])
+app.include_router(pipeline_router.router,    prefix="/api/pipeline",           tags=["Pipeline Execution"])
 
 
 @app.get("/api/health")

@@ -1,0 +1,39 @@
+name: Forecast Pipeline Automation (GitHub Actions / Airflow / Scheduled)
+
+on:
+  schedule:
+    # Runs automatically every day at 02:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allows manual one-click trigger from GitHub Actions tab
+    inputs:
+      triggered_by:
+        description: 'Trigger Source / Reason'
+        required: false
+        default: 'GitHub Actions Manual Dispatch'
+
+jobs:
+  run-pipeline:
+    name: Run 3-Step Forecasting Pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+
+      - name: Execute Pipeline (raw_data_6w -> baseline_parquet -> ff_hub_automation)
+        env:
+          PIPELINE_TRIGGERED_BY: ${{ github.event.inputs.triggered_by || 'GitHub Actions Cron' }}
+          PYTHONPATH: ${{ github.workspace }}/backend
+        run: |
+          python backend/pipeline/pipeline.py

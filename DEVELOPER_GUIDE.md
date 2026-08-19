@@ -61,12 +61,15 @@ To build a premium visual experience, the frontend client matches modern UI/UX d
 2. **Execute REST API Integration workbench**:
    Run the endpoints test workbench:
    ```bash
-   python scripts/test_api_endpoints.py
+3. **Execute 3-Step Forecasting Pipeline Runner**:
+   Test the 3-step pipeline runner (`raw_data_6w.py` → `baseline_parquet.py` → `ff_hub_automation.py`) with automatic DB logging:
+   ```bash
+   python backend/pipeline/pipeline.py
    ```
-   This script spins up a standard FastAPI `TestClient`, mocks remote Google Sheets connections, and verifies request/response payloads for:
-   - **/api/health** & **/api/validation/logics** (Auth verification)
-   - **/api/new-product-launch/wizard/context** (Product launch context maps)
-   - **/api/master-data/new-hub-sync/confirm** (Hub launch sync triggers)
+   Or trigger execution via API REST endpoint:
+   ```bash
+   curl -X POST http://localhost:8000/api/pipeline/run?triggered_by=ManualTest
+   ```
 
 ---
 

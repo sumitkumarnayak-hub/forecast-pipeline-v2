@@ -19,6 +19,7 @@ import {
   // ShieldCheck,
   BookOpen,
   FileSpreadsheet,
+  Activity,
 } from "lucide-react";
 
 export interface NavLink {
@@ -129,6 +130,14 @@ export const SIDEBAR_NAV: NavEntry[] = [
     icon: ClipboardList,
     roles: ["admin", "planner"],
     lockUntilBaselineApproved: true,
+  },
+  {
+    type: "link",
+    id: "pipeline-runs",
+    label: "Pipeline Runs",
+    href: "/pipeline-runs",
+    icon: Activity,
+    roles: ["admin"],
   },
   // {
   //   type: "link",

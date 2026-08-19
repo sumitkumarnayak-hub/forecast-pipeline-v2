@@ -17,8 +17,7 @@ The application is built on a split-monorepo design, combining a stateless Next.
 ### Frontend Directory Layout
 The frontend application is built with Next.js (App Router), utilizing Tailwind CSS and TypeScript:
 - **`src/app/`**: The App Router pages and API routes.
-  - Features include: `dashboard`, `baseline` (steps 1–5), `master-data`, `new-product-launch`, `hub-launch`, `final-plan`, `validation`, `settings`, `analytics`, and `admin`.
-  - Also contains global layouts (`layout.tsx`), global CSS (`globals.css`), and context providers (`providers.tsx`).
+  - Features include: `dashboard`, `baseline` (steps 1–5), `master-data`, `new-product-launch`, `hub-launch`, `final-plan`, `pipeline-runs` (execution history & log console), `validation`, `settings`, `analytics`, and `admin`.
 - **`src/components/`**: Modular UI components grouped by feature area:
   - `ui/`: Shared base UI components (buttons, dialogs, cards, etc.).
   - `layout/`: App Shell, sidebar, and navbar components.
@@ -39,6 +38,11 @@ The backend application has been modularized by feature domain:
   - `config.py` is the centralized environment manager. It extracts configurations, loads `.env` profiles, and maps spreadsheet IDs and sheet keys.
   - `dependencies.py` declares the authentication dependencies and database session contexts injected into routes.
   - `logging.py`, `middleware.py`, `production.py`, `rate_limit.py` handle cross-cutting backend concerns.
+- **`pipeline/`**: Dedicated pipeline execution package:
+  - `pipeline.py`: Orchestrates the 3-step pipeline (`raw_data_6w.py` → `baseline_parquet.py` → `ff_hub_automation.py`) with stdout/stderr capture and DB logging.
+  - `raw_data_6w.py`: Step 1 6-week raw RDS data extraction.
+  - `baseline_parquet.py`: Step 2 baseline generation and Parquet sidecar creation.
+  - `ff_hub_automation.py`: Step 3 final plan distribution and hub automation logic.
 - **`core/`**: Platform infrastructure modules shared by multiple features:
   - `database/`: Declares SQLAlchemy models (`models.py`) and connection engines (`engine.py`).
   - `security/`: Handles JWT token encoding/decoding (`tokens.py`), role/permission definitions (`permissions.py`), and authentication cookie handlers (`auth_cookies.py`, `auth.py`).
@@ -47,13 +51,14 @@ The backend application has been modularized by feature domain:
   - `queue/`: Database-backed task queue drivers (`driver.py`) and workers (`worker.py`) for processing deferred jobs in background threads.
   - `utils/`: Dataframe parsing helpers (`dataframe.py`) and session stores (`session_store.py`).
 - **`features/`**: Modular packages representing self-contained business pages/features:
-  - Each package is a standalone domain folder containing `router.py` (controllers), and sub-modules handling its specialized business logic (e.g., `product_launch/core.py`, etc.).
+  - Each package is a standalone domain folder containing `router.py` (controllers), and sub-modules handling its specialized business logic.
   - Features include:
     - `auth`: Credentials verification and session token management.
     - `dashboard`: Main business overview metrics and aggregations.
     - `master_data`: Google Sheets master configurations, metadata, and tables sync.
     - `baseline`: Load raw data, configure parameters, generate baseline, review baseline, and approve baseline actions.
     - `final_plan`: Consensus and final submission processing.
+    - `pipeline`: Handles `/api/pipeline` endpoints for run history (`get_pipeline_execution_logs`), console log detail, and manual/webhook execution triggers.
     - `product_launch`: Wizard for submitting new product launch configurations, tracking master mappings, and watching for changes.
     - `hub_launch`: Handles new hub mapping cloning and syncing.
     - `insights`: Discovers and compiles forecasting anomalies or product gaps.

@@ -65,9 +65,22 @@ class FinalPlanRun(Base):
     validation_status = Column(String)
     approved_by = Column(Integer)
     approved_at = Column(DateTime(timezone=True))
+
+
+class PipelineExecutionLog(Base):
+    __tablename__ = "pipeline_execution_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String, unique=True, nullable=False)
+    triggered_by = Column(String, default="Manual")
+    status = Column(String, default="running")
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
+    step1_status = Column(String, default="pending")
+    step2_status = Column(String, default="pending")
+    step3_status = Column(String, default="pending")
+    console_log = Column(String)
     session_id = Column(String)
-
-
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"

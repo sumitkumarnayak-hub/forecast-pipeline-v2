@@ -53,12 +53,18 @@ Main audit tables logging historical executions of baseline forecasting engines.
 - `approved_by` (Integer, references users.id)
 - `approved_at` (DateTime)
 
-#### 5. `pipeline_runs`, `pipeline_step_logs`, `pipeline_run_log_lines` - [UNUSED / RESERVED]
-Main tables tracking the Auto-Pilot step transitions and stdout stream logs. (These structures are not active in this scoped release).
-- `pipeline_runs`: Holds the overarching execution state of the 6-step flow.
-  - Fields: `id`, `run_id` (unique), `user_id`, `status`, `current_step`, `started_at`, `completed_at`, `summary_stats`, `session_id`
-- `pipeline_step_logs`: Step-specific metrics (e.g. `master_sync` or `run_engine` status, error_detail, logged_at).
-- `pipeline_run_log_lines`: Real-time line-by-line log output generated during a run.
+#### 5. `pipeline_execution_logs`
+Main table tracking external and manual executions of the 3-step forecasting pipeline (`raw_data_6w.py` → `baseline_parquet.py` → `ff_hub_automation.py`) triggered by GitHub Actions, Apache Airflow, CLI, or Portal UI.
+- `id` (Integer / BigInt, PK)
+- `run_id` (String, unique) — Unique run identifier (e.g. `PIPE_20260818_183500_abc123`)
+- `triggered_by` (String) — Execution source (`GitHub Actions`, `Airflow`, `Portal UI`, `Manual CLI`)
+- `status` (String) — Overall run status (`running`, `completed`, `failed`)
+- `started_at` / `completed_at` (DateTime)
+- `step1_status` (String) — Step 1 (`raw_data_6w.py`) status (`pending`, `running`, `completed`, `failed`)
+- `step2_status` (String) — Step 2 (`baseline_parquet.py`) status (`pending`, `running`, `completed`, `failed`)
+- `step3_status` (String) — Step 3 (`ff_hub_automation.py`) status (`pending`, `running`, `completed`, `failed`)
+- `console_log` (Text) — Full captured stdout/stderr log stream
+- `session_id` (String) — Linked auth session identifier
 
 #### 6. `npl_submissions`
 Audit log of New Product Launch wizard applications.
