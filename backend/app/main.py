@@ -27,7 +27,7 @@ from core.shared.google_credentials import get_google_credentials_path
 
 get_google_credentials_path()
 
-from app.logging import setup_logging
+from app.logger import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)

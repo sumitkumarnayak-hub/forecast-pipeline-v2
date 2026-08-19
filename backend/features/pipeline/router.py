@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from core.database.engine import Database, get_shared_database
 from core.utils.dataframe import sanitize_for_json
-from features.auth.dependencies import get_current_user, require_write
+from app.dependencies import get_current_user, require_write
 
 router = APIRouter()
 
@@ -45,7 +45,8 @@ def trigger_pipeline_run(
     current_user: dict = Depends(require_write),
 ):
     """Trigger the 3-step pipeline execution (raw_data_6w -> baseline_parquet -> ff_hub_automation)."""
-    from pipeline.pipeline import run_pipeline
+
+    from pipeline.pipeline import run_pipeline  # type: ignore
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = f"PIPE_{timestamp}_{uuid.uuid4().hex[:6]}"
