@@ -154,6 +154,13 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
     except Exception as e:
         print(f"[Drive Uploader] ERROR uploading {file_name}: {e}")
 
+
+def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
+    t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
+    t.daemon = False
+    t.start()
+    print(f"[Drive Uploader] Started background upload for {file_name}...")
+
 def upload_sheets_to_drive_as_excel(sheets: dict, file_name: str, folder_id: str):
     try:
         scopes = ['https://www.googleapis.com/auth/drive']
@@ -226,7 +233,7 @@ Hub_suggestion['Cut class'] = Hub_suggestion['sku class prod'].map(sku_to_cutcla
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as 'config_paths.FF_TEST_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Hub_suggestion.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Hub_suggestion, "Hub_suggestion.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Hub_suggestion, "Hub_suggestion.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 Hub_suggestion.describe(include='all')
 
 # [PRODUCTION COMMENT - INPUT MIGRATION]
@@ -308,7 +315,7 @@ else:
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as Excel file 'FF_FILTERED_HUB_SUGGESTION_XLSX_PATH'
 # Current Output: Uploaded directly to Google Drive as 'filtered_hub_level_suggestion.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(filtered_hub_level_suggestion.drop(columns=["Plan Flag", "active"]), "filtered_hub_level_suggestion.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(filtered_hub_level_suggestion.drop(columns=["Plan Flag", "active"]), "filtered_hub_level_suggestion.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 
 # Step 1: Generate a DataFrame with 4 weeks of dates
 start_date = datetime.today() - timedelta(days=datetime.today().weekday())  # Last Monday
@@ -401,7 +408,7 @@ final_df.describe(include='all')
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_HUB_LEVEL_PLAN_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'final_df.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(final_df, "final_df.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(final_df, "final_df.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # # Select the specific sheet/tab by its name
 # worksheet = spreadsheet.worksheet("Festive Factor")
 
@@ -645,7 +652,7 @@ print(FF_corrected_plan["final_plan"].sum())
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_CORRECTED_PLAN_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'FF_corrected_plan.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(FF_corrected_plan, "FF_corrected_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(FF_corrected_plan, "FF_corrected_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # Filter Master_df for only 'online' channel
 Master_filtered = Master_df[
     (Master_df['Channel'] == 'Online') & 
@@ -665,7 +672,7 @@ Final_sale = pd.merge(
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_TEST_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_test.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_test.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_test.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 
 # Display summary statistics
 Final_sale.describe(include="all")
@@ -757,12 +764,14 @@ Product_price.describe()
 price_data = Product_price.set_index(['city_name', 'pr_id'])['Updated Price'].to_dict()
 
 # Map price data to Final_sale using city_name and Product id
-Final_sale['Updated Price'] = Final_sale.apply(lambda row: price_data.get((row['city_name'], row['Product id'])), axis=1)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# Final_sale['Updated Price'] = Final_sale.apply(lambda row: price_data.get((row['city_name'], row['Product id'])), axis=1)
+Final_sale['Updated Price'] = Final_sale.set_index(['city_name', 'Product id']).index.map(price_data.get)
 Final_sale['Updated Price'] = Final_sale['Updated Price']
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_PRICE_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_price.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_price.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_price.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # Display summary statistics
 Final_sale.describe(include='all')
 
@@ -790,7 +799,7 @@ Final_sale['base_Revenue_plan'] = Final_sale['base_plan'] * Final_sale['Updated 
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_PLAN_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_plan.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # Group by city and date, summing Revenue_plan
 gr = Final_sale.groupby(['Original_city', 'date','day'], as_index=False)[['Revenue_plan', 'base_Revenue_plan']].sum()
 print(gr)
@@ -798,7 +807,7 @@ print(gr)
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_FF_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'gr.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(gr, "gr.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(gr, "gr.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # [PRODUCTION COMMENT - INPUT MIGRATION]
 # Previous Input: Loaded worksheet 'Adhoc Adjustment' (columns H to K) from Google Sheet 'FF_PL_MASTER_SHEET_URL'
 # Current Input: Loaded directly from Google Drive ('Adhoc_adjustment_City_Product_*.parquet') from folder ID DRIVE_FOLDER_ID
@@ -818,7 +827,7 @@ Final_sale = Final_sale.merge(City_adhoc[["date", "Product id", "city_name","%Ch
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_CHECK_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_check.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_check.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_check.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 
 Final_sale["%Change3"] = pd.to_numeric(Final_sale["%Change3"], errors="coerce")
 
@@ -977,7 +986,7 @@ print("Final total sale_plan:", Final_sale["sale_plan"].sum())
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_CHECK_SCALED_ROUNDING_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_scaled_rounding.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_scaled_rounding.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_scaled_rounding.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 print(Final_sale.head())
 # [PRODUCTION COMMENT - INPUT MIGRATION]
 # Previous Input: Loaded worksheet 'Adhoc Adjustment Hub' (columns A to F) from Google Sheet 'FF_PL_MASTER_SHEET_URL'
@@ -1001,7 +1010,7 @@ Final_sale = Final_sale.merge(Hub_adhoc[["date", "Product id", "hub_name","% Cha
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_CHECK_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_check.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_check.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_check.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 
 Final_sale["% Change1"] = pd.to_numeric(Final_sale["% Change1"], errors="coerce")
 #Final_sale["% Change2"] = pd.to_numeric(Final_sale["% Change2"], errors="coerce")
@@ -1051,19 +1060,23 @@ Final_sale['base_Revenue_plan'] = Final_sale['base_plan'] * Final_sale['Updated 
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_PLAN_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_sale_plan.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_sale, "Final_sale_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_sale, "Final_sale_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 # Group by city and date, summing Revenue_plan
 gr2 = Final_sale.groupby(['Original_city', 'date','day'], as_index=False)[['Revenue_plan', 'base_Revenue_plan']].sum()
 gr3 = Final_sale.groupby(['Original_city','sub category', 'date','day'], as_index=False)[['Revenue_plan', 'base_Revenue_plan']].sum()
 print(gr2)
 print(gr3)
-start_date = datetime(2026, 8, 10)
-end_date = datetime(2026, 8, 16)
+# ========================================================================================================================
+# dynamic date
+_today = datetime.now()
+_current_monday = _today - timedelta(days=_today.weekday())
+start_date = _current_monday - timedelta(days=7)
+end_date = _current_monday - timedelta(days=1)
 gr3["date"] = pd.to_datetime(gr3["date"], format="%Y-%m-%d", dayfirst=True)
 filtered_gr3 = gr3[(gr3['date'] >= start_date) & (gr3['date'] <= end_date)]
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Output: Uploaded directly to Google Drive as 'Expected_Actuals_Tracker.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(filtered_gr3, "Expected_Actuals_Tracker.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(filtered_gr3, "Expected_Actuals_Tracker.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 print(filtered_gr3[['Revenue_plan', 'base_Revenue_plan']].sum())
 
 # [PRODUCTION COMMENT - ADDED AS PER USER REQUEST]
@@ -1406,13 +1419,15 @@ No_buffer.describe()
 no_buffer_set = set([tuple(x) for x in No_buffer[['city_name', 'Pr_id']].values])
 
 # Set inv_plan to 0 for matching rows using vectorized approach
-mask = Final_plan[['city_name', 'Product id']].apply(tuple, axis=1).isin(no_buffer_set)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# mask = Final_plan[['city_name', 'Product id']].apply(tuple, axis=1).isin(no_buffer_set)
+mask = Final_plan.set_index(['city_name', 'Product id']).index.isin(no_buffer_set)
 Final_plan.loc[mask, 'Final_Inv_Plan'] = Final_plan['sale_plan']
 Final_plan.loc[(Final_plan['sub category'] == 'Masalas') & (Final_plan['Final_Inv_Plan'] < 3), 'Final_Inv_Plan'] = 3
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_FINAL_FORECAST_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_plan.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(Final_plan, "Final_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(Final_plan, "Final_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 upload_sheets_to_drive_as_excel({"Final_plan": Final_plan}, "Final_plan.xlsx", FF_OUTPUT_EXCEL_FOLDER_ID)
 # Select the specific sheet/tab by its name
 # [PRODUCTION COMMENT - INPUT MIGRATION]
@@ -1500,7 +1515,7 @@ Final_forecast = merged_dataframe[['city_name', 'Attribute', 'Product id', 'sub 
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_FINAL_FORECAST_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'merged_dataframe.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(merged_dataframe, "merged_dataframe.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(merged_dataframe, "merged_dataframe.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 merged_dataframe.describe(include='all')
 # [PRODUCTION COMMENT - INPUT MIGRATION]
 # Previous Input: Loaded worksheet 'Pure Preorder' (columns A to B) from Google Sheet 'Hub_level_planning'
@@ -1517,7 +1532,9 @@ Pure_Preorder.head()
 Pure_Preorder = set([tuple(x) for x in Pure_Preorder[['Attribute', 'Product id']].values])
 
 # Set inv_plan to 0 for matching rows using vectorized approach
-mask = merged_dataframe[['Attribute', 'Product id']].apply(tuple, axis=1).isin(Pure_Preorder)                                                            
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# mask = merged_dataframe[['Attribute', 'Product id']].apply(tuple, axis=1).isin(Pure_Preorder)
+mask = merged_dataframe.set_index(['Attribute', 'Product id']).index.isin(Pure_Preorder)                                                            
 merged_dataframe.loc[mask, 'Final_Inv_Plan'] = merged_dataframe['sale_plan']
 columns_to_keep = [
     'city_name', 'sub category','Product id', 'day', 'Cut class', 'date',
@@ -1677,7 +1694,7 @@ final_dataframe = pd.concat([final_dataframe, cp_df,excl_df], ignore_index=True)
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as CSV file 'FF_FINAL_DATAFRAME_COMBINED_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'final_dataframe_combined.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
-upload_df_to_drive_as_parquet(final_dataframe, "final_dataframe_combined.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(final_dataframe, "final_dataframe_combined.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
 upload_sheets_to_drive_as_excel({"final_dataframe": final_dataframe}, "final_dataframe_combined.xlsx", FF_OUTPUT_EXCEL_FOLDER_ID)
 for name, df in {
     "final_dataframe": final_dataframe,
@@ -1749,10 +1766,14 @@ duplicates_only = duplicate_counts[duplicate_counts['count'] > 1]
 
 print(duplicates_only)
 # Hardcoded start and end dates
-start_date = datetime(2026, 8, 10)
-end_date = datetime(2026, 8, 16)
-start_date_r = datetime(2026, 8, 17)
-end_date_r = datetime(2026, 8, 23)
+# ========================================================================================================================
+# dynamic date
+_today = datetime.now()
+_current_monday = _today - timedelta(days=_today.weekday())
+start_date = _current_monday - timedelta(days=7)
+end_date = _current_monday - timedelta(days=1)
+start_date_r = _current_monday
+end_date_r = _current_monday + timedelta(days=6)
 
 # # Add a new column that concatenates 'hubname', 'product id', and 'date'
 final_dataframe.insert(0, "", final_dataframe["hub_name"].astype(str)  +

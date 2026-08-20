@@ -111,7 +111,7 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
 
 def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
     t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
-    t.daemon = True
+    t.daemon = False
     t.start()
     print(f"[Drive Uploader] Started background upload for {file_name}...")
 
@@ -1411,8 +1411,8 @@ _today  = datetime.date.today().strftime('%Y-%m-%d')
 _rl_file = f"Consistent_Issues_RevLoss_{_today}.parquet"
 _wt_file = f"Consistent_Issues_Wastage_{_today}.parquet"
 
-upload_df_to_drive_as_parquet(rev_loss_result, _rl_file, BASELINE_DRIVE_PARQUET_FOLDER_ID)
-upload_df_to_drive_as_parquet(wastage_result, _wt_file, BASELINE_DRIVE_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(rev_loss_result, _rl_file, BASELINE_DRIVE_PARQUET_FOLDER_ID)
+upload_df_to_drive_as_parquet_async(wastage_result, _wt_file, BASELINE_DRIVE_PARQUET_FOLDER_ID)
 
 # ---- 11. (Logging moved to Consistent Issues Validation tab  see end of script) ----
 
@@ -1848,7 +1848,7 @@ value_cols = [f"avl_corrected_sales_{w}" for w in weeks if f"avl_corrected_sales
 
 
 # %%
-pivot_long["week"] = pivot_long["week_col"].apply(lambda x: x.split("_")[-1])
+pivot_long["week"] = pivot_long["week_col"].str.split("_").str[-1]
 
 # %%
 City_drops = City_drops.rename(columns={"Day": "day"})
@@ -2427,54 +2427,95 @@ Final_Plan["numeric_outlier_count"] = (
 # skip_hubs = ["CCS", "ECS", "HKM", "KLK", "SMG", "SPC"]
 # skip_cities = ["Chennai", "Kolkata"]
 
-def final_plan_logic(row):
-    # Case -1: both NaN -> 0
-    if pd.isna(row["sugg_plan"]) and pd.isna(row["Base_Plan (qty)"]):
-        return 0
-
-    # Case 0: sugg_plan NaN -> base_plan
-    if pd.isna(row["sugg_plan"]):
-        return row["Base_Plan (qty)"]
-
-    # Case 1: base_plan NaN -> 0
-    if pd.isna(row["Base_Plan (qty)"]):
-        return 0
-
-    # Case 2: base_plan 0 -> sugg_plan
-    if row["Base_Plan (qty)"] == 0:
-        return row["sugg_plan"]
-
-    #  Case NEW: exactly one numeric outlier datapoint
-    if row["numeric_outlier_count"] == 1:
-        if row["sugg_plan"] == 0:
-            return row["Base_Plan (qty)"]
-        else:
-            return max(
-                row["sugg_plan"],
-                (row["sugg_plan"] + row["Base_Plan (qty)"]) / 2
-            )
-
-    # Case 3 & 4: VA_exclusive rules
-    # if (row["hub_name"] not in skip_hubs) and (row["city_name"] not in skip_cities):
-
-    #     if row["sub category"] in VA_exclusive_1:
-    #         if row["sugg_plan"] < 5:
-    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
-    #         else:
-    #             return min(row["sugg_plan"], 1.5 * row["Base_Plan (qty)"])
-
-    #     if row["sub category"] in VA_exclusive_2:
-    #         if row["sugg_plan"] < 5:
-    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
-    #         else:
-    #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
-
-    # Default
-    return row["sugg_plan"]
-
-
 # %%
-Final_Plan["Final_Plan"] = Final_Plan.apply(final_plan_logic, axis=1)
+
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# def final_plan_logic(row):
+#     # Case -1: both NaN -> 0
+#     if pd.isna(row["sugg_plan"]) and pd.isna(row["Base_Plan (qty)"]):
+#         return 0
+# 
+#     # Case 0: sugg_plan NaN -> base_plan
+#     if pd.isna(row["sugg_plan"]):
+#         return row["Base_Plan (qty)"]
+# 
+#     # Case 1: base_plan NaN -> 0
+#     if pd.isna(row["Base_Plan (qty)"]):
+#         return 0
+# 
+#     # Case 2: base_plan 0 -> sugg_plan
+#     if row["Base_Plan (qty)"] == 0:
+#         return row["sugg_plan"]
+# 
+#     #  Case NEW: exactly one numeric outlier datapoint
+#     if row["numeric_outlier_count"] == 1:
+#         if row["sugg_plan"] == 0:
+#             return row["Base_Plan (qty)"]
+#         else:
+#             return max(
+#                 row["sugg_plan"],
+#                 (row["sugg_plan"] + row["Base_Plan (qty)"]) / 2
+#             )
+# 
+#     # Case 3 & 4: VA_exclusive rules
+#     # if (row["hub_name"] not in skip_hubs) and (row["city_name"] not in skip_cities):
+# 
+#     #     if row["sub category"] in VA_exclusive_1:
+#     #         if row["sugg_plan"] < 5:
+#     #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+#     #         else:
+#     #             return min(row["sugg_plan"], 1.5 * row["Base_Plan (qty)"])
+# 
+#     #     if row["sub category"] in VA_exclusive_2:
+#     #         if row["sugg_plan"] < 5:
+#     #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+#     #         else:
+#     #             return min(row["sugg_plan"], 2.0 * row["Base_Plan (qty)"])
+# 
+#     # Default
+#     return row["sugg_plan"]
+# 
+# Final_Plan["Final_Plan"] = Final_Plan.apply(final_plan_logic, axis=1)
+# ----------------------------------------
+
+# Vectorized final_plan_logic
+import numpy as np
+sugg_isna = Final_Plan["sugg_plan"].isna()
+base_isna = Final_Plan["Base_Plan (qty)"].isna()
+
+c_both_nan = sugg_isna & base_isna
+c_sugg_nan = sugg_isna & ~base_isna
+c_base_nan = ~sugg_isna & base_isna
+c_base_zero = (Final_Plan["Base_Plan (qty)"] == 0)
+
+c_outlier_1 = (Final_Plan["numeric_outlier_count"] == 1)
+c_outlier_sugg_zero = c_outlier_1 & (Final_Plan["sugg_plan"] == 0)
+c_outlier_sugg_nonzero = c_outlier_1 & (Final_Plan["sugg_plan"] != 0)
+
+max_outlier = np.maximum(
+    Final_Plan["sugg_plan"],
+    (Final_Plan["sugg_plan"] + Final_Plan["Base_Plan (qty)"]) / 2
+)
+
+Final_Plan["Final_Plan"] = np.select(
+    [
+        c_both_nan,
+        c_sugg_nan,
+        c_base_nan,
+        c_base_zero,
+        c_outlier_sugg_zero,
+        c_outlier_sugg_nonzero
+    ],
+    [
+        0,
+        Final_Plan["Base_Plan (qty)"],
+        0,
+        Final_Plan["sugg_plan"],
+        Final_Plan["Base_Plan (qty)"],
+        max_outlier
+    ],
+    default=Final_Plan["sugg_plan"]
+)
 
 # %%
 Final_Plan["Final_Plan"] = Final_Plan["Final_Plan"].apply(

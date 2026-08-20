@@ -93,7 +93,7 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
 
 def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
     t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
-    t.daemon = True
+    t.daemon = False
     t.start()
     print(f"[Drive Uploader] Started background upload for {file_name}...")
 
@@ -238,6 +238,22 @@ import os
 os.remove(temp_rds_path)  # Clean up temp file
 df = next(iter(result.values()))
 df['process_dt'] = pd.to_datetime(df['process_dt'])
+
+# Pre-extract Baseline_df so we don't need `result` dict holding RAM
+Baseline_df = df.copy()
+Baseline_df["Week"] = Baseline_df["process_dt"].dt.isocalendar().week
+Baseline_df["Year"] = Baseline_df["process_dt"].dt.isocalendar().year
+Baseline_df["day"] = Baseline_df["process_dt"].dt.strftime("%a")
+_today = pd.Timestamp.today()
+_target_week = _today.isocalendar().week
+_target_year = _today.isocalendar().year
+Baseline_df = Baseline_df[
+    (Baseline_df["Week"] == _target_week) & (Baseline_df["Year"] == _target_year)
+]
+
+import gc
+del result
+gc.collect()
 latest_date = pd.to_datetime(df['process_dt']).max().date()
 print(latest_date)
 end_date = pd.Timestamp.today().normalize() - pd.Timedelta(days=1)
@@ -292,6 +308,14 @@ columns_to_keep = [
 
 # print(filtered_df['sales'].sum())
 filtered_df = filtered_df[columns_to_keep]
+
+import gc
+try:
+    del df
+    del result
+except NameError:
+    pass
+gc.collect()
 # Checkpoint write removed
 pass
 
@@ -642,17 +666,9 @@ logging.info("Starting Google Drive uploads...")
 # Current Output: Uploaded in-memory directly to Google Drive as 'Raw_data.parquet' to folder ID RAW_DATA_DRIVE_FOLDER_ID
 os.makedirs("new_output", exist_ok=True)
 merged_df.to_csv("new_output/Final_merged_data.csv", index=False)
-upload_df_to_drive_as_parquet(merged_df, "Raw_data.parquet", RAW_DATA_DRIVE_FOLDER_ID)
-Baseline_df = next(iter(result.values()))
-Baseline_df["process_dt"] = pd.to_datetime(Baseline_df["process_dt"], errors='coerce')
-Baseline_df["Week"] = Baseline_df["process_dt"].dt.isocalendar().week
-Baseline_df["Year"] = Baseline_df["process_dt"].dt.isocalendar().year
-Baseline_df["day"] = Baseline_df["process_dt"].dt.strftime("%a")
-##Change here (For baseline wk no)
-Baseline_df = Baseline_df[
-    (Baseline_df["Week"] == 34) & (Baseline_df["Year"] == 2026)
-]
-Baseline_df.to_parquet("new_output/Baseline_Wk34_2026.parquet", index=False)
+upload_df_to_drive_as_parquet_async(merged_df, "Raw_data.parquet", RAW_DATA_DRIVE_FOLDER_ID)
+# Baseline_df was already extracted and filtered at the start to save memory
+Baseline_df.to_parquet(f"new_output/Baseline_Wk{_target_week}_{_target_year}.parquet", index=False)
 
 Baseline_df["sku class prod"] = Baseline_df["product_id"].astype(str).str.strip().map(sku_map)
 Baseline_df["product_name"] = Baseline_df["product_id"].astype(str).str.strip().map(name_map)
@@ -680,7 +696,9 @@ print(Week)
 # [PRODUCTION COMMENT - OUTPUT MIGRATION]
 # Previous Output: Written locally as an Excel file Baseline Wk{Week} 2026.xlsx to BASE_PATH
 # Current Output: Uploaded in-memory directly to Google Drive as 'Baseline Wk{Week} 2026.parquet' to folder ID BASELINE_DRIVE_PARQUET_FOLDER_ID
-file_name = f"Baseline Wk{Week} 2026.parquet"
-upload_df_to_drive_as_parquet(Baseline_df, file_name, BASELINE_DRIVE_PARQUET_FOLDER_ID)
+# ========================================================================================================================
+# dynamic date
+file_name = f"Baseline Wk{_target_week} {_target_year}.parquet"
+upload_df_to_drive_as_parquet_async(Baseline_df, file_name, BASELINE_DRIVE_PARQUET_FOLDER_ID)
 logging.info("Raw Data 6W step completed successfully.")
 
