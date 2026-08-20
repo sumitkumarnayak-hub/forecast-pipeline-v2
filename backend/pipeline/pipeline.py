@@ -13,7 +13,7 @@ if backend_dir not in sys.path:
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] [PIPELINE] %(message)s',
-    handlers=[sys.stdout]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 
 def run_pipeline(triggered_by: str = "Manual CLI", run_id: str | None = None) -> dict:

@@ -1413,6 +1413,7 @@ Final_plan.loc[(Final_plan['sub category'] == 'Masalas') & (Final_plan['Final_In
 # Previous Output: Written locally as CSV file 'FF_FINAL_FORECAST_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'Final_plan.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
 upload_df_to_drive_as_parquet(Final_plan, "Final_plan.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_sheets_to_drive_as_excel({"Final_plan": Final_plan}, "Final_plan.xlsx", FF_OUTPUT_EXCEL_FOLDER_ID)
 # Select the specific sheet/tab by its name
 # [PRODUCTION COMMENT - INPUT MIGRATION]
 # Previous Input: Loaded worksheet 'COGS' (columns A to G) from Google Sheet 'FF_PL_MASTER_SHEET_URL'
@@ -1677,6 +1678,7 @@ final_dataframe = pd.concat([final_dataframe, cp_df,excl_df], ignore_index=True)
 # Previous Output: Written locally as CSV file 'FF_FINAL_DATAFRAME_COMBINED_CSV_PATH'
 # Current Output: Uploaded directly to Google Drive as 'final_dataframe_combined.parquet' to FF_OUTPUT_PARQUET_FOLDER_ID
 upload_df_to_drive_as_parquet(final_dataframe, "final_dataframe_combined.parquet", FF_OUTPUT_PARQUET_FOLDER_ID)
+upload_sheets_to_drive_as_excel({"final_dataframe": final_dataframe}, "final_dataframe_combined.xlsx", FF_OUTPUT_EXCEL_FOLDER_ID)
 for name, df in {
     "final_dataframe": final_dataframe,
     "cp_df": cp_df,
