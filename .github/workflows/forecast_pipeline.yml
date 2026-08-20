@@ -36,5 +36,6 @@ jobs:
           PIPELINE_TRIGGERED_BY: ${{ github.event.inputs.triggered_by || 'GitHub Actions Cron' }}
           PYTHONPATH: ${{ github.workspace }}/backend
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           python backend/pipeline/pipeline.py
