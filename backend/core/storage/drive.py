@@ -123,13 +123,13 @@ class DriveStorageBackend(StorageBackend):
             raise ValueError(f"Invalid storage key: {key!r}")
         return parts[:-1], parts[-1]
 
-    def _find_child(
+    def _find_children(
         self,
         parent_id: str,
         name: str,
         *,
         folder: bool = False,
-    ) -> dict | None:
+    ) -> list[dict]:
         q = (
             f"name = '{_escape_query(name)}' and '{parent_id}' in parents "
             f"and trashed = false"
@@ -144,12 +144,21 @@ class DriveStorageBackend(StorageBackend):
             .list(
                 q=q,
                 fields="files(id,name,mimeType)",
-                pageSize=10,
+                pageSize=100,
                 **self._list_params(),
             )
             .execute()
         )
-        files = resp.get("files", [])
+        return resp.get("files", [])
+
+    def _find_child(
+        self,
+        parent_id: str,
+        name: str,
+        *,
+        folder: bool = False,
+    ) -> dict | None:
+        files = self._find_children(parent_id, name, folder=folder)
         return files[0] if files else None
 
     def _ensure_folder(self, parent_id: str, name: str) -> str:
@@ -211,21 +220,31 @@ class DriveStorageBackend(StorageBackend):
         return buffer.getvalue()
 
     def _create_or_update(self, parent_id: str, filename: str, media) -> None:
-        existing = self._find_child(parent_id, filename, folder=False)
+        matching_files = self._find_children(parent_id, filename, folder=False)
         try:
-            if existing:
+            if matching_files:
+                target_id = matching_files[0]["id"]
                 (
                     self._service.files()
-                    .update(fileId=existing["id"], media_body=media, **self._write_params())
+                    .update(fileId=target_id, media_body=media, **self._write_params())
                     .execute()
                 )
+                logger.info("Updated existing Drive file '%s' (ID: %s)", filename, target_id)
+                # Clean up any secondary duplicate files with the exact same name
+                for extra in matching_files[1:]:
+                    try:
+                        self._service.files().delete(fileId=extra["id"], **self._write_params()).execute()
+                        logger.info("Deleted duplicate Drive file '%s' (ID: %s)", filename, extra["id"])
+                    except Exception as del_err:
+                        logger.warning("Could not delete duplicate Drive file %s: %s", extra["id"], del_err)
             else:
                 body = {"name": filename, "parents": [parent_id]}
-                (
+                created = (
                     self._service.files()
                     .create(body=body, media_body=media, fields="id", **self._write_params())
                     .execute()
                 )
+                logger.info("Created new Drive file '%s' (ID: %s)", filename, created.get("id"))
         except HttpError as exc:
             if _is_storage_quota_error(exc):
                 raise RuntimeError(_DRIVE_QUOTA_HELP) from exc

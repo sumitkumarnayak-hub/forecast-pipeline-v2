@@ -109,11 +109,18 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
     except Exception as e:
         print(f"[Drive Uploader] ERROR uploading {file_name}: {e}")
 
+_upload_threads = []
 def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
     t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
     t.daemon = False
+    _upload_threads.append(t)
     t.start()
     print(f"[Drive Uploader] Started background upload for {file_name}...")
+
+def wait_for_all_uploads():
+    for t in _upload_threads:
+        if t.is_alive():
+            t.join()
 
 def upload_df_to_drive_as_zip_csv(df: pd.DataFrame, file_name: str, folder_id: str, csv_name: str, header: bool = True):
     try:
@@ -1111,9 +1118,12 @@ _week_end_map = (
     .first()
     .reset_index()
 )
-_week_end_map['week_sunday'] = _week_end_map['process_dt'].apply(
-    lambda d: d + pd.Timedelta(days=(6 - d.weekday()))  # Mon=0  Sun=6
-)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# _week_end_map['week_sunday'] = _week_end_map['process_dt'].apply(
+#     lambda d: d + pd.Timedelta(days=(6 - d.weekday()))  # Mon=0  Sun=6
+# )
+# ==============================
+_week_end_map['week_sunday'] = _week_end_map['process_dt'] + pd.to_timedelta(6 - _week_end_map['process_dt'].dt.weekday, unit='D')
 
 # Max date actually present in the data for each week
 _week_max_date = (
@@ -1368,24 +1378,46 @@ _week_agg_desc = _week_agg.sort_values(
     ['hub_name', 'SKU Class Prod', 'Week'], ascending=[True, True, False]
 )
 
-_rl_streak = (
-    _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['rev_loss_flag']
-    .apply(_consecutive_from_latest)
-    .reset_index()
-    .rename(columns={'rev_loss_flag': 'Instances'})
-)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# _rl_streak = (
+#     _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['rev_loss_flag']
+#     .apply(_consecutive_from_latest)
+#     .reset_index()
+#     .rename(columns={'rev_loss_flag': 'Instances'})
+# )
+# rev_loss_result = (
+#     _rl_streak[_rl_streak['Instances'] >= 2]
+#     .sort_values('Instances', ascending=False)
+#     .reset_index(drop=True)
+# )
+# _wt_streak = (
+#     _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['wastage_flag']
+#     .apply(_consecutive_from_latest)
+#     .reset_index()
+#     .rename(columns={'wastage_flag': 'Instances'})
+# )
+# wastage_result = (
+#     _wt_streak[_wt_streak['Instances'] >= 2]
+#     .sort_values('Instances', ascending=False)
+#     .reset_index(drop=True)
+# )
+# ==============================
+# Vectorized streak calculation for rev_loss
+_week_agg_desc['rl_cum_false'] = (~_week_agg_desc['rev_loss_flag']).groupby([_week_agg_desc['hub_name'], _week_agg_desc['SKU Class Prod']]).cumsum()
+_week_agg_desc['rl_streak_contrib'] = (_week_agg_desc['rl_cum_false'] == 0).astype(int)
+_rl_streak = _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'], as_index=False)['rl_streak_contrib'].sum().rename(columns={'rl_streak_contrib': 'Instances'})
+
 rev_loss_result = (
     _rl_streak[_rl_streak['Instances'] >= 2]
     .sort_values('Instances', ascending=False)
     .reset_index(drop=True)
 )
 
-_wt_streak = (
-    _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'])['wastage_flag']
-    .apply(_consecutive_from_latest)
-    .reset_index()
-    .rename(columns={'wastage_flag': 'Instances'})
-)
+# Vectorized streak calculation for wastage
+_week_agg_desc['wt_cum_false'] = (~_week_agg_desc['wastage_flag']).groupby([_week_agg_desc['hub_name'], _week_agg_desc['SKU Class Prod']]).cumsum()
+_week_agg_desc['wt_streak_contrib'] = (_week_agg_desc['wt_cum_false'] == 0).astype(int)
+_wt_streak = _week_agg_desc.groupby(['hub_name', 'SKU Class Prod'], as_index=False)['wt_streak_contrib'].sum().rename(columns={'wt_streak_contrib': 'Instances'})
+
 wastage_result = (
     _wt_streak[_wt_streak['Instances'] >= 2]
     .sort_values('Instances', ascending=False)
@@ -2078,9 +2110,12 @@ for week in week_suffixes:
         pivot_final.loc[replace_mask, new_col] = final_replacement[replace_mask].round(0)
 
     # Always restore non-numeric values ('L') from the original column
-    non_numeric_mask = pivot_final[adj_col].apply(
-        lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
-    )
+    # --- OLD CODE PRESERVED AS PER REQUEST ---
+    # non_numeric_mask = pivot_final[adj_col].apply(
+    #     lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
+    # )
+    # ==============================
+    non_numeric_mask = pivot_final[adj_col].notna() & val_numeric.isna()
     if non_numeric_mask.any():
         pivot_final.loc[non_numeric_mask, new_col] = pivot_final.loc[non_numeric_mask, adj_col]
 
@@ -2132,9 +2167,12 @@ for oc_col in outlier_cols:
     pivot_final.loc[dip_mask, oc_col] = pivot_final.loc[dip_mask, 'row_avg']
 
     # Re-preserve 'L' and blanks  spike/dip logic must never overwrite them
-    non_numeric_mask = pivot_final[oc_col].apply(
-        lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
-    )
+    # --- OLD CODE PRESERVED AS PER REQUEST ---
+    # non_numeric_mask = pivot_final[oc_col].apply(
+    #     lambda x: pd.notna(x) and pd.isna(pd.to_numeric(x, errors='coerce'))
+    # )
+    # ==============================
+    non_numeric_mask = pivot_final[oc_col].notna() & val_numeric.isna()
     if non_numeric_mask.any():
         pivot_final.loc[non_numeric_mask, oc_col] = pivot_final.loc[non_numeric_mask, oc_col]
 
@@ -2246,21 +2284,49 @@ sugg_plan["sugg_plan"] = sugg_plan.apply(
 # Hub-level percentile override on latest 2 data points (cols O:R of Percentile sheet)
 _latest_2_cols = outlier_cols[-2:]  # already sorted oldest->newest, so last 2 = most recent
 
-def _apply_hub_override(row):
-    key = (str(row["hub_name"]).strip(), str(row["SKU Class Prod"]).strip(), str(row["day"]).strip())
-    if key not in _override_lookup:
-        return row["sugg_plan"]
-    p = _override_lookup[key]
-    raw = row[_latest_2_cols].astype(str).str.strip()
-    numeric_mask = raw.str.match(r"^\d*\.?\d+$")
-    values = pd.to_numeric(raw.where(numeric_mask), errors="coerce").dropna().tolist()
-    if not values:  # both data points are L -> increase by 20%
-        return row["sugg_plan"] * 1.10
-    if p == 0.5:
-        return float(np.mean(values))
-    return float(np.percentile(values, p * 100))
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# def _apply_hub_override(row):
+#     key = (str(row["hub_name"]).strip(), str(row["SKU Class Prod"]).strip(), str(row["day"]).strip())
+#     if key not in _override_lookup:
+#         return row["sugg_plan"]
+#     p = _override_lookup[key]
+#     raw = row[_latest_2_cols].astype(str).str.strip()
+#     numeric_mask = raw.str.match(r"^\d*\.?\d+$")
+#     values = pd.to_numeric(raw.where(numeric_mask), errors="coerce").dropna().tolist()
+#     if not values:  # both data points are L -> increase by 20%
+#         return row["sugg_plan"] * 1.10
+#     if p == 0.5:
+#         return float(np.mean(values))
+#     return float(np.percentile(values, p * 100))
+# sugg_plan["sugg_plan"] = sugg_plan.apply(_apply_hub_override, axis=1)
+# ==============================
+_sugg_keys = (
+    sugg_plan["hub_name"].astype(str).str.strip() + "||" +
+    sugg_plan["SKU Class Prod"].astype(str).str.strip() + "||" +
+    sugg_plan["day"].astype(str).str.strip()
+)
+_flat_override_map = {f"{k[0]}||{k[1]}||{k[2]}": v for k, v in _override_lookup.items()}
+_override_p = _sugg_keys.map(_flat_override_map)
+_has_override = _override_p.notna()
 
-sugg_plan["sugg_plan"] = sugg_plan.apply(_apply_hub_override, axis=1)
+if _has_override.any():
+    _over_df = sugg_plan.loc[_has_override]
+    _over_p = _override_p.loc[_has_override]
+    
+    _num_matrix = _over_df[_latest_2_cols].apply(pd.to_numeric, errors='coerce')
+    _val_count = _num_matrix.notna().sum(axis=1)
+    
+    _min_val = _num_matrix.min(axis=1)
+    _max_val = _num_matrix.max(axis=1)
+    _mean_val = _num_matrix.mean(axis=1)
+    _pct_val = _min_val + _over_p * (_max_val - _min_val)
+    
+    _override_res = np.select(
+        [_val_count == 0, _val_count == 1, _over_p == 0.5],
+        [_over_df["sugg_plan"] * 1.10, _mean_val, _mean_val],
+        default=_pct_val
+    )
+    sugg_plan.loc[_has_override, "sugg_plan"] = _override_res
 
 # %%
 # [PRODUCTION COMMENT - INPUT MIGRATION]
@@ -2518,9 +2584,12 @@ Final_Plan["Final_Plan"] = np.select(
 )
 
 # %%
-Final_Plan["Final_Plan"] = Final_Plan["Final_Plan"].apply(
-    lambda x: round(x) if pd.notna(x) else x
-)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# Final_Plan["Final_Plan"] = Final_Plan["Final_Plan"].apply(
+#     lambda x: round(x) if pd.notna(x) else x
+# )
+# ==============================
+Final_Plan["Final_Plan"] = Final_Plan["Final_Plan"].round()
 
 
 
@@ -2694,19 +2763,30 @@ else:
             on=['hub_name', 'SKU Class Prod'], how='left'
         )
 
-        # Step C: for each combo use last N weeks based on Instances
-        def _wt_avg_and_weeks(row):
-            n = int(row['Instances']) if pd.notna(row['Instances']) else len(_all_avl_cols)
-            n = min(n, len(_all_avl_cols))          # cap at available weeks
-            cols = _all_avl_cols[-n:]               # last N cols = most recent N weeks
-            avg  = row[cols].mean()
-            wks  = ', '.join(str(w) for w in _last_4_weeks[-n:])
-            return pd.Series({'Wastage_Avg_4Wk_Sales': avg, 'Wastage_Avg_Weeks': wks})
-
-        _hub_sku_avg = _hub_sku_weekly.apply(_wt_avg_and_weeks, axis=1)
-        _hub_sku_weekly = pd.concat([
-            _hub_sku_weekly[['hub_name', 'SKU Class Prod']], _hub_sku_avg
-        ], axis=1)
+        # --- OLD CODE PRESERVED AS PER REQUEST ---
+        # def _wt_avg_and_weeks(row):
+        #     n = int(row['Instances']) if pd.notna(row['Instances']) else len(_all_avl_cols)
+        #     n = min(n, len(_all_avl_cols))          # cap at available weeks
+        #     cols = _all_avl_cols[-n:]               # last N cols = most recent N weeks
+        #     avg  = row[cols].mean()
+        #     wks  = ', '.join(str(w) for w in _last_4_weeks[-n:])
+        #     return pd.Series({'Wastage_Avg_4Wk_Sales': avg, 'Wastage_Avg_Weeks': wks})
+        # _hub_sku_avg = _hub_sku_weekly.apply(_wt_avg_and_weeks, axis=1)
+        # _hub_sku_weekly = pd.concat([
+        #     _hub_sku_weekly[['hub_name', 'SKU Class Prod']], _hub_sku_avg
+        # ], axis=1)
+        # ==============================
+        _hub_sku_weekly['Wastage_Avg_4Wk_Sales'] = np.nan
+        _hub_sku_weekly['Wastage_Avg_Weeks'] = ''
+        _inst_series = _hub_sku_weekly['Instances'].fillna(len(_all_avl_cols)).astype(int)
+        for n_val in _inst_series.unique():
+            n_cap = min(max(int(n_val), 1), len(_all_avl_cols))
+            mask = (_inst_series == n_val)
+            target_cols = _all_avl_cols[-n_cap:]
+            wks_str = ', '.join(str(w) for w in _last_4_weeks[-n_cap:])
+            _hub_sku_weekly.loc[mask, 'Wastage_Avg_4Wk_Sales'] = _hub_sku_weekly.loc[mask, target_cols].mean(axis=1)
+            _hub_sku_weekly.loc[mask, 'Wastage_Avg_Weeks'] = wks_str
+        _hub_sku_weekly = _hub_sku_weekly[['hub_name', 'SKU Class Prod', 'Wastage_Avg_4Wk_Sales', 'Wastage_Avg_Weeks']]
 
         # Merge avg and week-label back onto Final_Plan
         Final_Plan = Final_Plan.merge(
@@ -3031,3 +3111,4 @@ print(f"\n[CIV] Local validation output written to: {_civ_path}")
 
 
 Final_Plan.to_csv('Final_Plan_Old.csv', index=False)
+wait_for_all_uploads()

@@ -1,12 +1,13 @@
 """Final Plan router — sync adhoc/inventory inputs, run, history."""
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 
 from app.dependencies import get_current_user, require_write, get_db
 from core.database.engine import Database
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -21,13 +22,14 @@ def _fetch_runs(db: Database, limit: int = 20) -> list[dict]:
                            fpr.output_file, fpr.validation_status, fpr.approved_at,
                            u.full_name as approved_by_name
                     FROM final_plan_runs fpr
-                    LEFT JOIN users u ON u.id = fpr.approved_by
+                    LEFT JOIN users u ON CAST(u.id AS TEXT) = CAST(fpr.approved_by AS TEXT)
                     ORDER BY fpr.run_date DESC LIMIT :limit
                 """),
                 {"limit": limit},
             ).fetchall()
         return [dict(r._mapping) for r in rows]
-    except Exception:
+    except Exception as exc:
+        logger.exception("Failed to fetch final plan runs: %s", exc)
         return []
 
 

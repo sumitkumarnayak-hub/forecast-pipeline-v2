@@ -90,7 +90,10 @@ def load_latest_parquet_from_drive(sheet_key: str, folder_id: str = DRIVE_FOLDER
         corpora='allDrives'
     ).execute()
     files = results.get('files', [])
-    
+    matching_files = [f for f in files if f['name'].lower().startswith(sheet_key.lower())]
+    if matching_files:
+        files = matching_files
+
     if not files:
         raise FileNotFoundError(f"No parquet files found for key: {sheet_key} in folder {folder_id}")
     
@@ -155,11 +158,18 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
         print(f"[Drive Uploader] ERROR uploading {file_name}: {e}")
 
 
+_upload_threads = []
 def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
     t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
     t.daemon = False
+    _upload_threads.append(t)
     t.start()
     print(f"[Drive Uploader] Started background upload for {file_name}...")
+
+def wait_for_all_uploads():
+    for t in _upload_threads:
+        if t.is_alive():
+            t.join()
 
 def upload_sheets_to_drive_as_excel(sheets: dict, file_name: str, folder_id: str):
     try:
@@ -553,15 +563,25 @@ FF_corrected_plan = final_df.merge(hub_festive_factor, on=merge_cols, how="left"
 # FF_corrected_plan.to_csv(config_paths.FF_CHECK_CSV_PATH)
 
 
-def parse_festive_factor(val):
-    if isinstance(val, str) and "%" in val:
-        return float(val.replace("%", "")) / 100
-    try:
-        return float(val)
-    except:
-        return 0  # Or np.nan if you prefer to track invalids
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# def parse_festive_factor(val):
+#     if isinstance(val, str) and "%" in val:
+#         return float(val.replace("%", "")) / 100
+#     try:
+#         return float(val)
+#     except:
+#         return 0  # Or np.nan if you prefer to track invalids
+# FF_corrected_plan["Hub level Festive Factor"] = FF_corrected_plan["Hub level Festive Factor"].apply(parse_festive_factor)
+# ==============================
+def vectorize_festive_factor(series):
+    s = series.astype(str).str.strip()
+    is_pct = s.str.contains('%', na=False)
+    s_clean = s.str.replace('%', '', regex=False)
+    num = pd.to_numeric(s_clean, errors='coerce')
+    num = np.where(series.notna() & num.isna(), 0, num)
+    return np.where(is_pct, num / 100, num)
 
-FF_corrected_plan["Hub level Festive Factor"] = FF_corrected_plan["Hub level Festive Factor"].apply(parse_festive_factor)
+FF_corrected_plan["Hub level Festive Factor"] = vectorize_festive_factor(FF_corrected_plan["Hub level Festive Factor"])
 
 
 
@@ -583,20 +603,30 @@ FF_corrected_plan["remainder"] = FF_corrected_plan["raw_festive_plan"] - FF_corr
 
 
 # Step 4: Reconciliation loop city by city
-for city, group in FF_corrected_plan.groupby(["hub_name", "Sub-category", "date"]):
-    target = round(group["raw_festive_plan"].sum())   # exact city-level festive target
-    current = group["final_plan"].sum()             # what we have after rounding
-    diff = int(target - current)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# for city, group in FF_corrected_plan.groupby(["hub_name", "Sub-category", "date"]):
+#     target = round(group["raw_festive_plan"].sum())
+#     current = group["final_plan"].sum()
+#     diff = int(target - current)
+#     if diff > 0:
+#         idx = group["remainder"].nlargest(diff).index
+#         FF_corrected_plan.loc[idx, "final_plan"] += 1
+#     elif diff < 0:
+#         idx = group["remainder"].nsmallest(abs(diff)).index
+#         FF_corrected_plan.loc[idx, "final_plan"] -= 1
+# ==============================
+_grp1 = FF_corrected_plan.groupby(["hub_name", "Sub-category", "date"])
+_target1 = _grp1["raw_festive_plan"].transform("sum").round()
+_current1 = _grp1["final_plan"].transform("sum")
+_diff1 = (_target1 - _current1).fillna(0).astype(int)
 
-    if diff > 0:
-        # Add +1 to hubs with largest remainders
-        idx = group["remainder"].nlargest(diff).index
-        FF_corrected_plan.loc[idx, "final_plan"] += 1
+_rank_desc1 = _grp1["remainder"].rank(ascending=False, method="first")
+_rank_asc1 = _grp1["remainder"].rank(ascending=True, method="first")
 
-    elif diff < 0:
-        # Subtract -1 from hubs with smallest remainders
-        idx = group["remainder"].nsmallest(abs(diff)).index
-        FF_corrected_plan.loc[idx, "final_plan"] -= 1
+_add_mask1 = (_diff1 > 0) & (_rank_desc1 <= _diff1)
+_sub_mask1 = (_diff1 < 0) & (_rank_asc1 <= _diff1.abs())
+
+FF_corrected_plan["final_plan"] = FF_corrected_plan["final_plan"] + _add_mask1.astype(int) - _sub_mask1.astype(int)
 # # Step 3: Calculate the fractional part (both for sale_plan and base_plan)
 # FF_corrected_plan['fraction_sale'] = FF_corrected_plan['final_plan'] - FF_corrected_plan['rounded_final_plan']
 
@@ -1030,20 +1060,30 @@ Final_sale["remainder"] = Final_sale["unrounded_sale_plan"] - Final_sale["sale_p
 
 
 # Step 4: Reconciliation loop city by city
-for city, group in Final_sale.groupby(["city_name", "sub category", "date"]):
-    target = round(group["unrounded_sale_plan"].sum())   # exact city-level festive target
-    current = group["sale_plan"].sum()             # what we have after rounding
-    diff = int(target - current)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# for city, group in Final_sale.groupby(["city_name", "sub category", "date"]):
+#     target = round(group["unrounded_sale_plan"].sum())
+#     current = group["sale_plan"].sum()
+#     diff = int(target - current)
+#     if diff > 0:
+#         idx = group["remainder"].nlargest(diff).index
+#         Final_sale.loc[idx, "sale_plan"] += 1
+#     elif diff < 0:
+#         idx = group["remainder"].nsmallest(abs(diff)).index
+#         Final_sale.loc[idx, "sale_plan"] -= 1
+# ==============================
+_grp2 = Final_sale.groupby(["city_name", "sub category", "date"])
+_target2 = _grp2["unrounded_sale_plan"].transform("sum").round()
+_current2 = _grp2["sale_plan"].transform("sum")
+_diff2 = (_target2 - _current2).fillna(0).astype(int)
 
-    if diff > 0:
-        # Add +1 to hubs with largest remainders
-        idx = group["remainder"].nlargest(diff).index
-        Final_sale.loc[idx, "sale_plan"] += 1
+_rank_desc2 = _grp2["remainder"].rank(ascending=False, method="first")
+_rank_asc2 = _grp2["remainder"].rank(ascending=True, method="first")
 
-    elif diff < 0:
-        # Subtract -1 from hubs with smallest remainders
-        idx = group["remainder"].nsmallest(abs(diff)).index
-        Final_sale.loc[idx, "sale_plan"] -= 1
+_add_mask2 = (_diff2 > 0) & (_rank_desc2 <= _diff2)
+_sub_mask2 = (_diff2 < 0) & (_rank_asc2 <= _diff2.abs())
+
+Final_sale["sale_plan"] = Final_sale["sale_plan"] + _add_mask2.astype(int) - _sub_mask2.astype(int)
 # Step 1: Create unique mapping from Master_df
 mapping_df = (
     Master_df[['Product id', 'Sub-category']]
@@ -1158,27 +1198,37 @@ inv_buffer[['min_volume', 'max_volume']] = inv_buffer['volume bucket'].str.split
 mask = Final_sale['DOC/Percentage_BufferFlag'] == 0
 Final_sale_flag0 = Final_sale[mask].copy()
 
-# Define a function to look up the appropriate inv_buffer% based on sale_plan and day
-def get_buffer_percentage(row):
-    day = row['day']
-    city = row['city_name']
-    plan = row['sale_plan']
-    
-    # Find matching row in inv_buffer
-    match = inv_buffer[
-        (inv_buffer['day'] == day) &
-        (inv_buffer['city_name'] == city) &
-        (plan >= inv_buffer['min_volume']) &
-        (plan <= inv_buffer['max_volume'])
-    ]
-    
-    if not match.empty:
-        return match.iloc[0]['Buffer %']
-    else:
-        return row['Buffer_Percentage']  # fallback to current value
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# def get_buffer_percentage(row):
+#     day = row['day']
+#     city = row['city_name']
+#     plan = row['sale_plan']
+#     match = inv_buffer[
+#         (inv_buffer['day'] == day) &
+#         (inv_buffer['city_name'] == city) &
+#         (plan >= inv_buffer['min_volume']) &
+#         (plan <= inv_buffer['max_volume'])
+#     ]
+#     if not match.empty:
+#         return match.iloc[0]['Buffer %']
+#     else:
+#         return row['Buffer_Percentage']
+# Final_sale.loc[mask, 'Buffer_Percentage'] = Final_sale_flag0.apply(get_buffer_percentage, axis=1)
+# ==============================
+_merged_buf = Final_sale_flag0[['day', 'city_name', 'sale_plan', 'Buffer_Percentage']].reset_index().merge(
+    inv_buffer[['day', 'city_name', 'min_volume', 'max_volume', 'Buffer %']],
+    on=['day', 'city_name'],
+    how='left'
+)
+_valid_buf = _merged_buf[
+    (_merged_buf['sale_plan'] >= _merged_buf['min_volume']) &
+    (_merged_buf['sale_plan'] <= _merged_buf['max_volume'])
+].drop_duplicates(subset=['index'])
 
-# Apply the function only to rows where the flag is 0
-Final_sale.loc[mask, 'Buffer_Percentage'] = Final_sale_flag0.apply(get_buffer_percentage, axis=1)
+_valid_buf_map = _valid_buf.set_index('index')['Buffer %']
+Final_sale.loc[mask, 'Buffer_Percentage'] = pd.Series(
+    Final_sale_flag0.index.map(_valid_buf_map), index=Final_sale_flag0.index
+).fillna(Final_sale_flag0['Buffer_Percentage'])
 
 Final_sale['Buffer_Percentage'] = Final_sale['Buffer_Percentage'].astype(str).str.replace('%', '', regex=False).str.strip()
 Final_sale['Buffer_Percentage'] = pd.to_numeric(Final_sale['Buffer_Percentage'], errors='coerce')
@@ -1293,9 +1343,14 @@ def rolling_sum_dynamic(group):
         if fraction > 0 and (i + full_days) < len(group):
             allocated_buffer[i] += fraction * group['sale_plan'].iloc[i + full_days]
 
-    group['Allocated_Buffer'] = np.round(allocated_buffer).astype(int)
-    return group
-df_excess = df_excess.groupby(['Attribute', 'Product id'], group_keys=False).apply(rolling_sum_dynamic)
+    return np.round(allocated_buffer).astype(int)
+
+if df_excess.empty:
+    df_excess['Allocated_Buffer'] = pd.Series(dtype=int)
+else:
+    df_excess['Allocated_Buffer'] = 0
+    for _, group in df_excess.groupby(['Attribute', 'Product id']):
+        df_excess.loc[group.index, 'Allocated_Buffer'] = rolling_sum_dynamic(group)
 df_excess.describe(include='all')
 Final_plan = Final_sale.merge(
     df_excess[['Attribute', 'Product id', 'date', 'Allocated_Buffer']],
@@ -1317,35 +1372,42 @@ Final_plan = Final_plan.merge(
     how='left'
 )
 
-def update_final_inv_plan(row):
-
-    # PRIORITY 1 — HTT logic (always override)
-    if (row["HTT"] == "head") and (0 < row["sale_plan"] < 4):
-        return row["sale_plan"] + 1
-
-    # PRIORITY 2 — Special hubs (KOM, TUB, Indiranagar)
-    special_hubs = ["KOM", "TUB", "Indiranagar"]
-    if (row["Attribute"] in special_hubs) and (0 < row["sale_plan"] < 4):
-        return row["sale_plan"] + 1
-
-    # PRIORITY 3 — Bangalore
-    if row["city_name"] == "Bangalore":
-        if 0 < row["sale_plan"] < 2:
-            return row["sale_plan"]
-        if 1 < row["sale_plan"] < 4:
-            return row["sale_plan"] + 1
-        return row["Final_Inv_Plan"]
-
-    # PRIORITY 4 — Other cities
-    if 0 < row["sale_plan"] < 4:
-        return row["sale_plan"]
-
-    # Default (no rules matched)
-    return row["Final_Inv_Plan"]
-
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# def update_final_inv_plan(row):
+#     if (row["HTT"] == "head") and (0 < row["sale_plan"] < 4):
+#         return row["sale_plan"] + 1
+#     special_hubs = ["KOM", "TUB", "Indiranagar"]
+#     if (row["Attribute"] in special_hubs) and (0 < row["sale_plan"] < 4):
+#         return row["sale_plan"] + 1
+#     if row["city_name"] == "Bangalore":
+#         if 0 < row["sale_plan"] < 2:
+#             return row["sale_plan"]
+#         if 1 < row["sale_plan"] < 4:
+#             return row["sale_plan"] + 1
+#         return row["Final_Inv_Plan"]
+#     if 0 < row["sale_plan"] < 4:
+#         return row["sale_plan"]
+#     return row["Final_Inv_Plan"]
+# mask = Final_plan['DOC/Percentage_BufferFlag'] == 0
+# Final_plan.loc[mask, 'Final_Inv_Plan'] = (
+#     Final_plan.loc[mask].apply(update_final_inv_plan, axis=1)
+# )
+# ==============================
 mask = Final_plan['DOC/Percentage_BufferFlag'] == 0
-Final_plan.loc[mask, 'Final_Inv_Plan'] = (
-    Final_plan.loc[mask].apply(update_final_inv_plan, axis=1)
+m_df = Final_plan.loc[mask]
+sp = m_df['sale_plan']
+fip = m_df['Final_Inv_Plan']
+
+cond1 = (m_df['HTT'] == 'head') & (sp > 0) & (sp < 4)
+cond2 = (m_df['Attribute'].isin(["KOM", "TUB", "Indiranagar"])) & (sp > 0) & (sp < 4)
+cond3 = (m_df['city_name'] == 'Bangalore') & (sp > 0) & (sp < 2)
+cond4 = (m_df['city_name'] == 'Bangalore') & (sp > 1) & (sp < 4)
+cond5 = (m_df['city_name'] != 'Bangalore') & (sp > 0) & (sp < 4)
+
+Final_plan.loc[mask, 'Final_Inv_Plan'] = np.select(
+    [cond1, cond2, cond3, cond4, cond5],
+    [sp + 1, sp + 1, sp, sp + 1, sp],
+    default=fip
 )
 
 print(Final_plan['Final_Inv_Plan'].sum())
@@ -1461,8 +1523,12 @@ Final_plan['Final_Inv_Plan'] = Final_plan['inv_buffer'] + Final_plan['sale_plan'
 cluster_mapping_df = load_latest_parquet_from_drive("cluster_v1", DRIVE_FOLDER_ID)
 cluster_mapping_df = cluster_mapping_df.rename(columns={'product_id': 'Product id', 'destinationHub_name': 'Attribute', 'sourceHub_name': 'source_hub'})
 cluster_mapping_df = cluster_mapping_df[['Attribute', 'Product id', 'source_hub', 'CH Decrease%', 'MH Increase%']]
-cluster_mapping_df['CH Decrease%'] = cluster_mapping_df['CH Decrease%'].fillna(0).apply(parse_festive_factor)
-cluster_mapping_df['MH Increase%'] = cluster_mapping_df['MH Increase%'].fillna(0).apply(parse_festive_factor)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# cluster_mapping_df['CH Decrease%'] = cluster_mapping_df['CH Decrease%'].fillna(0).apply(parse_festive_factor)
+# cluster_mapping_df['MH Increase%'] = cluster_mapping_df['MH Increase%'].fillna(0).apply(parse_festive_factor)
+# ==============================
+cluster_mapping_df['CH Decrease%'] = vectorize_festive_factor(cluster_mapping_df['CH Decrease%'].fillna(0))
+cluster_mapping_df['MH Increase%'] = vectorize_festive_factor(cluster_mapping_df['MH Increase%'].fillna(0))
 
 merged_dataframe = Final_plan.merge(cluster_mapping_df, how='left', on=['Attribute', 'Product id'])
 merged_dataframe.describe(include='all')
@@ -1834,6 +1900,7 @@ logging.info("FF Hub Automation step completed successfully.")
 # VA_projection_spsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/13llF4m1JmDVRqRgx_EqqEFdqMzhCq8Ft2Gd-Gmhi7sY")
 # worksheet = VA_projection_spsheet.worksheet("Sheet1")
 # set_with_dataframe(worksheet, result_df)
+wait_for_all_uploads()
 
 
 

@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
+import logging
 import uuid
 import datetime
 import io
 import pandas as pd
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from app.dependencies import get_current_user, require_write, require_approve, get_db
 from core.utils.dataframe import sanitize_for_json
@@ -406,13 +409,14 @@ def get_baseline_runs(
                            br.output_file, br.validation_status, br.approved_at,
                            u.full_name as approved_by_name
                     FROM baseline_runs br
-                    LEFT JOIN users u ON u.id = br.approved_by
+                    LEFT JOIN users u ON CAST(u.id AS TEXT) = CAST(br.approved_by AS TEXT)
                     ORDER BY br.run_date DESC LIMIT :limit
                 """),
                 {"limit": limit},
             ).fetchall()
         return [dict(r._mapping) for r in rows]
-    except Exception:
+    except Exception as exc:
+        logger.exception("Failed to fetch baseline runs: %s", exc)
         return []
 
 

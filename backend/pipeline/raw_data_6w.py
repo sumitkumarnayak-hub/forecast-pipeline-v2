@@ -39,6 +39,13 @@ def load_latest_parquet_from_drive(sheet_key: str, folder_id: str = DRIVE_FOLDER
         corpora='allDrives'
     ).execute()
     files = results.get('files', [])
+    # --- OLD CODE PRESERVED AS PER REQUEST ---
+    # if not files:
+    #     raise FileNotFoundError(f"No parquet files found for key: {sheet_key} in folder {folder_id}")
+    # files_sorted = sorted(files, key=lambda x: x['name'], reverse=True)
+    # ==============================
+    # Filter out false-positives matched by Drive's tokenized 'name contains'
+    files = [f for f in files if f['name'].lower().startswith(sheet_key.lower())]
     if not files:
         raise FileNotFoundError(f"No parquet files found for key: {sheet_key} in folder {folder_id}")
     files_sorted = sorted(files, key=lambda x: x['name'], reverse=True)
@@ -91,11 +98,18 @@ def upload_df_to_drive_as_parquet(df: pd.DataFrame, file_name: str, folder_id: s
     except Exception as e:
         print(f"[Drive Uploader] ERROR uploading {file_name}: {e}")
 
+_upload_threads = []
 def upload_df_to_drive_as_parquet_async(df: pd.DataFrame, file_name: str, folder_id: str):
     t = threading.Thread(target=upload_df_to_drive_as_parquet, args=(df, file_name, folder_id))
     t.daemon = False
+    _upload_threads.append(t)
     t.start()
     print(f"[Drive Uploader] Started background upload for {file_name}...")
+
+def wait_for_all_uploads():
+    for t in _upload_threads:
+        if t.is_alive():
+            t.join()
 
 # [PRODUCTION COMMENT - INPUT MIGRATION]
 # Previous: Google Sheet 'P-L Master' -> Tab: 'P Master' (Columns A to J: Product id, SKU Class Prod, Product Name, Sub-category, etc.)
@@ -184,23 +198,39 @@ try:
         print("Could not load latest City_Cat from Drive, using unique values from p_master:", read_err)
         sub_categories = p_master_df["Sub-category"].dropna().unique().tolist()
     
-    melt_rows = []
-    for week_num, weekday_str, date_str, *_ in rows:
-        for sub_cat in sub_categories:
-            for city in city_columns:
-                # Resolve outlier flag directly using df_to_append (wide format value for the city)
-                date_row = df_to_append[df_to_append["process_dt"] == date_str]
-                outlier_val = int(date_row[city].iloc[0]) if not date_row.empty else 0
-                melt_rows.append([week_num, city, sub_cat, date_str, outlier_val, weekday_str])
-    df_melt = pd.DataFrame(melt_rows, columns=melt_columns)
+    # --- OLD CODE PRESERVED AS PER REQUEST ---
+    # melt_rows = []
+    # for week_num, weekday_str, date_str, *_ in rows:
+    #     for sub_cat in sub_categories:
+    #         for city in city_columns:
+    #             # Resolve outlier flag directly using df_to_append (wide format value for the city)
+    #             date_row = df_to_append[df_to_append["process_dt"] == date_str]
+    #             outlier_val = int(date_row[city].iloc[0]) if not date_row.empty else 0
+    #             melt_rows.append([week_num, city, sub_cat, date_str, outlier_val, weekday_str])
+    # df_melt = pd.DataFrame(melt_rows, columns=melt_columns)
+    # ==============================
+    df_melted_cities = df_to_append.melt(
+        id_vars=["Weeknum", "Weekday", "process_dt"],
+        value_vars=city_columns,
+        var_name="city_name",
+        value_name="Outlier_Flag"
+    )
+    sub_cat_df = pd.DataFrame({"sub category": sub_categories})
+    df_melt = df_melted_cities.merge(sub_cat_df, how="cross")
+    df_melt = df_melt.rename(columns={"Weekday": "day"})
+    df_melt = df_melt[["Weeknum", "city_name", "sub category", "process_dt", "Outlier_Flag", "day"]]
     if 'city_cat_df' in locals():
         city_cat_df = pd.concat([city_cat_df, df_melt], ignore_index=True)
     else:
         city_cat_df = df_melt
     city_cat_df["Weeknum"] = pd.to_numeric(city_cat_df["Weeknum"], errors="coerce").fillna(0).astype(int)
+    city_cat_df["Outlier_Flag"] = pd.to_numeric(city_cat_df["Outlier_Flag"], errors="coerce").fillna(0).astype(int)
     _today_str = dt_mod.date.today().strftime('%Y%m%d')
     upload_df_to_drive_as_parquet(city_cat_df, f"City_Cat_{_today_str}.parquet", DRIVE_FOLDER_ID)
-    print(f"Appended {len(melt_rows)} melted rows to City_Cat parquet and uploaded.")
+    # --- OLD CODE PRESERVED AS PER REQUEST ---
+    # print(f"Appended {len(melt_rows)} melted rows to City_Cat parquet and uploaded.")
+    # ==============================
+    print(f"Appended {len(df_melt)} melted rows to City_Cat parquet and uploaded.")
 except Exception as e:
     print("Failed to write to City_Cat parquet:", e)
 
@@ -239,17 +269,30 @@ os.remove(temp_rds_path)  # Clean up temp file
 df = next(iter(result.values()))
 df['process_dt'] = pd.to_datetime(df['process_dt'])
 
-# Pre-extract Baseline_df so we don't need `result` dict holding RAM
-Baseline_df = df.copy()
-Baseline_df["Week"] = Baseline_df["process_dt"].dt.isocalendar().week
-Baseline_df["Year"] = Baseline_df["process_dt"].dt.isocalendar().year
-Baseline_df["day"] = Baseline_df["process_dt"].dt.strftime("%a")
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# Baseline_df = df.copy()
+# Baseline_df["Week"] = Baseline_df["process_dt"].dt.isocalendar().week
+# Baseline_df["Year"] = Baseline_df["process_dt"].dt.isocalendar().year
+# Baseline_df["day"] = Baseline_df["process_dt"].dt.strftime("%a")
+# _today = pd.Timestamp.today()
+# _target_week = _today.isocalendar().week
+# _target_year = _today.isocalendar().year
+# Baseline_df = Baseline_df[
+#     (Baseline_df["Week"] == _target_week) & (Baseline_df["Year"] == _target_year)
+# ]
+# ==============================
 _today = pd.Timestamp.today()
 _target_week = _today.isocalendar().week
 _target_year = _today.isocalendar().year
-Baseline_df = Baseline_df[
-    (Baseline_df["Week"] == _target_week) & (Baseline_df["Year"] == _target_year)
-]
+
+week_series = df["process_dt"].dt.isocalendar().week
+year_series = df["process_dt"].dt.isocalendar().year
+mask_target = (week_series == _target_week) & (year_series == _target_year)
+
+Baseline_df = df[mask_target].copy()
+Baseline_df["Week"] = _target_week
+Baseline_df["Year"] = _target_year
+Baseline_df["day"] = Baseline_df["process_dt"].dt.strftime("%a")
 
 import gc
 del result
@@ -580,7 +623,10 @@ infinity_data["process_dt"]= pd.to_datetime(infinity_data["process_dt"], errors=
 
 
 
-infinity_data.to_clipboard()
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# infinity_data.to_clipboard()
+# ==============================
+pass
 infinity_data = (
     infinity_data.groupby(['process_dt', 'hub_name', 'product_id'], as_index=False)
       .agg({
@@ -605,17 +651,27 @@ merged_df['final_sales_withoutclusterv2'] = np.maximum(
 )
 merged_df = merged_df.drop(columns=["_merge"])
 
-p_master_lookup = p_master_df.drop_duplicates(subset="product_id", keep="first").copy()
-sku_map = p_master_lookup.set_index("product_id")["SKU Class Prod"]
-name_map = p_master_lookup.set_index("product_id")["Product Name"]
-category_map = p_master_lookup.set_index("product_id")["Sub-category"]
-
-merged_df["sku class prod"] = merged_df["product_id"].astype(str).str.strip().map(sku_map)
-merged_df["product_name"] = merged_df["product_id"].astype(str).str.strip().map(name_map)
-merged_df["Sub-category"] = merged_df["product_id"].astype(str).str.strip().map(category_map)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# p_master_lookup = p_master_df.drop_duplicates(subset="product_id", keep="first").copy()
+# sku_map = p_master_lookup.set_index("product_id")["SKU Class Prod"]
+# name_map = p_master_lookup.set_index("product_id")["Product Name"]
+# category_map = p_master_lookup.set_index("product_id")["Sub-category"]
+# merged_df["sku class prod"] = merged_df["product_id"].astype(str).str.strip().map(sku_map)
+# merged_df["product_name"] = merged_df["product_id"].astype(str).str.strip().map(name_map)
+# merged_df["Sub-category"] = merged_df["product_id"].astype(str).str.strip().map(category_map)
+# ==============================
+p_master_clean = p_master_df[['product_id', 'SKU Class Prod', 'Product Name', 'Sub-category']].drop_duplicates(subset=['product_id'])
+p_master_clean = p_master_clean.rename(columns={
+    'SKU Class Prod': 'sku class prod',
+    'Product Name': 'product_name'
+})
+merged_df = merged_df.merge(p_master_clean, on="product_id", how="left")
 merged_df = merged_df[~merged_df["hub_name"].str.startswith("PAW", na=False)]
 
-merged_df.to_clipboard
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# merged_df.to_clipboard
+# ==============================
+pass
 print(merged_df.columns)
 merged_df["day"] = merged_df["process_dt"].dt.strftime("%a")
 
@@ -670,9 +726,15 @@ upload_df_to_drive_as_parquet_async(merged_df, "Raw_data.parquet", RAW_DATA_DRIV
 # Baseline_df was already extracted and filtered at the start to save memory
 Baseline_df.to_parquet(f"new_output/Baseline_Wk{_target_week}_{_target_year}.parquet", index=False)
 
-Baseline_df["sku class prod"] = Baseline_df["product_id"].astype(str).str.strip().map(sku_map)
-Baseline_df["product_name"] = Baseline_df["product_id"].astype(str).str.strip().map(name_map)
-Baseline_df["Sub-category"] = Baseline_df["product_id"].astype(str).str.strip().map(category_map)
+# --- OLD CODE PRESERVED AS PER REQUEST ---
+# Baseline_df["sku class prod"] = Baseline_df["product_id"].astype(str).str.strip().map(sku_map)
+# Baseline_df["product_name"] = Baseline_df["product_id"].astype(str).str.strip().map(name_map)
+# Baseline_df["Sub-category"] = Baseline_df["product_id"].astype(str).str.strip().map(category_map)
+# ==============================
+# Drop any existing master columns in Baseline_df to prevent _x / _y duplicate suffixes
+cols_to_drop = [c for c in ['sku class prod', 'product_name', 'Sub-category', 'sub_category'] if c in Baseline_df.columns]
+Baseline_df = Baseline_df.drop(columns=cols_to_drop)
+Baseline_df = Baseline_df.merge(p_master_clean, on="product_id", how="left")
 print(Baseline_df.columns)
 final_cols = [
     "process_dt",
@@ -700,5 +762,6 @@ print(Week)
 # dynamic date
 file_name = f"Baseline Wk{_target_week} {_target_year}.parquet"
 upload_df_to_drive_as_parquet_async(Baseline_df, file_name, BASELINE_DRIVE_PARQUET_FOLDER_ID)
+wait_for_all_uploads()
 logging.info("Raw Data 6W step completed successfully.")
 
